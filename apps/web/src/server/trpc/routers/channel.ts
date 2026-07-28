@@ -17,13 +17,21 @@ import { publicProcedure, router } from "@/server/trpc/init";
 const channelPageQuerySchema = channelPageInputSchema.extend({
   /** Set by `useInfiniteQuery` from `getNextPageParam` (channel continuation token). */
   cursor: z.string().max(16384).nullish(),
+  /**
+   * Never block on a live upstream fetch — serve fresh cache, else stale
+   * cache, else an empty page. For callers that fire one request per row as
+   * focus moves through a list (the TV app's channel rail) rather than one
+   * deliberate navigation, where a ~1s+ live fetch per row makes browsing
+   * feel frozen.
+   */
+  cacheOnly: z.boolean().optional(),
 });
 
 export const channelRouter = router({
   page: publicProcedure
     .input(channelPageQuerySchema)
     .query(async ({ ctx, input }) => {
-      const { cursor, continuation, channelId, tab } = input;
+      const { cursor, continuation, channelId, tab, cacheOnly } = input;
       try {
         const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
         return await fetchChannelPage(
@@ -34,6 +42,7 @@ export const channelRouter = router({
             continuation: continuation ?? cursor ?? undefined,
           },
           overrides,
+          cacheOnly ? { cacheOnly: true } : undefined,
         );
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {

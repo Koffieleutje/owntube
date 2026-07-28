@@ -113,8 +113,15 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
   const feed = useInfiniteFeed<string>(
     (cursor) => {
       if (selected.kind === "channel") {
+        // Focus moves through the channel rail fire one request per row
+        // (debounced, but still one per row) — cacheOnly keeps that instant
+        // instead of blocking on a live ~1s+ upstream fetch per channel.
         return trpcClient.channel.page
-          .query({ channelId: selected.channelId, continuation: cursor })
+          .query({
+            channelId: selected.channelId,
+            continuation: cursor,
+            cacheOnly: true,
+          })
           .then((page) => ({
             items: page.videos,
             next: page.continuation ?? undefined,
