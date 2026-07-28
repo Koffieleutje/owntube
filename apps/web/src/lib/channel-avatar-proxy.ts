@@ -25,21 +25,31 @@ export function isPrivateOrLanHost(hostname: string): boolean {
 /** Origins for configured Invidious instance (browser `/invidious/…` hop). */
 export function collectInvidiousOrigins(): string[] {
   const out = new Set<string>();
-  const base = normalizeUpstreamBaseUrl(process.env.INVIDIOUS_BASE_URL);
-  if (!base) return [];
-  try {
-    const u = new URL(base);
-    out.add(u.origin);
-    if (u.hostname === "localhost") {
-      const port = u.port ? `:${u.port}` : "";
-      out.add(`${u.protocol}//127.0.0.1${port}`);
+  // Video thumbnails/avatars are embedded in JSON for the *browser* to load,
+  // so they're always built from the public base (the internal Docker
+  // hostname isn't browser-reachable) — recognize it too, or every such image
+  // silently skips the `/invidious/…` same-origin hop (and its disk cache in
+  // getCachedAsset) and hotlinks the public instance directly on every load.
+  for (const raw of [
+    process.env.INVIDIOUS_BASE_URL,
+    process.env.INVIDIOUS_PUBLIC_BASE_URL,
+  ]) {
+    const base = normalizeUpstreamBaseUrl(raw);
+    if (!base) continue;
+    try {
+      const u = new URL(base);
+      out.add(u.origin);
+      if (u.hostname === "localhost") {
+        const port = u.port ? `:${u.port}` : "";
+        out.add(`${u.protocol}//127.0.0.1${port}`);
+      }
+      if (u.hostname === "127.0.0.1") {
+        const port = u.port ? `:${u.port}` : "";
+        out.add(`${u.protocol}//localhost${port}`);
+      }
+    } catch {
+      /* ignore malformed env */
     }
-    if (u.hostname === "127.0.0.1") {
-      const port = u.port ? `:${u.port}` : "";
-      out.add(`${u.protocol}//localhost${port}`);
-    }
-  } catch {
-    /* ignore malformed env */
   }
   return [...out];
 }
