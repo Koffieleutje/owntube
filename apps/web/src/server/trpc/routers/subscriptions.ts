@@ -548,7 +548,16 @@ async function collectSortedFeedPage(
   let lastSubscriptionChannelId: string | undefined;
   const rssPublishedByChannel = new Map<string, Map<string, number>>();
 
-  if (offset === 0) {
+  {
+    // Every page (not just offset===0) re-walks the merge from rank 0, only
+    // returning once uniqueRank reaches `offset` — a stateless-pagination
+    // tradeoff (see the loop below). Re-seeding RSS unconditionally means that
+    // walk stays on the fast, already-cached RSS path for as many pages as
+    // each channel's ~15-entry window covers, instead of page 2+ skipping
+    // straight to a live-ish per-channel channel-page cache read for every
+    // single subscribed channel (confirmed: 160 "channel" cache reads, ~220ms,
+    // on every page beyond the first — the RSS pool most channels barely
+    // touch on page 1 covers several more pages for free).
     const seedTargets = buffers.slice(0, RSS_SEED_MAX_CHANNELS);
     const rssEntries = await Promise.all(
       seedTargets.map((b) => getChannelRssEntries(db, b.channelId)),
@@ -567,7 +576,8 @@ async function collectSortedFeedPage(
       }
       rssPublishedByChannel.set(seedTargets[i].channelId, byVideoId);
       // Seed the full RSS window (~15 newest uploads), not just the latest, so
-      // page 1 can be built entirely from RSS with no live channel-page fetch.
+      // as many pages as possible can be built entirely from RSS with no live
+      // channel-page fetch.
       seedTargets[i]?.videos.push(...channelEntries);
     }
   }
