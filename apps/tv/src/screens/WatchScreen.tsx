@@ -30,6 +30,10 @@ import {
 import { FocusButton } from "@/components/FocusButton";
 import { IconButton } from "@/components/IconButton";
 import { VideoRow } from "@/components/VideoRow";
+import {
+  audioLanguageOptions,
+  urlLooksLikeOriginalAudio,
+} from "@/lib/audio-languages";
 import { getToken } from "@/lib/auth-token";
 import { OWNTUBE_BASE_URL } from "@/lib/config";
 import { channelInitial, formatTime, formatViews } from "@/lib/format";
@@ -172,6 +176,15 @@ export function WatchScreen({
   // stays disabled until ExoPlayer reports some.
   const [hasSubtitles, setHasSubtitles] = useState(false);
   const [subtitlesOn, setSubtitlesOn] = useState(false);
+  /**
+   * Audio language for multi-audio (dubbed) videos, as an index into
+   * audioLanguageOptions (0 = the original — also the server manifest's
+   * default). expo-video 2.0 exposes no audio-track API, so switching swaps
+   * the DASH manifest URL for one filtered to the picked language (`&lang=`).
+   */
+  const [audioLangIndex, setAudioLangIndex] = useState(0);
+  const [audioToast, setAudioToast] = useState<string | null>(null);
+  const audioToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Scrubbing: left/right move a pending position that only commits on release,
   // so holding the D-pad sweeps the bar instead of firing a seek per press.
   const [scrubSeconds, setScrubSeconds] = useState<number | null>(null);
@@ -278,6 +291,7 @@ export function WatchScreen({
     setState({ status: "loading" });
     setHasSubtitles(false);
     setSubtitlesOn(false);
+    setAudioLangIndex(0);
     detailRef.current = null;
     currentTimeRef.current = 0;
     segmentsRef.current = [];
@@ -410,8 +424,16 @@ export function WatchScreen({
       player.replace({ uri: selectedOption.videoUrl, headers: authHeader });
       audioPlayer.replace(selectedOption.audioUrl);
     } else {
+      // A non-default audio language narrows the server DASH manifest to that
+      // language (index 0 is the original — already the manifest default).
+      let uri = selectedOption.videoUrl;
+      if (selectedOption.id === "dash-vp9" && audioLangIndex > 0) {
+        const langs = audioLanguageOptions(state.detail.audioSources ?? []);
+        const picked = langs[audioLangIndex];
+        if (picked) uri = `${uri}&lang=${encodeURIComponent(picked.lang)}`;
+      }
       player.muted = false;
-      player.replace({ uri: selectedOption.videoUrl, headers: authHeader });
+      player.replace({ uri, headers: authHeader });
       audioPlayer.pause();
       audioPlayer.replace(null);
     }
@@ -432,7 +454,7 @@ export function WatchScreen({
       audioPlayer.pause();
     }
     setIsPlaying(shouldPlay);
-  }, [state, player, audioPlayer, resumeSeconds, authHeader]);
+  }, [state, player, audioPlayer, resumeSeconds, authHeader, audioLangIndex]);
 
   // SponsorBlock auto-skip: on each tick, jump past any segment we're inside.
   useEffect(() => {
@@ -808,6 +830,31 @@ export function WatchScreen({
     setSubtitlesOn(next !== null);
   };
 
+  /**
+   * Cycle the audio language of a multi-audio video. Position and play state
+   * survive the manifest swap through the same pending-seek mechanism the
+   * error fallback uses.
+   */
+  const cycleAudioLanguage = () => {
+    if (state.status !== "ready") return;
+    const langs = audioLanguageOptions(state.detail.audioSources ?? []);
+    if (langs.length < 2) return;
+    const next = (audioLangIndex + 1) % langs.length;
+    pendingSeekRef.current = currentTimeRef.current;
+    shouldPlayAfterReplaceRef.current = isPlayingRef.current;
+    setAudioLangIndex(next);
+    setAudioToast(`Audio: ${langs[next]?.label ?? ""}`);
+    if (audioToastTimerRef.current) clearTimeout(audioToastTimerRef.current);
+    audioToastTimerRef.current = setTimeout(() => setAudioToast(null), 2500);
+  };
+
+  useEffect(
+    () => () => {
+      if (audioToastTimerRef.current) clearTimeout(audioToastTimerRef.current);
+    },
+    [],
+  );
+
   if (state.status === "loading") {
     return (
       <View style={styles.centered}>
@@ -828,6 +875,13 @@ export function WatchScreen({
   }
 
   const { detail } = state;
+
+  const audioLangs = audioLanguageOptions(detail.audioSources ?? []);
+  // The manifest-swap chooser only works on the server DASH source; the other
+  // options (HLS/muxed/split fallbacks) carry a single fixed audio track.
+  const canChooseAudioLanguage =
+    audioLangs.length >= 2 &&
+    state.playbackOptions[state.selectedOptionIndex]?.id === "dash-vp9";
 
   const totalSeconds = duration || detail.durationSeconds || 0;
   const scrubTarget = scrubSeconds ?? currentTime;
@@ -852,6 +906,11 @@ export function WatchScreen({
       {isBuffering ? (
         <View style={styles.bufferingOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color={colors.brand} />
+        </View>
+      ) : null}
+      {audioToast ? (
+        <View style={styles.audioToast} pointerEvents="none">
+          <Text style={styles.audioToastText}>{audioToast}</Text>
         </View>
       ) : null}
 
@@ -1041,6 +1100,15 @@ export function WatchScreen({
                   action="captions"
                   active={subtitlesOn}
                   onPress={toggleSubtitles}
+                  onFocusChange={onButtonFocusChange}
+                />
+              ) : null}
+              {/* Dubbed videos: cycle audio language (original is default). */}
+              {canChooseAudioLanguage ? (
+                <IconButton
+                  icon="globe"
+                  active={audioLangIndex > 0}
+                  onPress={cycleAudioLanguage}
                   onFocusChange={onButtonFocusChange}
                 />
               ) : null}
@@ -1252,6 +1320,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  audioToast: {
+    position: "absolute",
+    top: 36,
+    right: 36,
+    backgroundColor: "rgba(0, 0, 0, 0.75)",
+    borderRadius: radius.shell,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  audioToastText: { color: colors.foreground, fontSize: fontSize.md },
   info: { gap: spacing.xs },
   progressRow: {
     flexDirection: "row",
@@ -1519,7 +1597,11 @@ function audioScore(source: VideoDetail["audioSources"][number]) {
     : /opus|audio\/webm/.test(blob)
       ? 70
       : 40;
-  return codecScore + (source.bitrate ?? 0) / 1_000_000;
+  // Multi-audio videos list auto-dubs alongside (sometimes before) the
+  // original; the split fallback carries exactly one audio URL, so make sure
+  // it is the original and not whatever language happened to sort first.
+  const originalBonus = urlLooksLikeOriginalAudio(source.url) ? 1000 : 0;
+  return originalBonus + codecScore + (source.bitrate ?? 0) / 1_000_000;
 }
 
 function codecScore(source: VideoDetail["videoSources"][number]) {

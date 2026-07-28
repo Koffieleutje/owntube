@@ -1,13 +1,45 @@
 "use client";
 
 import type Hls from "hls.js";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { languageFirstAudioMenuLabel } from "@/lib/audio-track-label";
 import {
   buildHlsSameOriginConfig,
   getClientAppOrigin,
   installSameOriginMediaFetchGuard,
 } from "@/lib/hls-same-origin";
 import { getMediaOrigin } from "@/lib/media-origin";
+
+/**
+ * Audio language renditions from the HLS master (one EXT-X-MEDIA per language
+ * — see hls/generate.ts). `items` stays empty for single-language videos.
+ */
+export type HlsVodAudioState = {
+  items: { label: string }[];
+  index: number;
+  setIndex: (i: number) => void;
+};
+
+/** WebKit's non-standard `HTMLMediaElement.audioTracks` (native HLS only). */
+type NativeAudioTrack = {
+  enabled: boolean;
+  label: string;
+  language: string;
+};
+type NativeAudioTrackList = {
+  length: number;
+  [index: number]: NativeAudioTrack;
+  addEventListener(type: string, cb: () => void): void;
+  removeEventListener(type: string, cb: () => void): void;
+};
+
+function nativeAudioTracksOf(
+  video: HTMLVideoElement,
+): NativeAudioTrackList | null {
+  const list = (video as HTMLVideoElement & { audioTracks?: unknown })
+    .audioTracks;
+  return list ? (list as NativeAudioTrackList) : null;
+}
 
 /**
  * Play our server-generated VOD HLS on a plain `<video>`.
@@ -17,6 +49,9 @@ import { getMediaOrigin } from "@/lib/media-origin";
  * hls.js-on-ManagedMediaSource) stall the video track on iOS while audio keeps
  * playing. Everywhere else we use hls.js. Segments are already same-origin
  * (`/invidious/videoplayback`), so no cross-origin proxying is needed.
+ *
+ * Returns the audio-language state for the in-player picker, sourced from
+ * hls.js's audio-track API or, on the native path, WebKit's `audioTracks`.
  */
 export function useHlsVodPlayback(
   videoRef: React.RefObject<HTMLVideoElement | null>,
@@ -25,7 +60,7 @@ export function useHlsVodPlayback(
   startAtSeconds?: number,
   autoPlay = false,
   onFatalError?: () => void,
-): void {
+): HlsVodAudioState {
   const hlsRef = useRef<Hls | null>(null);
   const onFatalErrorRef = useRef(onFatalError);
   onFatalErrorRef.current = onFatalError;
@@ -33,6 +68,12 @@ export function useHlsVodPlayback(
   startAtRef.current = startAtSeconds;
   const autoPlayRef = useRef(autoPlay);
   autoPlayRef.current = autoPlay;
+  const [audioItems, setAudioItems] = useState<{ label: string }[]>([]);
+  const [audioIndex, setAudioIndex] = useState(0);
+  const setAudioImplRef = useRef<(i: number) => void>(() => {});
+  const setAudioIndexImperative = useCallback((i: number) => {
+    setAudioImplRef.current(i);
+  }, []);
 
   // Start playback when autoplay turns ON after setup. Key case: a pre-warmed
   // shorts slide attaches + buffers while paused (autoplay off), then becomes
@@ -81,6 +122,10 @@ export function useHlsVodPlayback(
     const video = videoRef.current;
     if (!video || !src) return;
 
+    // Fresh source: reset the audio picker until the new manifest reports.
+    setAudioItems([]);
+    setAudioIndex(0);
+
     const applyStartAndPlay = () => {
       const start = startAtRef.current;
       if (typeof start === "number" && Number.isFinite(start) && start > 0) {
@@ -109,13 +154,58 @@ export function useHlsVodPlayback(
       video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
       video.canPlayType("application/x-mpegURL") !== "";
     if (canNative && !hasRealMediaSource) {
-      const onLoaded = () => applyStartAndPlay();
+      // Language renditions surface on WebKit's AudioTrackList; the manifest's
+      // DEFAULT=YES (the original — see hls/generate.ts) picks the start track.
+      const syncNativeAudio = () => {
+        const list = nativeAudioTracksOf(video);
+        if (!list) return;
+        const tracks: NativeAudioTrack[] = [];
+        for (let i = 0; i < list.length; i++) {
+          const t = list[i];
+          if (t) tracks.push(t);
+        }
+        setAudioItems(
+          tracks.length > 1
+            ? tracks.map((t, i) => ({
+                label: languageFirstAudioMenuLabel({
+                  displayName: t.label || null,
+                  language: t.language || null,
+                  qualityFallback: null,
+                  index: i,
+                }),
+              }))
+            : [],
+        );
+        const enabled = tracks.findIndex((t) => t.enabled);
+        if (enabled >= 0) setAudioIndex(enabled);
+      };
+      setAudioImplRef.current = (i: number) => {
+        const list = nativeAudioTracksOf(video);
+        if (!list) return;
+        for (let k = 0; k < list.length; k++) {
+          const t = list[k];
+          if (t) t.enabled = k === i;
+        }
+        setAudioIndex(i);
+      };
+      const trackEvents = nativeAudioTracksOf(video);
+      trackEvents?.addEventListener("addtrack", syncNativeAudio);
+      trackEvents?.addEventListener("removetrack", syncNativeAudio);
+      trackEvents?.addEventListener("change", syncNativeAudio);
+      const onLoaded = () => {
+        applyStartAndPlay();
+        syncNativeAudio();
+      };
       const onError = () => onFatalErrorRef.current?.();
       video.addEventListener("loadedmetadata", onLoaded, { once: true });
       video.addEventListener("error", onError);
       video.src = src;
       video.load();
       return () => {
+        setAudioImplRef.current = () => {};
+        trackEvents?.removeEventListener("addtrack", syncNativeAudio);
+        trackEvents?.removeEventListener("removetrack", syncNativeAudio);
+        trackEvents?.removeEventListener("change", syncNativeAudio);
         video.removeEventListener("loadedmetadata", onLoaded);
         video.removeEventListener("error", onError);
         video.removeAttribute("src");
@@ -147,12 +237,38 @@ export function useHlsVodPlayback(
         if (data.fatal) onFatalErrorRef.current?.();
       });
       hls.on(HlsCtor.Events.MANIFEST_PARSED, () => applyStartAndPlay());
+      // Language renditions from the master's audio group. hls.js starts on
+      // the DEFAULT=YES entry (the original — see hls/generate.ts).
+      hls.on(HlsCtor.Events.AUDIO_TRACKS_UPDATED, () => {
+        const tracks = hls?.audioTracks ?? [];
+        setAudioItems(
+          tracks.length > 1
+            ? tracks.map((t, i) => ({
+                label: languageFirstAudioMenuLabel({
+                  displayName: t.name || null,
+                  language: t.lang || null,
+                  qualityFallback: null,
+                  index: i,
+                }),
+              }))
+            : [],
+        );
+        const current = hls?.audioTrack ?? -1;
+        if (current >= 0) setAudioIndex(current);
+      });
+      hls.on(HlsCtor.Events.AUDIO_TRACK_SWITCHED, (_e, data) => {
+        setAudioIndex(data.id);
+      });
+      setAudioImplRef.current = (i: number) => {
+        if (hlsRef.current) hlsRef.current.audioTrack = i;
+      };
       hls.loadSource(src);
       hls.attachMedia(video);
     })();
 
     return () => {
       cancelled = true;
+      setAudioImplRef.current = () => {};
       releaseFetchGuard();
       hls?.destroy();
       hlsRef.current = null;
@@ -163,4 +279,10 @@ export function useHlsVodPlayback(
       }
     };
   }, [videoRef, src, streamKey]);
+
+  return {
+    items: audioItems,
+    index: audioIndex,
+    setIndex: setAudioIndexImperative,
+  };
 }

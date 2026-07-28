@@ -10,7 +10,10 @@ import {
   useShortsNativeAutoplay,
 } from "@/components/player/player-media-hooks";
 import type { CaptionTrack } from "@/components/player/player-payload";
-import type { QualityModel } from "@/components/player/player-quality";
+import type {
+  AudioModel,
+  QualityModel,
+} from "@/components/player/player-quality";
 import type { SponsorBlockChromeProps } from "@/components/player/player-types";
 import { useBackgroundPlayback } from "@/hooks/use-background-playback";
 import {
@@ -203,7 +206,7 @@ export function HlsVodBlock({
 
   const shortsShouldPlay = shortsMode && shortsActive && shortsWantsPlay;
 
-  useHlsVodPlayback(
+  const hlsAudio = useHlsVodPlayback(
     videoRef,
     decided && !dashSrc ? src : "",
     reactKey,
@@ -253,6 +256,20 @@ export function HlsVodBlock({
       },
     };
   }, [dashSrc, dashQuality]);
+
+  // Language picker rows come from whichever engine is active: dash.js's
+  // manifest tracks on the DASH upgrade path, hls.js/native renditions
+  // otherwise. Single-language videos leave `items` empty → no menu entry.
+  const activeAudio = dashSrc ? dashQuality.audio : hlsAudio;
+  const audioModel: AudioModel =
+    activeAudio.items.length > 1
+      ? {
+          kind: "tracks",
+          index: activeAudio.index,
+          setIndex: activeAudio.setIndex,
+          items: activeAudio.items,
+        }
+      : { kind: "none" };
 
   const adapter = useNativeAdapter({
     videoRef,
@@ -375,7 +392,7 @@ export function HlsVodBlock({
         sponsorSegments={sponsorSegments}
         sponsorBlockPrefs={sponsorBlockPrefs}
         quality={dashQualityModel}
-        audio={{ kind: "none" }}
+        audio={audioModel}
         captions={captionModel}
         settingsOpen={settingsOpen}
         onSettingsOpenChange={onSettingsOpenChange}

@@ -2,10 +2,12 @@
 
 import type {
   ErrorEvent as DashErrorEvent,
+  MediaInfo,
   MediaPlayerClass,
   Representation,
 } from "dashjs";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { languageFirstAudioMenuLabel } from "@/lib/audio-track-label";
 import {
   getClientAppOrigin,
   installSameOriginMediaFetchGuard,
@@ -110,6 +112,16 @@ export type DashQualityState = {
   mode: "auto" | "manual";
   /** `null` reverts to capped auto-ABR; an id pins to that representation (above or below the cap) until the next video. */
   setQuality: (id: string | null) => void;
+  /**
+   * Audio language tracks from the manifest (one AdaptationSet per language —
+   * see dash/generate.ts). `items` stays empty for single-language videos, so
+   * consumers can use its length to decide whether to render a picker.
+   */
+  audio: {
+    items: { label: string }[];
+    index: number;
+    setIndex: (i: number) => void;
+  };
 };
 
 export function useDashPlayback(
@@ -141,12 +153,18 @@ export function useDashPlayback(
   const [items, setItems] = useState<{ id: string; label: string }[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mode, setMode] = useState<"auto" | "manual">("auto");
+  const [audioItems, setAudioItems] = useState<{ label: string }[]>([]);
+  const [audioIndex, setAudioIndex] = useState(0);
   // Imperative escape hatch the effect below wires up once the dash.js
   // instance exists; `setQuality` itself has a stable identity across
   // re-renders so it's safe for consumers to pass directly as a prop/callback.
   const setQualityImplRef = useRef<(id: string | null) => void>(() => {});
   const setQuality = useCallback((id: string | null) => {
     setQualityImplRef.current(id);
+  }, []);
+  const setAudioImplRef = useRef<(i: number) => void>(() => {});
+  const setAudioIndexImperative = useCallback((i: number) => {
+    setAudioImplRef.current(i);
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: streamKey forces a fresh dash.js instance when the player swaps sources without changing the URL.
@@ -166,6 +184,8 @@ export function useDashPlayback(
     setItems([]);
     setActiveId(null);
     setMode("auto");
+    setAudioItems([]);
+    setAudioIndex(0);
     type QualityInternalState =
       | { mode: "auto" }
       | { mode: "manual"; id: string };
@@ -363,6 +383,20 @@ export function useDashPlayback(
         setMode(qualityStateRef.current.mode);
       };
       setQualityImplRef.current = applyQuality;
+      // Manifest audio tracks (one per language). Captured at streamInitialized
+      // like the video ladder; unlike video reps this list is not re-filtered
+      // by the bitrate cap, so plain indices stay valid.
+      let audioTracks: MediaInfo[] = [];
+      const audioTrackIndexOf = (t: MediaInfo | null | undefined): number => {
+        if (!t) return -1;
+        return audioTracks.findIndex(
+          (x) => x.index === t.index && x.lang === t.lang && x.id === t.id,
+        );
+      };
+      setAudioImplRef.current = (i: number) => {
+        const t = audioTracks[i];
+        if (t && player) player.setCurrentTrack(t);
+      };
       player.on("streamInitialized", () => {
         allVideoReps = player?.getRepresentationsByType("video") ?? [];
         setItems(
@@ -371,7 +405,28 @@ export function useDashPlayback(
             label: r.height ? `${r.height}p` : "?",
           })),
         );
+        audioTracks = player?.getTracksFor("audio") ?? [];
+        setAudioItems(
+          audioTracks.length > 1
+            ? audioTracks.map((t, i) => ({
+                label: languageFirstAudioMenuLabel({
+                  displayName: t.labels?.[0]?.text ?? null,
+                  language: t.lang,
+                  qualityFallback: null,
+                  index: i,
+                }),
+              }))
+            : [],
+        );
+        const current = audioTrackIndexOf(player?.getCurrentTrackFor("audio"));
+        if (current >= 0) setAudioIndex(current);
         applyPortalCap();
+      });
+      player.on("currentTrackChanged", (e) => {
+        const changed = (e as { newMediaInfo?: MediaInfo }).newMediaInfo;
+        if (changed?.type !== "audio") return;
+        const i = audioTrackIndexOf(changed);
+        if (i >= 0) setAudioIndex(i);
       });
       player.on("qualityChangeRendered", (e) => {
         if (e.mediaType !== "video" || !e.newRepresentation) return;
@@ -513,6 +568,7 @@ export function useDashPlayback(
         document.removeEventListener("fullscreenchange", onFullscreenChange);
       }
       setQualityImplRef.current = () => {};
+      setAudioImplRef.current = () => {};
       releaseFetchGuard();
       try {
         player?.destroy();
@@ -528,7 +584,17 @@ export function useDashPlayback(
     };
   }, [videoRef, src, streamKey]);
 
-  return { items, activeId, mode, setQuality };
+  return {
+    items,
+    activeId,
+    mode,
+    setQuality,
+    audio: {
+      items: audioItems,
+      index: audioIndex,
+      setIndex: setAudioIndexImperative,
+    },
+  };
 }
 
 /**

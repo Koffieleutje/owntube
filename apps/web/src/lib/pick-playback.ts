@@ -643,9 +643,10 @@ export function buildWatchPlayback(
   //
   // Also used for MULTI-LANGUAGE videos: the alternative (progressive *split*)
   // offers an in-player language picker, but its single-huge-progressive-file
-  // seek stalls in Safari and its second <audio> element is blocked on iOS. We
-  // prioritise reliable seeking and play the synthesized HLS with the DEFAULT
-  // (original) audio track; a multi-language HLS audio group is the follow-up.
+  // seek stalls in Safari and its second <audio> element is blocked on iOS.
+  // The synthesized manifests now carry one audio rendition per language with
+  // the ORIGINAL as default (see hls/generate.ts pickAudioTracks), and the
+  // player exposes the picker from the engine's track API.
   //
   // Preferred OVER Invidious's native `hlsUrl` below: the synthesized manifest's
   // segments resolve to the same-origin, companion-backed `/invidious/videoplayback`

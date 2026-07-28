@@ -46,11 +46,18 @@ async function handleGET(
       });
     }
     if (file === "media.m3u8") {
-      const itag = new URL(request.url).searchParams.get("itag");
+      const params = new URL(request.url).searchParams;
+      const itag = params.get("itag");
       if (!itag || !/^\d+$/.test(itag)) {
         return new Response("missing or invalid itag", { status: 400 });
       }
-      const body = await generateMediaPlaylist(videoId, itag);
+      // Multi-language audio: same itag per language, told apart by xtags
+      // (colon-separated key=value pairs mirrored from the stream URL).
+      const xtags = params.get("xtags");
+      if (xtags && !/^[\w.:=-]{1,200}$/.test(xtags)) {
+        return new Response("invalid xtags", { status: 400 });
+      }
+      const body = await generateMediaPlaylist(videoId, itag, xtags);
       return new Response(body, {
         headers: {
           "content-type": M3U8_CONTENT_TYPE,

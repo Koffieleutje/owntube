@@ -57,7 +57,7 @@ export function withProgressiveQualitySetter(
 
 export type AudioModel =
   | {
-      kind: "split-native";
+      kind: "tracks";
       index: number;
       setIndex: (i: number) => void;
       items: { label: string }[];

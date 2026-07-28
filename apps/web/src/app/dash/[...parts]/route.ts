@@ -71,16 +71,23 @@ async function handleGET(
   if (!videoId || !VIDEO_ID_RE.test(videoId) || file !== "manifest.mpd") {
     return new Response("not found", { status: 404 });
   }
-  const raw = new URL(request.url).searchParams.get("video") ?? "avc";
+  const params = new URL(request.url).searchParams;
+  const raw = params.get("video") ?? "avc";
   const family = DASH_VIDEO_FAMILIES.includes(raw as DashVideoFamily)
     ? (raw as DashVideoFamily)
     : "avc";
+  // Optional audio-language filter (TV language chooser — see generateMpd).
+  const langRaw = params.get("lang");
+  const audioLang =
+    langRaw && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(langRaw)
+      ? langRaw
+      : null;
 
   // Fire and forget: the manifest response shouldn't wait on history.
   void recordPlay(request, videoId);
 
   try {
-    const body = await generateMpd(videoId, family);
+    const body = await generateMpd(videoId, family, audioLang);
     return new Response(body, {
       headers: {
         "content-type": MPD_CONTENT_TYPE,

@@ -442,7 +442,7 @@ export function SplitBlock({
   // entries here can be rendered as-is — no quality re-formatting needed.
   const audioModel: AudioModel = hasMultipleDistinctAudioStreams(audioTracks)
     ? {
-        kind: "split-native",
+        kind: "tracks",
         index: splitAudioIdx,
         setIndex: setSplitAudioIdx,
         items: audioTracks.map((t, idx) => ({

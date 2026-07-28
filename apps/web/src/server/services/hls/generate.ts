@@ -270,25 +270,148 @@ function pickVideoFormats(af: AdaptiveFormat[]): AdaptiveFormat[] {
     .sort((a, b) => Number(b.bitrate) - Number(a.bitrate));
 }
 
-function pickAudioFormat(af: AdaptiveFormat[]): AdaptiveFormat | undefined {
-  // Default (first) AAC track. Multi-language audio groups are a follow-up.
-  return af.find((f) => /mp4a/.test(f.type) && f.init && f.index);
+/**
+ * Language/track hints googlevideo encodes in the stream URL's `xtags`
+ * parameter (colon-separated pairs), e.g.
+ * `acont=original:lang=nl-NL` or `acont=dubbed-auto:drc=1:lang=en-US`.
+ *
+ * This — not the format list's metadata — is the only reliable signal this
+ * Invidious build gives us for multi-audio videos: the dubbed rows carry the
+ * SAME itag as the original and differ only in `xtags`.
+ */
+export function audioXtagsOf(url: string): {
+  /** Exact decoded xtags value; re-identifies the row in media.m3u8. */
+  raw: string | null;
+  lang: string | null;
+  acont: string | null;
+  /** Dynamic-range-compressed duplicate of another row. */
+  drc: boolean;
+} {
+  try {
+    const raw = new URL(url).searchParams.get("xtags");
+    if (!raw) return { raw: null, lang: null, acont: null, drc: false };
+    let lang: string | null = null;
+    let acont: string | null = null;
+    let drc = false;
+    for (const pair of raw.split(":")) {
+      const eq = pair.indexOf("=");
+      if (eq <= 0) continue;
+      const k = pair.slice(0, eq);
+      const v = pair.slice(eq + 1);
+      if (k === "lang" && v) lang = v;
+      else if (k === "acont" && v) acont = v;
+      else if (k === "drc") drc = v === "1";
+    }
+    return { raw, lang, acont, drc };
+  } catch {
+    return { raw: null, lang: null, acont: null, drc: false };
+  }
 }
 
-/** Master playlist: video variants + a default AAC audio group. */
-export async function generateMasterPlaylist(videoId: string): Promise<string> {
-  const af = await fetchAdaptiveFormats(videoId);
-  const videos = pickVideoFormats(af);
-  const audio = pickAudioFormat(af);
-  if (videos.length === 0 || !audio) {
-    throw new Error("no AVC video + AAC audio streams");
+export type AudioTrackVariant = {
+  format: AdaptiveFormat;
+  /** BCP-47-ish tag from xtags (e.g. "nl-NL"); null for single-track videos. */
+  lang: string | null;
+  /** YouTube's original audio (`acont=original`), vs a translated dub. */
+  isOriginal: boolean;
+  /** The manifest default: the original when present, else the first track. */
+  isDefault: boolean;
+  /** Exact xtags of the chosen row (see {@link audioXtagsOf}). */
+  xtags: string | null;
+};
+
+/**
+ * One playable AAC track per audio language, ORIGINAL FIRST AND DEFAULT.
+ *
+ * YouTube lists auto-dubs before the original on some videos (observed:
+ * `acont=dubbed-auto:lang=en-US` rows precede `acont=original:lang=nl-NL`),
+ * so "first AAC row" — the old rule — picked the dub. Rows are grouped by
+ * xtags language+acont (same itag across languages!), each group keeps its
+ * best row (non-`drc` over drc, then bitrate), and the original group is
+ * moved to the front so every consumer of manifest order gets it by default.
+ */
+export function pickAudioTracks(af: AdaptiveFormat[]): AudioTrackVariant[] {
+  type Row = { f: AdaptiveFormat; x: ReturnType<typeof audioXtagsOf> };
+  const rows: Row[] = af
+    .filter((f) => /mp4a/.test(f.type) && f.url && f.init && f.index)
+    .map((f) => ({ f, x: audioXtagsOf(f.url) }));
+
+  const groups = new Map<string, Row[]>();
+  for (const r of rows) {
+    // Rows without xtags all describe the same lone track (multi-host repeats).
+    const key = r.x.raw ? `${r.x.lang ?? ""}|${r.x.acont ?? ""}` : "";
+    const g = groups.get(key);
+    if (g) g.push(r);
+    else groups.set(key, [r]);
   }
-  const audioCodec = codecsOf(audio.type);
-  const audioBitrate = Number(audio.bitrate) || 0;
-  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
-  lines.push(
-    `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,URI="media.m3u8?itag=${audio.itag}"`,
+
+  const chosen = Array.from(groups.values()).map(
+    (g) =>
+      g.sort(
+        (a, b) =>
+          (a.x.drc ? 1 : 0) - (b.x.drc ? 1 : 0) ||
+          Number(b.f.bitrate) - Number(a.f.bitrate),
+      )[0] as Row,
   );
+  chosen.sort(
+    (a, b) =>
+      (a.x.acont === "original" ? 0 : 1) - (b.x.acont === "original" ? 0 : 1),
+  );
+
+  return chosen.map((r, i) => ({
+    format: r.f,
+    lang: r.x.lang,
+    isOriginal: r.x.acont === "original" || chosen.length === 1,
+    isDefault: i === 0,
+    xtags: r.x.raw,
+  }));
+}
+
+/**
+ * English display name for a track ("Dutch (Original)"). Manifest-embedded, so
+ * viewer-locale localization happens client-side from the `lang` tag; this is
+ * the fallback players show when they don't localize.
+ */
+export function audioTrackName(t: AudioTrackVariant, index: number): string {
+  const primary = t.lang?.split(/[-_]/)[0]?.toLowerCase();
+  let name: string | undefined;
+  if (primary) {
+    try {
+      name = new Intl.DisplayNames(["en"], { type: "language" }).of(primary);
+    } catch {
+      name = undefined;
+    }
+    name = name ?? t.lang?.toUpperCase();
+  }
+  if (!name) name = index === 0 ? "Audio" : `Audio ${index + 1}`;
+  return t.isOriginal && t.lang ? `${name} (Original)` : name;
+}
+
+function mediaPlaylistUri(t: AudioTrackVariant): string {
+  const xt = t.xtags ? `&xtags=${encodeURIComponent(t.xtags)}` : "";
+  return `media.m3u8?itag=${t.format.itag}${xt}`;
+}
+
+/** Pure master-playlist builder (exported for tests). */
+export function buildMasterPlaylist(
+  videos: AdaptiveFormat[],
+  audioTracks: AudioTrackVariant[],
+): string {
+  const defaultAudio =
+    audioTracks.find((t) => t.isDefault) ??
+    (audioTracks[0] as AudioTrackVariant);
+  const audioCodec = codecsOf(defaultAudio.format.type);
+  const audioBitrate = Number(defaultAudio.format.bitrate) || 0;
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
+  for (const [i, t] of audioTracks.entries()) {
+    const name = audioTracks.length === 1 ? "Audio" : audioTrackName(t, i);
+    const language = t.lang ? `,LANGUAGE="${t.lang}"` : "";
+    lines.push(
+      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="${name}"${language},DEFAULT=${
+        t.isDefault ? "YES" : "NO"
+      },AUTOSELECT=YES,URI="${mediaPlaylistUri(t)}"`,
+    );
+  }
   for (const v of videos) {
     const bandwidth = (Number(v.bitrate) || 0) + audioBitrate;
     const res = v.size ? `,RESOLUTION=${v.size}` : "";
@@ -299,6 +422,17 @@ export async function generateMasterPlaylist(videoId: string): Promise<string> {
     lines.push(`media.m3u8?itag=${v.itag}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+/** Master playlist: video variants + one audio rendition per language. */
+export async function generateMasterPlaylist(videoId: string): Promise<string> {
+  const af = await fetchAdaptiveFormats(videoId);
+  const videos = pickVideoFormats(af);
+  const audioTracks = pickAudioTracks(af);
+  if (videos.length === 0 || audioTracks.length === 0) {
+    throw new Error("no AVC video + AAC audio streams");
+  }
+  return buildMasterPlaylist(videos, audioTracks);
 }
 
 /** Parsed `sidx` per (videoId, itag); dedupes the byte-range fetch across the
@@ -322,15 +456,31 @@ function getSidx(
   return sidx;
 }
 
-/** Media playlist for one stream (itag): EXT-X-MAP + byte-range fragments. */
+/**
+ * Media playlist for one stream (itag): EXT-X-MAP + byte-range fragments.
+ *
+ * `xtags` disambiguates multi-language audio: every language of a video's AAC
+ * audio shares itag 140 and differs only in the URL's xtags, so an itag-only
+ * lookup would always resolve to the first row (possibly a dub).
+ */
 export async function generateMediaPlaylist(
   videoId: string,
   itag: string,
+  xtags?: string | null,
 ): Promise<string> {
   const af = await fetchAdaptiveFormats(videoId);
-  const f = af.find((x) => String(x.itag) === String(itag));
+  const f = af.find(
+    (x) =>
+      String(x.itag) === String(itag) &&
+      (!xtags || audioXtagsOf(x.url).raw === xtags),
+  );
   if (!f || !f.init || !f.index) throw new Error(`itag ${itag} not found`);
-  const sidx = await getSidx(videoId, itag, f.url, f.index);
+  const sidx = await getSidx(
+    videoId,
+    xtags ? `${itag}:${xtags}` : itag,
+    f.url,
+    f.index,
+  );
   const uri = segmentUri(f.url);
   const [ia, ib] = f.init.split("-").map(Number);
   const targetDuration = Math.ceil(

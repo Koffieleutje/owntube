@@ -18,11 +18,14 @@
 
 import {
   type AdaptiveFormat,
+  type AudioTrackVariant,
+  audioTrackName,
   codecsOf,
   companionDirectSegmentUri,
   fetchAdaptiveFormats,
   fetchVideoCaptions,
   type InvidiousCaption,
+  pickAudioTracks,
   segmentUri,
 } from "@/server/services/hls/generate";
 
@@ -90,9 +93,13 @@ export function pickDashVideoFormats(
     .sort((a, b) => Number(b.bitrate) - Number(a.bitrate));
 }
 
-function pickDashAudioFormat(af: AdaptiveFormat[]): AdaptiveFormat | undefined {
-  // Default AAC track: decodable everywhere, matches the HLS path.
-  return dedupeByItag(af).find((f) => /mp4a/.test(f.type) && usable(f));
+/**
+ * AAC tracks, one per language, original first/default (see pickAudioTracks —
+ * NOT dedupeByItag: every language shares itag 140, so an itag dedupe keeps
+ * only the first row, which on auto-dubbed videos is the dub).
+ */
+function pickDashAudioTracks(af: AdaptiveFormat[]): AudioTrackVariant[] {
+  return pickAudioTracks(af).filter((t) => usable(t.format));
 }
 
 /**
@@ -130,7 +137,11 @@ function dashSegmentUri(url: string, seekCritical: boolean): string {
   return segmentUri(url);
 }
 
-function representationXml(f: AdaptiveFormat, indent: string): string {
+function representationXml(
+  f: AdaptiveFormat,
+  indent: string,
+  idOverride?: string,
+): string {
   const [w, h] = (f.size ?? "").split("x").map((n) => Number.parseInt(n, 10));
   const dims =
     Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0
@@ -142,13 +153,46 @@ function representationXml(f: AdaptiveFormat, indent: string): string {
   const seekCritical =
     f.type.startsWith("audio/") || bandwidth <= SPLIT_DIRECT_MAX_KBPS * 1000;
   return [
-    `${indent}<Representation id="${xmlEscape(String(f.itag))}" codecs="${xmlEscape(codecsOf(f.type))}" bandwidth="${bandwidth}"${dims}${fps}>`,
+    `${indent}<Representation id="${xmlEscape(idOverride ?? String(f.itag))}" codecs="${xmlEscape(codecsOf(f.type))}" bandwidth="${bandwidth}"${dims}${fps}>`,
     `${indent}  <BaseURL>${xmlEscape(dashSegmentUri(f.url, seekCritical))}</BaseURL>`,
     `${indent}  <SegmentBase indexRange="${xmlEscape(f.index)}">`,
     `${indent}    <Initialization range="${xmlEscape(f.init)}"/>`,
     `${indent}  </SegmentBase>`,
     `${indent}</Representation>`,
   ].join("\n");
+}
+
+/**
+ * One audio AdaptationSet per language track, original first.
+ *
+ * Default-track selection is belt-and-suspenders across players: manifest
+ * order (original first) for anything order-based, `Role=main` (ExoPlayer
+ * maps it to the DEFAULT selection flag; dubs get `Role=dub`), and
+ * `selectionPriority` (dash.js's initial-track mode picks the highest).
+ * `lang` is mandatory for expo-video track visibility (same reason as
+ * captions below), and Representation ids get an `a<n>-` prefix because
+ * every language shares the same itag.
+ */
+function audioAdaptationSets(tracks: AudioTrackVariant[]): string[] {
+  const multi = tracks.length > 1;
+  return tracks.flatMap((t, i) => {
+    const f = t.format;
+    const mime = f.type.split(";")[0]?.trim() ?? "audio/mp4";
+    const lang = multi ? ` lang="${xmlEscape(t.lang ?? "und")}"` : "";
+    const priority = multi ? ` selectionPriority="${t.isDefault ? 2 : 1}"` : "";
+    const inner = multi
+      ? [
+          `      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="${t.isOriginal ? "main" : "dub"}"/>`,
+          `      <Label>${xmlEscape(audioTrackName(t, i))}</Label>`,
+        ]
+      : [];
+    return [
+      `    <AdaptationSet id="${1 + i}" mimeType="${xmlEscape(mime)}"${lang}${priority} startWithSAP="1" subsegmentAlignment="true">`,
+      ...inner,
+      representationXml(f, "      ", multi ? `a${i}-${f.itag}` : undefined),
+      `    </AdaptationSet>`,
+    ];
+  });
 }
 
 /**
@@ -194,7 +238,7 @@ function captionAdaptationSets(
 /** Pure MPD builder (exported for tests). */
 export function buildMpd(
   videos: AdaptiveFormat[],
-  audio: AdaptiveFormat,
+  audioTracks: AudioTrackVariant[],
   durationSeconds: number,
   videoId?: string,
   captions: InvidiousCaption[] = [],
@@ -208,20 +252,28 @@ export function buildMpd(
     `    <AdaptationSet id="0" mimeType="${xmlEscape(videoMime)}" startWithSAP="1" subsegmentAlignment="true" scanType="progressive">`,
     ...videos.map((f) => representationXml(f, "      ")),
     `    </AdaptationSet>`,
-    `    <AdaptationSet id="1" mimeType="${xmlEscape(audio.type.split(";")[0]?.trim() ?? "audio/mp4")}" startWithSAP="1" subsegmentAlignment="true">`,
-    representationXml(audio, "      "),
-    `    </AdaptationSet>`,
-    ...(videoId ? captionAdaptationSets(videoId, captions, 2) : []),
+    ...audioAdaptationSets(audioTracks),
+    ...(videoId
+      ? captionAdaptationSets(videoId, captions, 1 + audioTracks.length)
+      : []),
     `  </Period>`,
     `</MPD>`,
   ];
   return `${lines.join("\n")}\n`;
 }
 
-/** MPD for one video, video codec family chosen by the client's MSE probe. */
+/**
+ * MPD for one video, video codec family chosen by the client's MSE probe.
+ *
+ * `audioLang` (BCP-47 tag or bare primary subtag) narrows the manifest to that
+ * one audio language when it exists — the TV app's language chooser, since its
+ * expo-video has no runtime audio-track API and can only swap manifests. An
+ * unmatched tag falls back to the full track list.
+ */
 export async function generateMpd(
   videoId: string,
   family: DashVideoFamily,
+  audioLang?: string | null,
 ): Promise<string> {
   const af = await fetchAdaptiveFormats(videoId);
   let videos = pickDashVideoFormats(af, family);
@@ -230,8 +282,18 @@ export async function generateMpd(
     // playback still works; the ladder just stays ≤1080p.
     videos = pickDashVideoFormats(af, "avc");
   }
-  const audio = pickDashAudioFormat(af);
-  if (videos.length === 0 || !audio) {
+  let audioTracks = pickDashAudioTracks(af);
+  if (audioLang && audioTracks.length > 1) {
+    const want = audioLang.toLowerCase();
+    const matches = audioTracks.filter((t) => {
+      const lang = t.lang?.toLowerCase();
+      return lang === want || lang?.split("-")[0] === want.split("-")[0];
+    });
+    if (matches.length > 0) {
+      audioTracks = matches.map((t, i) => ({ ...t, isDefault: i === 0 }));
+    }
+  }
+  if (videos.length === 0 || audioTracks.length === 0) {
     throw new Error("no usable adaptive video + AAC audio streams");
   }
   // Subtitles are best-effort: a caption lookup failure shouldn't cost playback.
@@ -240,7 +302,7 @@ export async function generateMpd(
   );
   return buildMpd(
     videos,
-    audio,
+    audioTracks,
     durationSecondsFromFormats(af),
     videoId,
     captions,

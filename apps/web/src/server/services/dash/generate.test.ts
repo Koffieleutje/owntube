@@ -3,7 +3,10 @@ import {
   buildMpd,
   pickDashVideoFormats,
 } from "@/server/services/dash/generate";
-import type { AdaptiveFormat } from "@/server/services/hls/generate";
+import {
+  type AdaptiveFormat,
+  pickAudioTracks,
+} from "@/server/services/hls/generate";
 
 const vp9_2160: AdaptiveFormat = {
   itag: 313,
@@ -47,6 +50,8 @@ const aac: AdaptiveFormat = {
   bitrate: 130_000,
 };
 
+const aacTrack = pickAudioTracks([aac]);
+
 describe("pickDashVideoFormats", () => {
   it("keeps only the requested family, best bitrate first, deduped", () => {
     const picked = pickDashVideoFormats(
@@ -73,7 +78,7 @@ describe("companion-direct segments", () => {
       ...vp9_2160,
       url: "https://rr2---sn-abc.googlevideo.com/videoplayback?itag=313&dur=562.433",
     };
-    const mpd = buildMpd([gv], aac, 562);
+    const mpd = buildMpd([gv], aacTrack, 562);
     expect(mpd).toContain(
       "https://inv.example/companion/videoplayback?itag=313",
     );
@@ -87,7 +92,7 @@ describe("companion-direct segments", () => {
       ...vp9_2160,
       url: "https://inv.example/videoplayback?itag=313&host=rr2---sn-abc.googlevideo.com",
     };
-    const mpd = buildMpd([local], aac, 562);
+    const mpd = buildMpd([local], aacTrack, 562);
     expect(mpd).toContain(
       "<BaseURL>https://inv.example/companion/videoplayback?itag=313",
     );
@@ -101,7 +106,7 @@ describe("companion-direct segments", () => {
     });
     const mpd = buildMpd(
       [withHost(vp9_2160), withHost(vp9_1080)],
-      withHost(aac),
+      pickAudioTracks([withHost(aac)]),
       562,
     );
     // 12Mbps 2160p: aborted multi-MB fetches must drain bounded → proxy.
@@ -117,7 +122,7 @@ describe("companion-direct segments", () => {
 
   it("false: everything through the same-origin proxy", () => {
     vi.stubEnv("INVIDIOUS_DIRECT_DASH_SEGMENTS", "false");
-    const mpd = buildMpd([vp9_2160, vp9_1080], aac, 562);
+    const mpd = buildMpd([vp9_2160, vp9_1080], aacTrack, 562);
     expect(mpd).not.toContain("companion/videoplayback");
     expect(mpd).toContain("<BaseURL>/invidious/videoplayback?itag=313");
     expect(mpd).toContain("<BaseURL>/invidious/videoplayback?itag=140");
@@ -126,7 +131,7 @@ describe("companion-direct segments", () => {
 
 describe("buildMpd", () => {
   it("emits a static VOD MPD with SegmentBase byte ranges", () => {
-    const mpd = buildMpd([vp9_2160, vp9_1080], aac, 562.433);
+    const mpd = buildMpd([vp9_2160, vp9_1080], aacTrack, 562.433);
     expect(mpd).toContain('type="static"');
     expect(mpd).toContain('mediaPresentationDuration="PT562.433S"');
     expect(mpd).toContain('mimeType="video/webm"');
@@ -139,13 +144,13 @@ describe("buildMpd", () => {
   });
 
   it("XML-escapes ampersands in stream URLs", () => {
-    const mpd = buildMpd([vp9_2160], aac, 562);
+    const mpd = buildMpd([vp9_2160], aacTrack, 562);
     expect(mpd).toContain("itag=313&amp;dur=562.433&amp;x=1");
     expect(mpd).not.toMatch(/<BaseURL>[^<]*&(?!amp;)/);
   });
 
   it("advertises caption tracks as text AdaptationSets", () => {
-    const mpd = buildMpd([vp9_1080], aac, 562, "dQw4w9WgXcQ", [
+    const mpd = buildMpd([vp9_1080], aacTrack, 562, "dQw4w9WgXcQ", [
       { label: "English", languageCode: "en" },
       { label: "Nederlands", languageCode: "nl" },
     ]);
@@ -156,7 +161,7 @@ describe("buildMpd", () => {
   });
 
   it("falls back to the label when a track has no language code", () => {
-    const mpd = buildMpd([vp9_1080], aac, 562, "dQw4w9WgXcQ", [
+    const mpd = buildMpd([vp9_1080], aacTrack, 562, "dQw4w9WgXcQ", [
       { label: "Auto-generated" },
     ]);
     expect(mpd).toContain(
@@ -165,7 +170,7 @@ describe("buildMpd", () => {
   });
 
   it("reads Invidious's snake_case language_code", () => {
-    const mpd = buildMpd([vp9_1080], aac, 562, "dQw4w9WgXcQ", [
+    const mpd = buildMpd([vp9_1080], aacTrack, 562, "dQw4w9WgXcQ", [
       { label: "English", language_code: "en" },
     ]);
     expect(mpd).toContain('lang="en"');
@@ -173,14 +178,74 @@ describe("buildMpd", () => {
   });
 
   it("always emits lang, since a track without one is dropped by the client", () => {
-    const mpd = buildMpd([vp9_1080], aac, 562, "dQw4w9WgXcQ", [
+    const mpd = buildMpd([vp9_1080], aacTrack, 562, "dQw4w9WgXcQ", [
       { label: "English (auto-generated)" },
     ]);
     expect(mpd).toContain('lang="und"');
   });
 
   it("omits caption sets entirely when there are none", () => {
-    const mpd = buildMpd([vp9_1080], aac, 562, "dQw4w9WgXcQ", []);
+    const mpd = buildMpd([vp9_1080], aacTrack, 562, "dQw4w9WgXcQ", []);
     expect(mpd).not.toContain("text/vtt");
+  });
+
+  it("keeps the single-audio shape free of multi-track attributes", () => {
+    const mpd = buildMpd([vp9_1080], aacTrack, 562);
+    expect(mpd).not.toContain("<Label>");
+    expect(mpd).not.toContain('value="main"');
+    expect(mpd).not.toContain("selectionPriority");
+  });
+});
+
+describe("multi-language audio", () => {
+  // Mirrors a real auto-dubbed video: the en-US dub rows come FIRST and every
+  // language shares itag 140; only the URL's xtags tells them apart.
+  const xt = (v: string) => encodeURIComponent(v);
+  const dubEn: AdaptiveFormat = {
+    ...aac,
+    bitrate: 130_895,
+    url: `https://inv.example/videoplayback?itag=140&dur=562.433&xtags=${xt("acont=dubbed-auto:lang=en-US")}`,
+  };
+  const originalNlDrc: AdaptiveFormat = {
+    ...aac,
+    bitrate: 130_946,
+    url: `https://inv.example/videoplayback?itag=140&dur=562.433&xtags=${xt("acont=original:drc=1:lang=nl-NL")}`,
+  };
+  const originalNl: AdaptiveFormat = {
+    ...aac,
+    bitrate: 130_950,
+    url: `https://inv.example/videoplayback?itag=140&dur=562.433&xtags=${xt("acont=original:lang=nl-NL")}`,
+  };
+
+  it("puts the original first and default, dropping drc duplicates", () => {
+    const tracks = pickAudioTracks([dubEn, originalNlDrc, originalNl]);
+    expect(tracks).toHaveLength(2);
+    expect(tracks[0]?.lang).toBe("nl-NL");
+    expect(tracks[0]?.isOriginal).toBe(true);
+    expect(tracks[0]?.isDefault).toBe(true);
+    expect(tracks[0]?.xtags).toBe("acont=original:lang=nl-NL");
+    expect(tracks[1]?.lang).toBe("en-US");
+    expect(tracks[1]?.isOriginal).toBe(false);
+  });
+
+  it("emits one AdaptationSet per language, original as Role=main", () => {
+    const tracks = pickAudioTracks([dubEn, originalNlDrc, originalNl]);
+    const mpd = buildMpd([vp9_1080], tracks, 562, "dQw4w9WgXcQ", [
+      { label: "English", languageCode: "en" },
+    ]);
+    const nl = mpd.indexOf('lang="nl-NL"');
+    const en = mpd.indexOf('lang="en-US"');
+    expect(nl).toBeGreaterThan(-1);
+    expect(en).toBeGreaterThan(nl);
+    expect(mpd).toContain('selectionPriority="2"');
+    expect(mpd).toContain('value="main"');
+    expect(mpd).toContain('value="dub"');
+    expect(mpd).toContain("<Label>Dutch (Original)</Label>");
+    expect(mpd).toContain("<Label>English</Label>");
+    // Same itag on every language: representation ids must still be unique.
+    expect(mpd).toContain('<Representation id="a0-140"');
+    expect(mpd).toContain('<Representation id="a1-140"');
+    // Caption set ids start after the audio sets (video=0, audio=1..2).
+    expect(mpd).toContain('<AdaptationSet id="3" contentType="text"');
   });
 });

@@ -121,7 +121,7 @@ export function SettingsMenu({
               >
                 <span>Language</span>
                 <span className="text-xs text-zinc-400">
-                  {audio.kind === "split-native"
+                  {audio.kind === "tracks"
                     ? (audio.items[audio.index]?.label ?? "")
                     : ""}
                 </span>
@@ -237,7 +237,7 @@ export function SettingsMenu({
             </button>
           </div>
           <ul className="max-h-64 overflow-y-auto py-1">
-            {audio.kind === "split-native"
+            {audio.kind === "tracks"
               ? audio.items.map((it, i) => (
                   <li key={`${it.label}-${i}`}>
                     <button
