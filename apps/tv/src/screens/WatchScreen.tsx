@@ -180,6 +180,13 @@ export function WatchScreen({
   // focus, at which point it expands so the focused card is fully visible.
   const [relatedFocused, setRelatedFocused] = useState(false);
   const relatedFocusCount = useRef(0);
+  // Moving focus from one card to the next fires a blur then a focus as two
+  // separate calls, so the count dips to 0 between them — debounce collapsing
+  // on that dip, or the reveal animation restarts (shrink then grow) on every
+  // single step down the rail and never finishes expanding.
+  const relatedCollapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   /**
    * Android moves focus horizontally on left/right regardless of what the key
    * handler does, so without pinning next-focus back to the bar itself a scrub
@@ -586,6 +593,22 @@ export function WatchScreen({
     }, 4000);
   }, []);
 
+  // Android's MediaSession (registered by expo-video for the hardware
+  // Play/Pause key) claims that key before it reaches our TVEventHandler, so
+  // pressing it pauses/resumes the player without ever calling
+  // togglePlayback() or revealControls() — the overlay silently misses it.
+  // Resync from the player's own event instead of the key event.
+  useEffect(() => {
+    const sub = player.addListener(
+      "playingChange",
+      ({ isPlaying: playing }) => {
+        setIsPlaying(playing);
+        revealControls();
+      },
+    );
+    return () => sub.remove();
+  }, [player, revealControls]);
+
   // Any remote key re-shows the controls (fires regardless of focus target).
   // While paused the overlay stays pinned; while playing it auto-hides.
   useEffect(() => {
@@ -600,6 +623,9 @@ export function WatchScreen({
   useEffect(
     () => () => {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      if (relatedCollapseTimerRef.current) {
+        clearTimeout(relatedCollapseTimerRef.current);
+      }
     },
     [],
   );
@@ -1040,7 +1066,20 @@ export function WatchScreen({
                       0,
                       relatedFocusCount.current + (focused ? 1 : -1),
                     );
-                    setRelatedFocused(relatedFocusCount.current > 0);
+                    if (relatedFocusCount.current > 0) {
+                      if (relatedCollapseTimerRef.current) {
+                        clearTimeout(relatedCollapseTimerRef.current);
+                        relatedCollapseTimerRef.current = null;
+                      }
+                      setRelatedFocused(true);
+                    } else {
+                      if (relatedCollapseTimerRef.current) {
+                        clearTimeout(relatedCollapseTimerRef.current);
+                      }
+                      relatedCollapseTimerRef.current = setTimeout(() => {
+                        setRelatedFocused(false);
+                      }, RELATED_COLLAPSE_DELAY_MS);
+                    }
                     onButtonFocusChange(focused);
                   }}
                 />
@@ -1083,6 +1122,8 @@ const SCRUB_PAD = 8;
 /** How much of the related rail stays on screen under the controls. */
 const RELATED_PEEK_HEIGHT = 104;
 const RELATED_REVEAL_MS = 180;
+/** Longer than one focus-move's blur→focus gap, shorter than a deliberate exit. */
+const RELATED_COLLAPSE_DELAY_MS = 150;
 
 /**
  * One frame of the storyboard sprite sheet, cropped to the cell for `atSeconds`.
@@ -1328,6 +1369,22 @@ function buildPlaybackOptions(detail: VideoDetail): PlaybackOption[] {
     seen.add(key);
     options.push(option);
   };
+
+  // Live streams have no fixed-duration adaptiveFormats to build a VOD DASH/HLS
+  // manifest from (no init/index byte ranges) — /dash and /hls 502. The only
+  // playable source is the raw upstream live HLS URL. Mirrors
+  // apps/web/src/lib/pick-playback.ts's `detail.isLive` branch.
+  if (detail.isLive) {
+    if (detail.hlsUrl) {
+      addOption({
+        id: "live-hls",
+        label: "Live",
+        videoUrl: detail.hlsUrl,
+        kind: "auto",
+      });
+    }
+    return options;
+  }
 
   // Server-generated DASH first: one manifest carrying both the video ladder
   // (VP9 unlocks the rungs above 1080p that the AVC-only HLS path cannot) and
