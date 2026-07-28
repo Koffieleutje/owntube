@@ -113,6 +113,12 @@ export function Providers({
           false: httpBatchLink({
             url: `${getBaseUrl()}/api/trpc`,
             transformer: superjson,
+            // Defense-in-depth against any future per-item query fan-out (a
+            // page firing one query per row instead of one bulk query):
+            // splits an oversized batch into multiple GET requests instead of
+            // building a single URL long enough to hit server/proxy length
+            // limits (414/431).
+            maxURLLength: 2000,
           }),
         }),
       ],

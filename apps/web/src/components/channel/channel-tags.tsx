@@ -13,6 +13,14 @@ type Props = {
    * a per-channel status query there.
    */
   subscribed?: boolean;
+  /**
+   * Tags already known by the caller (e.g. the channels list, which fetches
+   * every (channelId, tag) pair in one `assignments` query) — skips this
+   * component's own per-channel `listForChannel` query. Without it, a list of
+   * N channels fires N separate queries, ballooning the batched tRPC GET URL
+   * past server/proxy length limits.
+   */
+  tags?: string[];
 };
 
 /**
@@ -25,6 +33,7 @@ export function ChannelTags({
   isAuthed,
   tone = "dark",
   subscribed,
+  tags: tagsProp,
 }: Props) {
   const utils = trpc.useUtils();
   // Tagging is only offered for channels you're subscribed to. Reuses the same
@@ -35,10 +44,11 @@ export function ChannelTags({
     { enabled: isAuthed && subscribed === undefined },
   );
   const isSubscribed = subscribed ?? status.data?.subscribed ?? false;
-  const { data: tags } = trpc.channelTags.listForChannel.useQuery(
+  const { data: tagsQuery } = trpc.channelTags.listForChannel.useQuery(
     { channelId },
-    { enabled: isAuthed },
+    { enabled: isAuthed && tagsProp === undefined },
   );
+  const tags = tagsProp ?? tagsQuery;
   const { data: allTags } = trpc.channelTags.listAll.useQuery(undefined, {
     enabled: isAuthed,
   });

@@ -102,29 +102,36 @@ export function SubscriptionChannelsList({
   const tagFilterActive = includeTags.length > 0 || excludeTags.length > 0;
 
   // Live (channelId, tag) pairs — tag edits made inline in any row invalidate
-  // this query, so every group updates immediately. Also needed whenever the
-  // shared tag filter is active (rows are filtered by their assignments).
-  const assignments = trpc.channelTags.assignments.useQuery(undefined, {
-    enabled: groupByTag || tagFilterActive,
-  });
+  // this query, so every group updates immediately. Always on (not just for
+  // grouping/filtering): every row's <ChannelTags> reads its tags from here
+  // instead of running its own per-channel query, which at subscription-list
+  // scale (100+ channels) would otherwise balloon the batched tRPC GET URL
+  // past server/proxy length limits.
+  const assignments = trpc.channelTags.assignments.useQuery(undefined);
+
+  const tagsByChannelId = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const row of assignments.data ?? []) {
+      const list = map.get(row.channelId) ?? [];
+      list.push(row.tag);
+      map.set(row.channelId, list);
+    }
+    return map;
+  }, [assignments.data]);
 
   const sorted = useMemo(() => {
     let copy = [...channels];
-    if (tagFilterActive && assignments.data) {
-      const tagsByChannel = new Map<string, Set<string>>();
-      for (const row of assignments.data) {
-        const set = tagsByChannel.get(row.channelId) ?? new Set<string>();
-        set.add(row.tag);
-        tagsByChannel.set(row.channelId, set);
-      }
+    if (tagFilterActive) {
       // Same semantics as the feed: include = only channels carrying one of
       // those tags; exclude = drop channels carrying one (untagged survive).
       copy = copy.filter((c) => {
-        const tags = tagsByChannel.get(c.channelId);
+        const tags = tagsByChannelId.get(c.channelId);
         if (includeTags.length > 0) {
-          if (!tags || !includeTags.some((t) => tags.has(t))) return false;
+          if (!tags || !includeTags.some((t) => tags.includes(t))) {
+            return false;
+          }
         }
-        if (tags && excludeTags.some((t) => tags.has(t))) return false;
+        if (tags && excludeTags.some((t) => tags.includes(t))) return false;
         return true;
       });
     }
@@ -154,7 +161,7 @@ export function SubscriptionChannelsList({
     sortKey,
     desc,
     tagFilterActive,
-    assignments.data,
+    tagsByChannelId,
     includeTags,
     excludeTags,
   ]);
@@ -162,16 +169,10 @@ export function SubscriptionChannelsList({
   /** Tag → sorted channels (a channel appears under each of its tags). */
   const groups = useMemo(() => {
     if (!groupByTag) return null;
-    const tagsByChannel = new Map<string, string[]>();
-    for (const row of assignments.data ?? []) {
-      const list = tagsByChannel.get(row.channelId) ?? [];
-      list.push(row.tag);
-      tagsByChannel.set(row.channelId, list);
-    }
     const byTag = new Map<string, Channel[]>();
     const untagged: Channel[] = [];
     for (const c of sorted) {
-      const tags = tagsByChannel.get(c.channelId);
+      const tags = tagsByChannelId.get(c.channelId);
       if (!tags || tags.length === 0) {
         untagged.push(c);
         continue;
@@ -186,7 +187,7 @@ export function SubscriptionChannelsList({
       a.localeCompare(b, undefined, { sensitivity: "base" }),
     );
     return { named, untagged };
-  }, [groupByTag, assignments.data, sorted]);
+  }, [groupByTag, tagsByChannelId, sorted]);
 
   return (
     <div className="space-y-3">
@@ -246,7 +247,11 @@ export function SubscriptionChannelsList({
               <GroupHeader tag={tag} count={list.length} />
               <ul className="space-y-1">
                 {list.map((c) => (
-                  <ChannelRow key={c.channelId} channel={c} />
+                  <ChannelRow
+                    key={c.channelId}
+                    channel={c}
+                    tags={tagsByChannelId.get(c.channelId) ?? []}
+                  />
                 ))}
               </ul>
             </section>
@@ -256,7 +261,7 @@ export function SubscriptionChannelsList({
               <GroupHeader count={groups.untagged.length} />
               <ul className="space-y-1">
                 {groups.untagged.map((c) => (
-                  <ChannelRow key={c.channelId} channel={c} />
+                  <ChannelRow key={c.channelId} channel={c} tags={[]} />
                 ))}
               </ul>
             </section>
@@ -269,7 +274,11 @@ export function SubscriptionChannelsList({
       ) : (
         <ul className="space-y-1">
           {sorted.map((c) => (
-            <ChannelRow key={c.channelId} channel={c} />
+            <ChannelRow
+              key={c.channelId}
+              channel={c}
+              tags={tagsByChannelId.get(c.channelId) ?? []}
+            />
           ))}
         </ul>
       )}
@@ -311,7 +320,13 @@ function GroupHeader({ tag, count }: { tag?: string; count: number }) {
   );
 }
 
-function ChannelRow({ channel: c }: { channel: Channel }) {
+function ChannelRow({
+  channel: c,
+  tags,
+}: {
+  channel: Channel;
+  tags: string[];
+}) {
   const lastVideoLabel = formatPublishedLabel(
     undefined,
     c.latestVideoAt ?? undefined,
@@ -327,7 +342,13 @@ function ChannelRow({ channel: c }: { channel: Channel }) {
           subscriberCount: c.subscriberCount,
         }}
         belowMeta={
-          <ChannelTags channelId={c.channelId} isAuthed subscribed tone="card" />
+          <ChannelTags
+            channelId={c.channelId}
+            isAuthed
+            subscribed
+            tone="card"
+            tags={tags}
+          />
         }
         metaRight={
           lastVideoLabel ? <p>Last video {lastVideoLabel}</p> : undefined
