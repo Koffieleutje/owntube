@@ -520,6 +520,12 @@ function detailHasIndexedFlag(detail: VideoDetail): boolean {
  * to `/hls` or `/dash` 502s — they must fall through to the native `hlsUrl`.
  */
 function canSynthesizeManifest(detail: VideoDetail): boolean {
+  // Post-Live-DVR has no byte-range formats, so nothing can be synthesized
+  // locally — but the /dash route falls back to proxying the companion's own
+  // (SegmentTemplate) manifest, which dash.js plays fine. Route through the
+  // /hls path so the player derives that /dash source; the native hlsUrl is
+  // useless here (its segments are un-deciphered and 403).
+  if (detail.isPostLiveDvr && detail.dashUrl) return true;
   // Legacy payloads predate the flag: fall back to the historical signal.
   if (!detailHasIndexedFlag(detail)) {
     return Boolean(detail.dashUrl) || hasAdaptiveVideoOnly(detail);

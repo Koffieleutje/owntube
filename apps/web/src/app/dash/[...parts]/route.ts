@@ -10,6 +10,33 @@ import { getUserProxyOverrides } from "@/server/settings/profile";
 import { createCaller } from "@/server/trpc/caller";
 
 /**
+ * Fetch invidious-companion's own DASH manifest for a video, with `local=true`
+ * so segment URLs point at the companion proxy (CORS-open) rather than
+ * googlevideo directly (which the browser can't fetch). Returns null when the
+ * companion can't build one either — the caller then reports the original
+ * failure. Built from the PUBLIC base because the segment URLs inside must be
+ * reachable by the browser, not just by this server.
+ */
+async function companionDashManifest(videoId: string): Promise<string | null> {
+  const base = (process.env.INVIDIOUS_PUBLIC_BASE_URL ?? "").replace(
+    /\/+$/,
+    "",
+  );
+  if (!base) return null;
+  try {
+    const r = await fetch(
+      `${base}/companion/api/manifest/dash/id/${encodeURIComponent(videoId)}?local=true`,
+      { cache: "no-store", signal: AbortSignal.timeout(10_000) },
+    );
+    if (!r.ok) return null;
+    const body = await r.text();
+    return body.includes("<MPD") ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Requesting a manifest is a play, so the server records it rather than
  * trusting a client to report one. Clients that authenticate (the TV sends a
  * device-token Bearer header) get the watch written here; the position they
@@ -95,6 +122,21 @@ async function handleGET(
       },
     });
   } catch (e) {
+    // Post-Live-DVR (an ended livestream YouTube hasn't converted to VOD yet)
+    // exposes no byte-range-indexed formats, so we can't synthesize an MPD.
+    // invidious-companion can, though — it builds a SegmentTemplate manifest
+    // via YouTube.js with deciphered, po_token'd segment URLs. Proxy that
+    // instead of failing. Its segments are companion URLs carrying
+    // `access-control-allow-origin: *`, so dash.js can fetch them directly.
+    const companion = await companionDashManifest(videoId);
+    if (companion) {
+      return new Response(companion, {
+        headers: {
+          "content-type": MPD_CONTENT_TYPE,
+          "cache-control": "no-store",
+        },
+      });
+    }
     return new Response(`dash generation failed: ${(e as Error).message}`, {
       status: 502,
     });

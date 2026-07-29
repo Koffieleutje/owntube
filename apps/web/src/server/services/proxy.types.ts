@@ -159,6 +159,8 @@ export const videoDetailSchema = z.object({
   /** Unix seconds when known from upstream (Invidious `published`, Piped `uploadDate`, …). */
   publishedAt: z.number().optional(),
   isLive: z.boolean().optional(),
+  /** Ended livestream YouTube hasn't converted to VOD yet: no byte-range formats. */
+  isPostLiveDvr: z.boolean().optional(),
   isUpcoming: z.boolean().optional(),
   hlsUrl: z.string().url().optional(),
   dashUrl: z.string().url().optional(),

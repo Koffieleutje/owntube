@@ -366,6 +366,7 @@ export function mapInvidiousVideo(
     publishedAt: reconciledPublishedAt,
     isLive: isLive || undefined,
     isUpcoming: isUpcoming || undefined,
+    isPostLiveDvr: o.isPostLiveDvr === true || undefined,
     hlsUrl: hlsResolved,
     dashUrl: dashResolved,
     audioSources: audioFromAdaptive,
