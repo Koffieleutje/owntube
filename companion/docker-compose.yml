@@ -17,6 +17,9 @@ services:
       PUBLISH_SECRET: ${PUBLISH_SECRET:?set PUBLISH_SECRET in .env}
       RSS_USER: ${RSS_USER:?set RSS_USER in .env}
       RSS_PASS: ${RSS_PASS:?set RSS_PASS in .env}
+      # Optional /publish IP allow-list (defense-in-depth atop PUBLISH_SECRET).
+      PUBLISH_ALLOW_HOSTS: ${PUBLISH_ALLOW_HOSTS:-}
+      PUBLISH_ALLOW_IPS: ${PUBLISH_ALLOW_IPS:-}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

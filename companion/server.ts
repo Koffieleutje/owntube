@@ -13,14 +13,16 @@
  * creds in a podcast app URL (https://user:pass@host/rss/...) is enough.
  */
 import { timingSafeEqual } from "node:crypto";
+import { promises as dns } from "node:dns";
 import http from "node:http";
-import { FeedStore } from "./store.ts";
+import { isIpAllowed } from "./ip-allow.ts";
 import {
   type FeedSnapshot,
-  type Variant,
   renderRss,
+  type Variant,
   xmlEscape,
 } from "./render.ts";
+import { FeedStore } from "./store.ts";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
@@ -28,6 +30,20 @@ const PUBLISH_SECRET = process.env.PUBLISH_SECRET ?? "";
 const RSS_USER = process.env.RSS_USER ?? "";
 const RSS_PASS = process.env.RSS_PASS ?? "";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+// Optional IP allow-list for /publish — defense-in-depth atop the Bearer secret.
+// Hostnames are re-resolved periodically so a DDNS home IP keeps working; if
+// neither var is set the check is disabled (Bearer only).
+const PUBLISH_ALLOW_HOSTS = (process.env.PUBLISH_ALLOW_HOSTS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const PUBLISH_ALLOW_IPS = (process.env.PUBLISH_ALLOW_IPS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const IP_ALLOWLIST_ON =
+  PUBLISH_ALLOW_HOSTS.length > 0 || PUBLISH_ALLOW_IPS.length > 0;
 
 if (!PUBLISH_SECRET || !RSS_USER || !RSS_PASS) {
   process.stderr.write(
@@ -37,6 +53,54 @@ if (!PUBLISH_SECRET || !RSS_USER || !RSS_PASS) {
 }
 
 const store = new FeedStore(DATA_DIR);
+
+function logLine(msg: string): void {
+  process.stdout.write(`${msg}\n`);
+}
+
+/**
+ * Client IP from the rightmost X-Forwarded-For entry (added by our trusted
+ * Caddy), falling back to the socket. Rightmost is spoof-resistant: an external
+ * client can only *prepend* XFF values; Caddy appends the address it actually
+ * saw the connection from.
+ */
+function clientIp(req: http.IncomingMessage): string {
+  const xff = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(xff) ? xff.join(",") : (xff ?? "");
+  const parts = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length) return parts[parts.length - 1];
+  return req.socket.remoteAddress ?? "";
+}
+
+let allowCache: { at: number; ips: string[] } = { at: 0, ips: [] };
+const ALLOW_RESOLVE_TTL_MS = 60_000;
+
+/**
+ * Static IP/CIDR rules plus freshly-resolved hostname IPs (A+AAAA), cached ~60s
+ * so a DDNS home IP is tracked without hammering DNS. On resolver failure the
+ * last good resolution is reused rather than locking the publisher out.
+ */
+async function currentAllowRules(): Promise<string[]> {
+  if (PUBLISH_ALLOW_HOSTS.length === 0) return PUBLISH_ALLOW_IPS;
+  const now = Date.now();
+  if (now - allowCache.at < ALLOW_RESOLVE_TTL_MS && allowCache.ips.length) {
+    return [...PUBLISH_ALLOW_IPS, ...allowCache.ips];
+  }
+  const ips: string[] = [];
+  for (const host of PUBLISH_ALLOW_HOSTS) {
+    try {
+      const recs = await dns.lookup(host, { all: true });
+      for (const r of recs) ips.push(r.address);
+    } catch {
+      /* skip this host; fall back to cached ips below */
+    }
+  }
+  if (ips.length) allowCache = { at: now, ips };
+  return [...PUBLISH_ALLOW_IPS, ...(ips.length ? ips : allowCache.ips)];
+}
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -111,9 +175,13 @@ function isFeedSnapshot(v: unknown): v is FeedSnapshot {
 
 function selfUrl(req: http.IncomingMessage): string {
   const proto =
-    (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim() ||
-    "https";
-  const host = (req.headers["x-forwarded-host"] as string | undefined) || req.headers.host || "";
+    (req.headers["x-forwarded-proto"] as string | undefined)
+      ?.split(",")[0]
+      ?.trim() || "https";
+  const host =
+    (req.headers["x-forwarded-host"] as string | undefined) ||
+    req.headers.host ||
+    "";
   return `${proto}://${host}${req.url ?? ""}`;
 }
 
@@ -129,6 +197,16 @@ async function handlePublish(
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ): Promise<void> {
+  if (IP_ALLOWLIST_ON) {
+    const ip = clientIp(req);
+    const rules = await currentAllowRules();
+    if (!isIpAllowed(ip, rules)) {
+      logLine(`publish DENIED: ${ip} not in allow-list`);
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("forbidden\n");
+      return;
+    }
+  }
   if (!checkBearer(req)) {
     res.writeHead(401, { "content-type": "text/plain" });
     res.end("unauthorized\n");
@@ -149,7 +227,10 @@ async function handlePublish(
     return;
   }
   const { upserted } = store.replaceAll(feeds as FeedSnapshot[]);
-  const items = (feeds as FeedSnapshot[]).reduce((n, f) => n + f.items.length, 0);
+  const items = (feeds as FeedSnapshot[]).reduce(
+    (n, f) => n + f.items.length,
+    0,
+  );
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ ok: true, feeds: upserted, items }));
 }
@@ -193,9 +274,13 @@ h1{font-size:1.4rem}ul{list-style:none;padding:0}li{padding:.6rem 0;border-botto
 
 function renderOpml(req: http.IncomingMessage): string {
   const proto =
-    (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim() ||
-    "https";
-  const host = (req.headers["x-forwarded-host"] as string | undefined) || req.headers.host || "";
+    (req.headers["x-forwarded-proto"] as string | undefined)
+      ?.split(",")[0]
+      ?.trim() || "https";
+  const host =
+    (req.headers["x-forwarded-host"] as string | undefined) ||
+    req.headers.host ||
+    "";
   const base = `${proto}://${host}`;
   const outlines = store
     .list()
@@ -271,5 +356,12 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  process.stdout.write(`companion listening on :${PORT} (data: ${DATA_DIR})\n`);
+  logLine(`companion listening on :${PORT} (data: ${DATA_DIR})`);
+  if (IP_ALLOWLIST_ON) {
+    logLine(
+      `companion: /publish IP allow-list ON — hosts=[${PUBLISH_ALLOW_HOSTS.join(", ")}] ips=[${PUBLISH_ALLOW_IPS.join(", ")}]`,
+    );
+  } else {
+    logLine("companion: /publish IP allow-list off (Bearer only)");
+  }
 });

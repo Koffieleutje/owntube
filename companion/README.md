@@ -16,7 +16,7 @@ podcast app ──(LAN/VPN)──▶ owntube /media/<id>   ◀── enclosure U
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| POST | `/publish` | Bearer `PUBLISH_SECRET` | Replace the full feed set with the pushed snapshots |
+| POST | `/publish` | Bearer `PUBLISH_SECRET` + IP allow-list | Replace the full feed set with the pushed snapshots |
 | GET | `/rss/<kind>/<slug>.audio.xml` | Basic | Podcast RSS, m4a enclosures |
 | GET | `/rss/<kind>/<slug>.video.xml` | Basic | Podcast RSS, mp4 enclosures |
 | GET | `/` | Basic | HTML index of all feeds |
@@ -37,8 +37,15 @@ https://<RSS_USER>:<RSS_PASS>@owntube.nedworks.org/rss/playlist/<slug>.audio.xml
 | --- | --- | --- | --- |
 | `PUBLISH_SECRET` | yes | — | Must match the home side's `OWNTUBE_PUBLISH_SECRET` |
 | `RSS_USER` / `RSS_PASS` | yes | — | Basic Auth for the feeds |
+| `PUBLISH_ALLOW_HOSTS` | no | — | Comma-separated hostnames allowed to POST `/publish`; re-resolved ~60s (DDNS-safe) |
+| `PUBLISH_ALLOW_IPS` | no | — | Comma-separated extra IPs/CIDRs allowed to POST `/publish` |
 | `PORT` | no | `8080` | |
 | `DATA_DIR` | no | `/data` | SQLite location |
+
+`/publish` accepts a request only when it passes **both** the Bearer secret and
+(if either `PUBLISH_ALLOW_*` is set) the IP allow-list. Client IP is taken from
+the rightmost `X-Forwarded-For` value (Caddy-set). With neither var configured
+the IP check is off.
 
 ## Run
 
