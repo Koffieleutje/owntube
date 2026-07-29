@@ -10,6 +10,38 @@ import { getUserProxyOverrides } from "@/server/settings/profile";
 import { createCaller } from "@/server/trpc/caller";
 
 /**
+ * Give every `SegmentTemplate` an explicit `initialization`, pointing at its own
+ * segment 0.
+ *
+ * YouTube's live/DVR segments are each self-initializing — every one begins
+ * `ftyp` + `moov` before its `emsg`/`moof`/`mdat` — so there is no separate init
+ * segment and the companion's manifest rightly omits the attribute. But the DASH
+ * spec says an absent `Initialization` means the init segment is at the BaseURL,
+ * and with no `<BaseURL>` element that resolves to the manifest's own directory.
+ * dash.js duly requests `/dash/<id>/`, which Next 308-redirects (redirects carry
+ * none of `withMediaCors`'s headers) — so on the separate media origin Safari
+ * blocks it as a disallowed cross-origin redirect and the video spins forever.
+ *
+ * Segment 0 *is* a valid initialization segment, so naming it explicitly gives
+ * dash.js real `ftyp`+`moov` and stops it probing the directory. Segment 0 gets
+ * fetched twice (once as init, once as media); MSE coalesces the duplicate
+ * timestamps, and it's one segment of overhead.
+ */
+function withExplicitInitSegments(mpd: string): string {
+  return mpd.replace(/<SegmentTemplate([^>]*)>/g, (whole, attrs: string) => {
+    if (/\binitialization\s*=/.test(attrs)) return whole;
+    const media = /\bmedia="([^"]*)"/.exec(attrs);
+    if (!media || !media[1].includes("$Number$")) return whole;
+    const init = media[1].replace(/\$Number\$/g, "0");
+    // Preserve a self-closing tag as self-closing.
+    const trimmed = attrs.trimEnd();
+    const selfClosing = trimmed.endsWith("/");
+    const body = selfClosing ? trimmed.slice(0, -1).trimEnd() : attrs;
+    return `<SegmentTemplate${body} initialization="${init}"${selfClosing ? "/" : ""}>`;
+  });
+}
+
+/**
  * Fetch invidious-companion's own DASH manifest for a video, with `local=true`
  * so segment URLs point at the companion proxy (CORS-open) rather than
  * googlevideo directly (which the browser can't fetch). Returns null when the
@@ -30,7 +62,7 @@ async function companionDashManifest(videoId: string): Promise<string | null> {
     );
     if (!r.ok) return null;
     const body = await r.text();
-    return body.includes("<MPD") ? body : null;
+    return body.includes("<MPD") ? withExplicitInitSegments(body) : null;
   } catch {
     return null;
   }
