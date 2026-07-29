@@ -634,6 +634,9 @@ export function VideoPlayer({
               onVideoIntrinsics={onVideoIntrinsics}
               defaultQualityHeightCap={dashQualityHeightCap}
               fullscreenAutoBestQuality={fullscreenAutoBestQuality}
+              dvr={
+                effectivePayload.mode === "hls" && effectivePayload.dvr === true
+              }
             />
           )
         ) : null}

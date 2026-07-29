@@ -281,6 +281,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
               requestHost,
               detail,
             ),
+            dvr: detail.isPostLiveDvr === true,
           }
         : rawPlayback.kind === "progressive"
           ? {

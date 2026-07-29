@@ -39,6 +39,7 @@ export function buildClientWatchPlayback(
             requestHost,
             detail,
           ),
+          dvr: detail.isPostLiveDvr === true,
         }
       : rawPlayback.kind === "progressive"
         ? {

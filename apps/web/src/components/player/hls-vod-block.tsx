@@ -81,6 +81,7 @@ export function HlsVodBlock({
   onVideoIntrinsics,
   defaultQualityHeightCap = 1080,
   fullscreenAutoBestQuality = false,
+  dvr = false,
 }: SponsorBlockChromeProps & {
   src: string;
   poster?: string;
@@ -116,6 +117,8 @@ export function HlsVodBlock({
   defaultQualityHeightCap?: number | null;
   /** Jump to the best DASH quality on entering fullscreen, restore on exit. */
   fullscreenAutoBestQuality?: boolean;
+  /** Post-Live-DVR: DASH is the only working path, including on iOS. */
+  dvr?: boolean;
 }) {
   const shellRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -152,12 +155,18 @@ export function HlsVodBlock({
         return "";
       }
     })();
+    // Post-Live-DVR is the one case iOS must still take DASH: `/hls/` can't be
+    // synthesized (no byte-range formats, so it 502s) and Invidious's native
+    // hlsUrl is un-deciphered and 403s, leaving an infinite spinner. The /dash
+    // route proxies invidious-companion's manifest, which is MP4/AVC + AAC
+    // only — decodable by iPad Safari's MSE (and ManagedMediaSource on iOS
+    // 17.1+, which `useDashPlayback` already configures).
     if (
       dashFailed ||
       shortsMode ||
       !videoId ||
       !srcPathname.startsWith("/hls/") ||
-      isIosLikeBrowser()
+      (isIosLikeBrowser() && !dvr)
     ) {
       setDashDecision({ key: reactKey, src: null });
       return;
@@ -169,7 +178,7 @@ export function HlsVodBlock({
         ? `${getMediaOrigin(window.location.origin)}/dash/${encodeURIComponent(videoId)}/manifest.mpd?video=${family}`
         : null,
     });
-  }, [src, videoId, reactKey, shortsMode, dashFailed]);
+  }, [src, videoId, reactKey, shortsMode, dashFailed, dvr]);
   const decided = dashDecision?.key === reactKey;
   const dashSrc = decided ? dashDecision.src : null;
 

@@ -18,5 +18,16 @@ export type ProxiedVariant =
     };
 
 export type VideoPlayerPayload =
-  | { mode: "hls"; src: string }
+  | {
+      mode: "hls";
+      src: string;
+      /**
+       * Post-Live-DVR (an ended livestream YouTube hasn't converted to VOD).
+       * `src` is our `/hls/<id>` path, but nothing can be synthesized there —
+       * the player must upgrade to `/dash`, which proxies invidious-companion's
+       * manifest. Lets the player keep DASH on iOS for this case alone; see
+       * `hls-vod-block.tsx`.
+       */
+      dvr?: boolean;
+    }
   | { mode: "progressive"; variants: ProxiedVariant[] };

@@ -8,7 +8,7 @@ import { buildWatchPlayback } from "@/lib/pick-playback";
 import type { VideoDetail } from "@/server/services/proxy.types";
 
 export type WatchPlayerPayload =
-  | { mode: "hls"; src: string }
+  | { mode: "hls"; src: string; dvr?: boolean }
   | { mode: "progressive"; variants: ProxiedPlayableVariant[] };
 
 export function buildVideoPlayerPayloadFromDetail(
@@ -40,6 +40,7 @@ export function buildVideoPlayerPayloadFromDetail(
           requestHost,
           detail,
         ),
+        dvr: detail.isPostLiveDvr === true,
       },
       poster: toProxiedOrDirectPoster(
         detail.thumbnailUrl,
