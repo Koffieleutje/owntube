@@ -1,0 +1,16 @@
+{
+  "name": "owntube-companion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Public RSS mirror for a LAN OwnTube — receives feed snapshots and renders podcast RSS",
+  "scripts": {
+    "start": "tsx server.ts",
+    "test": "tsx render.test.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

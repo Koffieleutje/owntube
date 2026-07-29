@@ -69,6 +69,6 @@ export const config = {
   // Skip Next internals, API/proxy routes (incl. high-traffic media segments),
   // and static asset files.
   matcher: [
-    "/((?!_next/|api/|invidious/|hls/|dash/|captions/|yt-hls|channel-avatar|favicon.ico|robots.txt|sitemap.xml).*)",
+    "/((?!_next/|api/|invidious/|hls/|dash/|media/|captions/|yt-hls|channel-avatar|favicon.ico|robots.txt|sitemap.xml).*)",
   ],
 };

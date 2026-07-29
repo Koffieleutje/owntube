@@ -39,6 +39,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "warm:cache": "tsx scripts/warm-cache.ts",
     "warm:feed": "tsx scripts/warm-cache.ts",
+    "publish:feeds": "tsx scripts/publish-feeds.ts",
     "export:icons": "tsx scripts/export-brand-icons.ts",
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
