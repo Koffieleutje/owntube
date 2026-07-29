@@ -500,6 +500,37 @@ function hasAdaptiveVideoOnly(detail: VideoDetail): boolean {
   });
 }
 
+/**
+ * Whether any stream carries the `indexed` flag at all — i.e. this detail was
+ * mapped after the flag was introduced. Legacy cached payloads (short TTL, so
+ * this is a brief window) have it nowhere; for those we keep the old routing.
+ */
+function detailHasIndexedFlag(detail: VideoDetail): boolean {
+  return (
+    detail.videoSources.some((s) => s.indexed !== undefined) ||
+    detail.audioSources.some((s) => s.indexed !== undefined)
+  );
+}
+
+/**
+ * True only when the synthesized DASH/HLS manifests can actually be built —
+ * there's a byte-range-indexed adaptive video stream AND a byte-range-indexed
+ * audio stream (what `generate.ts` requires; "AVC video + AAC audio"). Some
+ * videos expose adaptive streams with no init/index ranges, and routing those
+ * to `/hls` or `/dash` 502s — they must fall through to the native `hlsUrl`.
+ */
+function canSynthesizeManifest(detail: VideoDetail): boolean {
+  // Legacy payloads predate the flag: fall back to the historical signal.
+  if (!detailHasIndexedFlag(detail)) {
+    return Boolean(detail.dashUrl) || hasAdaptiveVideoOnly(detail);
+  }
+  const hasIndexedVideo = detail.videoSources.some(
+    (s) => streamIsVideoOnly(s) && s.indexed === true,
+  );
+  const hasIndexedAudio = detail.audioSources.some((s) => s.indexed === true);
+  return hasIndexedVideo && hasIndexedAudio;
+}
+
 function firstHlsUrlFromDetail(detail: VideoDetail): string | undefined {
   if (detail.hlsUrl) return detail.hlsUrl;
   for (const s of detail.videoSources) {
@@ -550,7 +581,7 @@ export function buildWatchPlayback(
     // IP, which made muxed shorts fail to start (manual tap) or get skipped. The
     // generated HLS also autoplays muted and lets hls.js start low and ramp up on
     // its own. Prefer it for any non-Piped short that exposes adaptive streams.
-    if ((detail.dashUrl || hasAdaptiveVideoOnly(detail)) && !isPipedLike) {
+    if (canSynthesizeManifest(detail) && !isPipedLike) {
       return {
         kind: "hls",
         url: `/hls/${detail.videoId}/master.m3u8`,
@@ -652,8 +683,9 @@ export function buildWatchPlayback(
   // segments resolve to the same-origin, companion-backed `/invidious/videoplayback`
   // proxy, whereas native `hlsUrl` segments are raw googlevideo URLs that 403 when
   // fetched from the server IP. Native `hlsUrl` stays as the fallback for videos
-  // with no adaptive streams.
-  if ((detail.dashUrl || hasAdaptiveVideoOnly(detail)) && !isPipedLike) {
+  // with no adaptive streams — or whose adaptive streams lack the byte-range
+  // indexes the synthesized manifest is built from (those 502).
+  if (canSynthesizeManifest(detail) && !isPipedLike) {
     return {
       kind: "hls",
       url: `/hls/${detail.videoId}/master.m3u8`,

@@ -192,6 +192,7 @@ type InvidiousStream = {
   bitrate?: number;
   fps?: number;
   height?: number;
+  indexed?: boolean;
 };
 
 function mapInvidiousStreamItem(
@@ -217,7 +218,24 @@ function mapInvidiousStreamItem(
   ]);
   const fps = readPositiveNumberField(stream, ["fps", "frameRate"]);
   const height = readStreamHeightPx(stream);
-  return { url, mimeType: type, quality, videoOnly, bitrate, fps, height };
+  // init/index are the byte ranges the synthesized DASH/HLS manifests need; a
+  // stream missing either can't back one (see streamSourceSchema.indexed).
+  const indexed = Boolean(
+    typeof stream.init === "string" &&
+      stream.init &&
+      typeof stream.index === "string" &&
+      stream.index,
+  );
+  return {
+    url,
+    mimeType: type,
+    quality,
+    videoOnly,
+    bitrate,
+    fps,
+    height,
+    indexed,
+  };
 }
 
 /**
@@ -273,6 +291,7 @@ export function mapInvidiousVideo(
     fps?: number;
     language?: string;
     audioTrackDisplayName?: string;
+    indexed?: boolean;
   }[] = [];
   for (const item of adaptiveFormats) {
     if (!item || typeof item !== "object") continue;
@@ -290,6 +309,7 @@ export function mapInvidiousVideo(
           fps: m.fps,
           language: meta.language,
           audioTrackDisplayName: meta.displayName,
+          indexed: m.indexed,
         });
       }
     } else {

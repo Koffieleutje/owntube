@@ -83,6 +83,72 @@ describe("buildWatchPlayback", () => {
     });
   });
 
+  it("falls back to native HLS when adaptive streams lack byte-range indexes", () => {
+    // Some videos (incomplete Invidious extraction) expose adaptive streams
+    // with no init/index ranges, so the synthesized /hls and /dash manifests
+    // 502. Once any stream carries the `indexed` flag we trust it: no indexed
+    // stream → native hlsUrl, not the generated manifest — even though a
+    // dashUrl is advertised.
+    const w = buildWatchPlayback(
+      base({
+        dashUrl: "https://d.example/manifest",
+        hlsUrl: "https://h.example/native.m3u8",
+        videoSources: [
+          {
+            url: "https://g.example/1080v.mp4",
+            quality: "1080p",
+            videoOnly: true,
+            mimeType: "video/mp4",
+            indexed: false,
+          },
+        ],
+        audioSources: [
+          {
+            url: "https://g.example/aud.m4a",
+            quality: "medium",
+            mimeType: "audio/mp4",
+            indexed: false,
+          },
+        ],
+      }),
+    );
+    expect(w).toEqual({
+      kind: "hls",
+      url: "https://h.example/native.m3u8",
+      onlyDashOrUnsupported: false,
+    });
+  });
+
+  it("uses the generated HLS manifest when adaptive streams are byte-range indexed", () => {
+    const w = buildWatchPlayback(
+      base({
+        hlsUrl: "https://h.example/native.m3u8",
+        videoSources: [
+          {
+            url: "https://g.example/1080v.mp4",
+            quality: "1080p",
+            videoOnly: true,
+            mimeType: "video/mp4",
+            indexed: true,
+          },
+        ],
+        audioSources: [
+          {
+            url: "https://g.example/aud.m4a",
+            quality: "medium",
+            mimeType: "audio/mp4",
+            indexed: true,
+          },
+        ],
+      }),
+    );
+    expect(w).toEqual({
+      kind: "hls",
+      url: "/hls/x/master.m3u8",
+      onlyDashOrUnsupported: false,
+    });
+  });
+
   it("infers ≥2 audio languages from xtags and keeps the Piped split picker", () => {
     const w = buildWatchPlayback(
       base({

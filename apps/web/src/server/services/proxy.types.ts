@@ -121,6 +121,14 @@ export const streamSourceSchema = z.object({
    * be used alone in a single &lt;video src&gt; — no muxed audio.
    */
   videoOnly: z.boolean().optional(),
+  /**
+   * True when upstream provided this adaptive stream's init/index byte ranges,
+   * i.e. it can back a synthesized byte-range DASH/HLS manifest. Some videos
+   * (incomplete Invidious extraction) return adaptive streams without them —
+   * `/dash` and `/hls` 502 for those, so playback must fall back to the native
+   * `hlsUrl` instead. Absent on legacy cached payloads (pre-dating this field).
+   */
+  indexed: z.boolean().optional(),
 });
 
 /** A subtitle/caption track advertised by upstream (Invidious `captions[]`). */
