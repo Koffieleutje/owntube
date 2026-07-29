@@ -159,6 +159,14 @@ export function cardPreviewPlaybackFromDetail(
   appOrigin: string,
   requestHost: string,
 ): CardPreviewPlayback | null {
+  // Post-Live-DVR has no previewable source. Its adaptive/progressive URLs are
+  // `yt_live_broadcast` ones that 403 on server-IP replay (same reason as the
+  // `/yt-hls` hop above), and the synthesized `/hls` manifest `buildWatchPlayback`
+  // would hand back 502s for DVR — there are no byte-range formats to build it
+  // from. Only the full `/dash` playback path works, which is too heavy for a
+  // preview; fall back to the poster instead of a wall of 403s.
+  if (detail.isPostLiveDvr) return null;
+
   let ytHopFallback: CardPreviewPlayback | null = null;
 
   const directMuxed = findPreviewMuxedUrl(detail);

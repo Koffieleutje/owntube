@@ -158,17 +158,28 @@ export function VideoPlayer({
   // Autoplay on the full watch page only (never in the mini player or Shorts,
   // which have their own autoplay semantics).
   const watchAutoplay = autoplayOnWatch && !miniMode && !shortsMode;
+  /**
+   * Post-Live-DVR has no frame-extractable stream: its adaptive URLs are
+   * `yt_live_broadcast` ones that 403 on server-IP replay, and the main `src` is
+   * the `/hls/` path that 502s for DVR (playback runs off `/dash` instead). Treat
+   * it like a live stream for scrub preview — a storyboard, when the video has
+   * one, is used ahead of any stream and still works.
+   */
+  const noScrubStream =
+    isLive || (payload.mode === "hls" && payload.dvr === true);
   const scrubFrames = useScrubFramePreview({
     videoId,
     durationSeconds: isLive ? undefined : durationSeconds,
     storyboard: isLive ? undefined : storyboard,
-    scrubPreviewStreamSrc: isLive ? undefined : scrubPreviewStreamSrc,
+    scrubPreviewStreamSrc: noScrubStream ? undefined : scrubPreviewStreamSrc,
   });
   const buildScrubPreview = useCallback(
     (streamSrc: string): ScrubPreviewConfig | null => {
       if (isLive) return null;
       return mergeScrubPreview(
-        scrubPreviewStreamSrc ?? streamSrc,
+        // "" is the supported "no stream" value — scrub-preview.tsx skips the
+        // preview <video> and frame extraction, keeping poster/storyboard.
+        noScrubStream ? "" : (scrubPreviewStreamSrc ?? streamSrc),
         poster,
         scrubFrames.primeFrames,
         scrubFrames.frameAt,
@@ -176,6 +187,7 @@ export function VideoPlayer({
     },
     [
       isLive,
+      noScrubStream,
       scrubPreviewStreamSrc,
       poster,
       scrubFrames.primeFrames,

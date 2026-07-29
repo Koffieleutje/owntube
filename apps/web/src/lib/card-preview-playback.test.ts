@@ -209,4 +209,45 @@ describe("cardPreviewPlaybackFromDetail", () => {
       expect(playback.src).toContain("itag%3D18");
     }
   });
+
+  it("returns null for post-live-DVR, whose live-broadcast URLs 403 on replay", () => {
+    const sources = {
+      videoSources: [
+        {
+          url: "http://192.168.1.11:8092/videoplayback?itag=278&source=yt_live_broadcast",
+          quality: "144p",
+          videoOnly: true,
+          mimeType: 'video/webm; codecs="vp9"',
+          height: 144,
+        },
+        {
+          url: "http://192.168.1.11:8092/videoplayback?itag=18&source=yt_live_broadcast",
+          quality: "360p",
+          videoOnly: false,
+          mimeType: "video/mp4",
+          height: 360,
+        },
+      ],
+      audioSources: [
+        {
+          url: "http://192.168.1.11:8092/videoplayback?itag=140&source=yt_live_broadcast",
+          quality: "medium",
+          mimeType: "audio/mp4",
+        },
+      ],
+    };
+    const args = ["http://192.168.1.14:3000", "192.168.1.14:3000"] as const;
+
+    // Same sources without the flag still yield a preview, so the null is the
+    // DVR guard talking and not an unpreviewable fixture.
+    expect(
+      cardPreviewPlaybackFromDetail(base(sources), ...args),
+    ).not.toBeNull();
+    expect(
+      cardPreviewPlaybackFromDetail(
+        base({ ...sources, isPostLiveDvr: true }),
+        ...args,
+      ),
+    ).toBeNull();
+  });
 });

@@ -328,7 +328,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
     detail?.channelSubscriberCount,
   );
   const scrubPreviewStreamSrc =
-    detail && !isLive
+    detail && !isLive && !detail.isPostLiveDvr
       ? (scrubPreviewStreamFromDetail(detail, mediaOrigin, requestHost) ??
         undefined)
       : undefined;
