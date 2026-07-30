@@ -55,8 +55,10 @@ export interface Session {
 let cachedPoToken: { token: string; at: number } | null = null;
 
 /** BotGuard attestation. Only called when the server actually objects. */
-export async function mintPoToken(binding: string): Promise<string> {
-  if (cachedPoToken && Date.now() - cachedPoToken.at < 10 * 60_000) return cachedPoToken.token;
+export async function mintPoToken(binding: string, force = false): Promise<string> {
+  if (!force && cachedPoToken && Date.now() - cachedPoToken.at < 10 * 60_000) {
+    return cachedPoToken.token;
+  }
   const dom = new JSDOM();
   Object.assign(globalThis, { window: dom.window, document: dom.window.document });
   const cfg: BgConfig = {
@@ -177,11 +179,22 @@ export async function pullTrack(
     clientInfo: session.clientInfo,
   });
 
+  // The server escalates attestation *mid-stream*, not only at session start.
+  // On a 1541s video it serves ~57s, then answers every request with
+  // [PLAYBACK_START_POLICY, STREAM_PROTECTION_STATUS=2, REQUEST_IDENTIFIER,
+  // REQUEST_CANCELLATION_POLICY, NEXT_REQUEST_POLICY] and no media at all.
+  //
+  // A token minted at session open does not satisfy that — it has to be
+  // re-minted. An earlier version of this handler only acted when no token was
+  // held yet, so once one existed it did nothing, which is why the stall looked
+  // unrecoverable.
   stream.on('streamProtectionStatusUpdate', async (status: any) => {
-    // Attest only when told to, then let the caller retry.
-    if ((status?.status ?? 0) >= 2 && !session.poToken) {
-      session.poToken = await mintPoToken(session.videoId);
+    if ((status?.status ?? 0) < 2) return;
+    try {
+      session.poToken = await mintPoToken(session.videoId, true);
       stream.setPoToken(session.poToken);
+    } catch {
+      // Leave the old token in place; the retry may still succeed.
     }
   });
 

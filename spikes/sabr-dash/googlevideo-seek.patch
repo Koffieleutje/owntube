@@ -1,5 +1,5 @@
 diff --git a/src/core/SabrStream.ts b/src/core/SabrStream.ts
-index f1fef22..028c1f7 100644
+index f1fef22..9d2bd57 100644
 --- a/src/core/SabrStream.ts
 +++ b/src/core/SabrStream.ts
 @@ -358,7 +358,10 @@ export class SabrStream extends EventEmitterLike {
@@ -47,7 +47,15 @@ index f1fef22..028c1f7 100644
  
          const { shouldStop } = this.checkForStall({
            playerTimeMs: abrState.playerTimeMs,
-@@ -695,6 +715,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -615,6 +635,7 @@ export class SabrStream extends EventEmitterLike {
+     if (!processedParts.length) {
+       throw new Error('No valid parts received from server.');
+     } else if ((this.streamProtectionStatus?.status || 0) >= 2 && !processedParts.includes(UMPPartId.MEDIA)) {
++      this.logger.warn(TAG, `STALL DIAGNOSTIC: protectionStatus=${this.streamProtectionStatus?.status} parts=[${processedParts.join(',')}]`);
+       throw new Error('No media parts or protocol updates received from server.');
+     }
+ 
+@@ -695,6 +716,10 @@ export class SabrStream extends EventEmitterLike {
        throw new Error('Client info must be set before starting.');
  
      const bufferedRanges = this.cachedBufferedRanges || [];
@@ -55,6 +63,37 @@ index f1fef22..028c1f7 100644
      const { sabrContexts, unsentSabrContexts } = this.prepareSabrContexts();
  
      const { selectedFormatIds, updatedBufferedRanges } = this.prepareFormatSelections(
+@@ -874,6 +899,11 @@ export class SabrStream extends EventEmitterLike {
+         const handler = this.umpPartHandlers.get(part.type);
+         if (handler) {
+           handler(part);
++        } else {
++          // Unhandled UMP parts are silently dropped. Some of them are
++          // instructions (SABR_SEEK, CUEPOINT_LIST), so ignoring them can
++          // deadlock a stream. Log them so that is visible.
++          this.logger.warn(TAG, `UNHANDLED UMP part type=${part.type} size=${part.size ?? part.data?.length ?? '?'}`);
+         }
+       });
+     }
+@@ -920,8 +950,16 @@ export class SabrStream extends EventEmitterLike {
+           break;
+         }
+ 
+-        const retryBackoffMs = Math.min(BACKOFF_MULTIPLIER * Math.pow(2, attempt - 1), MAX_BACKOFF_MS);
+-        this.logger.warn(TAG, `Segment fetch attempt ${attempt}/${maxRetries + 1} failed - retrying in ${retryBackoffMs}ms`, error);
++        // Re-read the server's policy on every attempt, not just once before the
++        // loop. On an ad-carrying VOD the server answers a stalled request with a
++        // *fresh* backoff instruction, and retrying on our own exponential
++        // schedule ignores it — the request budget is then spent while the server
++        // is still telling us to wait. yt-dlp does the same thing in
++        // `_check_vod_ad_wait`.
++        const serverBackoffMs = this.nextRequestPolicy?.backoffTimeMs || 0;
++        const ourBackoffMs = Math.min(BACKOFF_MULTIPLIER * Math.pow(2, attempt - 1), MAX_BACKOFF_MS);
++        const retryBackoffMs = Math.max(serverBackoffMs, ourBackoffMs);
++        this.logger.warn(TAG, `Segment fetch attempt ${attempt}/${maxRetries + 1} failed - retrying in ${retryBackoffMs}ms${serverBackoffMs > ourBackoffMs ? ' (server-directed)' : ''}`, error);
+         await wait(retryBackoffMs);
+       } finally {
+         this.partialSegmentQueue.clear();
 diff --git a/src/types/sabrStreamTypes.ts b/src/types/sabrStreamTypes.ts
 index 796980e..bb61bcd 100644
 --- a/src/types/sabrStreamTypes.ts
