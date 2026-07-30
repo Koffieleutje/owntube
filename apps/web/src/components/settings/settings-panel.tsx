@@ -152,22 +152,12 @@ export function SettingsPanel({
   const [visualTheme, setVisualThemeLocal] = useState<VisualTheme>(
     initial.visualTheme,
   );
-  const [pipedBaseUrls, setPipedBaseUrls] = useState<string[]>(
-    initial.pipedBaseUrls.length > 0
-      ? initial.pipedBaseUrls
-      : initial.pipedBaseUrl
-        ? [initial.pipedBaseUrl]
-        : [],
-  );
   const [invidiousBaseUrls, setInvidiousBaseUrls] = useState<string[]>(
     initial.invidiousBaseUrls.length > 0
       ? initial.invidiousBaseUrls
       : initial.invidiousBaseUrl
         ? [initial.invidiousBaseUrl]
         : [],
-  );
-  const [preferredPipedBaseUrl, setPreferredPipedBaseUrl] = useState(
-    initial.preferredPipedBaseUrl ?? initial.pipedBaseUrls[0] ?? "",
   );
   const [preferredInvidiousBaseUrl, setPreferredInvidiousBaseUrl] = useState(
     initial.preferredInvidiousBaseUrl ?? initial.invidiousBaseUrls[0] ?? "",
@@ -339,17 +329,10 @@ export function SettingsPanel({
   const clearingCaches = clearCachesMutation.isPending;
   const healthCheckInput = useMemo(
     () => ({
-      pipedBaseUrls: nonEmptyUrls(pipedBaseUrls),
       invidiousBaseUrls: nonEmptyUrls(invidiousBaseUrls),
-      preferredPipedBaseUrl: preferredPipedBaseUrl.trim() || undefined,
       preferredInvidiousBaseUrl: preferredInvidiousBaseUrl.trim() || undefined,
     }),
-    [
-      pipedBaseUrls,
-      invidiousBaseUrls,
-      preferredPipedBaseUrl,
-      preferredInvidiousBaseUrl,
-    ],
+    [invidiousBaseUrls, preferredInvidiousBaseUrl],
   );
   const healthQuery = trpc.settings.checkInstances.useQuery(healthCheckInput, {
     enabled: false,
@@ -395,18 +378,11 @@ export function SettingsPanel({
 
   async function onSave() {
     setMessage(null);
-    const nextPipedBaseUrls = nonEmptyUrls(pipedBaseUrls);
     const nextInvidiousBaseUrls = nonEmptyUrls(invidiousBaseUrls);
     await updateMutation.mutateAsync({
       theme,
       visualTheme,
-      pipedBaseUrls: nextPipedBaseUrls,
       invidiousBaseUrls: nextInvidiousBaseUrls,
-      preferredPipedBaseUrl: nextPipedBaseUrls.includes(
-        preferredPipedBaseUrl.trim(),
-      )
-        ? preferredPipedBaseUrl.trim()
-        : nextPipedBaseUrls[0],
       preferredInvidiousBaseUrl: nextInvidiousBaseUrls.includes(
         preferredInvidiousBaseUrl.trim(),
       )
@@ -481,15 +457,11 @@ export function SettingsPanel({
       return;
     }
     setCheckedInstanceSources(data.data.instanceSources);
-    const p =
-      data.data.pipedOk == null
-        ? "Piped: not set"
-        : `Piped: ${data.data.pipedOk ? "healthy" : "down"}`;
-    const i =
+    setHealthMessage(
       data.data.invidiousOk == null
         ? "Invidious: not set"
-        : `Invidious: ${data.data.invidiousOk ? "healthy" : "down"}`;
-    setHealthMessage(`${p} · ${i}`);
+        : `Invidious: ${data.data.invidiousOk ? "healthy" : "down"}`,
+    );
   }
 
   const displayedInstanceSources = checkedInstanceSources ?? instanceSources;
@@ -551,14 +523,6 @@ export function SettingsPanel({
           values shown below.
         </p>
         <div className="space-y-4 max-w-2xl">
-          <UpstreamInstanceListEditor
-            label="Piped instances"
-            source={displayedInstanceSources.piped}
-            urls={pipedBaseUrls}
-            preferredUrl={preferredPipedBaseUrl}
-            onUrlsChange={setPipedBaseUrls}
-            onPreferredChange={setPreferredPipedBaseUrl}
-          />
           <UpstreamInstanceListEditor
             label="Invidious instances"
             source={displayedInstanceSources.invidious}

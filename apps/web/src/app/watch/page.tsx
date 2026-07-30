@@ -33,7 +33,6 @@ import { getMediaOrigin } from "@/lib/media-origin";
 import { buildWatchPlayback } from "@/lib/pick-playback";
 import { scrubPreviewStreamFromDetail } from "@/lib/scrub-preview-stream";
 import { sponsorBlockPrefsFromAppSettings } from "@/lib/sponsorblock-prefs";
-import { shouldPreferInvidiousOverPiped } from "@/lib/upstream-playback-catalog";
 import { parseChaptersFromDescription } from "@/lib/video-chapters";
 import {
   formatPublishedLabel,
@@ -58,10 +57,7 @@ import {
   fetchVideoDetail,
 } from "@/server/services/proxy";
 import type { UnifiedVideo, VideoDetail } from "@/server/services/proxy.types";
-import {
-  upstreamPlaybackSourceSchema,
-  videoDetailInputSchema,
-} from "@/server/services/proxy.types";
+import { videoDetailInputSchema } from "@/server/services/proxy.types";
 import {
   getUserProxyOverrides,
   getUserSettings,
@@ -74,7 +70,6 @@ type WatchPageProps = {
   searchParams: Promise<{
     v?: string | string[];
     t?: string | string[];
-    upstream?: string | string[];
   }>;
 };
 
@@ -118,23 +113,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   const startAtSeconds = /^\d+$/.test(rawT)
     ? Number.parseInt(rawT, 10)
     : undefined;
-  const rawUpstream =
-    typeof sp.upstream === "string"
-      ? sp.upstream.trim()
-      : Array.isArray(sp.upstream)
-        ? sp.upstream[0]?.trim()
-        : "";
-  const preferUpstreamParsed =
-    rawUpstream.length > 0
-      ? upstreamPlaybackSourceSchema.safeParse(rawUpstream)
-      : null;
-  const preferUpstream = preferUpstreamParsed?.success
-    ? preferUpstreamParsed.data
-    : undefined;
-  const input = videoDetailInputSchema.parse({
-    videoId,
-    ...(preferUpstream ? { preferUpstream } : {}),
-  });
+  const input = videoDetailInputSchema.parse({ videoId });
   const db = getDb();
   const session = await auth();
   const userId = session?.user?.id ? Number.parseInt(session.user.id, 10) : NaN;
@@ -165,7 +144,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   try {
     detail = await fetchVideoDetail(db, input, overrides, {
       bypassDetailCache: true,
-      preferUpstream,
     });
   } catch (error) {
     if (error instanceof UpstreamLiveUpcomingError) {
@@ -262,10 +240,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
     sidebarFromFeedFallback = sidebarVideos.length > 0;
   }
   const rawPlayback = detail ? buildWatchPlayback(detail) : null;
-  const pipedQualityLimited =
-    detail !== null &&
-    detail.sourceUsed === "piped" &&
-    shouldPreferInvidiousOverPiped(detail);
   const onlyDashOrUnsupported =
     rawPlayback !== null &&
     rawPlayback.kind === "none" &&
@@ -376,8 +350,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
     <>
       {sidebarVideos.length === 0 ? (
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          No related videos are available right now. Check your Piped instance
-          or try again later.
+          No related videos are available right now. Try again later.
         </p>
       ) : null}
       <ul className="space-y-3">
@@ -417,19 +390,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
         <WatchPageGrid
           primary={
             <>
-              {pipedQualityLimited ? (
-                <p className="mb-3 rounded-[var(--radius-card)] border border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
-                  This video is only available in 360p from your Piped instance
-                  (no HD streams in the API response). Enable{" "}
-                  <code className="ot-mono-data text-xs">
-                    INVIDIOUS_BASE_URL
-                  </code>{" "}
-                  as a fallback in Settings or fix your Piped extractor so{" "}
-                  <code className="ot-mono-data text-xs">audioStreams</code> and
-                  HD <code className="ot-mono-data text-xs">videoStreams</code>{" "}
-                  are returned.
-                </p>
-              ) : null}
               {isUpcoming ? (
                 <WatchUpcomingLive
                   title={pageTitle}
@@ -459,11 +419,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
                   chapters={chapters}
                   startAtSeconds={effectiveStartAtSeconds}
                   isLive={isLive}
-                  playbackSourceUsed={
-                    detail.sourceUsed === "cache"
-                      ? undefined
-                      : detail.sourceUsed
-                  }
                   defaultPlaybackQuality={
                     userSettings?.defaultPlaybackQuality ?? "1080p"
                   }

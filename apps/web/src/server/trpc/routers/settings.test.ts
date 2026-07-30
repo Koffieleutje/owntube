@@ -70,20 +70,20 @@ describe("settingsRouter", () => {
 
     const caller = appRouter.createCaller({ db, userId: user.id });
     const updated = await caller.settings.update({
-      pipedBaseUrls: [
+      invidiousBaseUrls: [
         "https://one.example/",
         "https://one.example",
         "https://two.example",
       ],
-      preferredPipedBaseUrl: "https://two.example",
+      preferredInvidiousBaseUrl: "https://two.example",
     });
 
-    expect(updated.pipedBaseUrls).toEqual([
+    expect(updated.invidiousBaseUrls).toEqual([
       "https://one.example",
       "https://two.example",
     ]);
-    expect(updated.preferredPipedBaseUrl).toBe("https://two.example");
-    expect(updated.pipedBaseUrl).toBe("https://one.example");
+    expect(updated.preferredInvidiousBaseUrl).toBe("https://two.example");
+    expect(updated.invidiousBaseUrl).toBe("https://one.example");
 
     sqlite.close();
   });

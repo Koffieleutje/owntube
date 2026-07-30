@@ -142,7 +142,6 @@ export function TasteOnboardingClient() {
 
   const [step, setStep] = useState<Step>("setup");
   const [trendingRegion, setTrendingRegion] = useState("US");
-  const [pipedBaseUrl, setPipedBaseUrl] = useState("");
   const [invidiousBaseUrl, setInvidiousBaseUrl] = useState("");
   const [keywords, setKeywords] = useState<string[]>([]);
   const [draftKeyword, setDraftKeyword] = useState("");
@@ -201,7 +200,6 @@ export function TasteOnboardingClient() {
     if (!settingsQuery.data || setupInitialized.current) return;
     setupInitialized.current = true;
     setTrendingRegion(settingsQuery.data.trendingRegion ?? "US");
-    setPipedBaseUrl(settingsQuery.data.pipedBaseUrl ?? "");
     setInvidiousBaseUrl(settingsQuery.data.invidiousBaseUrl ?? "");
   }, [settingsQuery.data]);
 
@@ -266,7 +264,6 @@ export function TasteOnboardingClient() {
     try {
       await updateSettingsMutation.mutateAsync({
         trendingRegion,
-        pipedBaseUrl: pipedBaseUrl.trim() || undefined,
         invidiousBaseUrl: invidiousBaseUrl.trim() || undefined,
       });
       await Promise.all([
@@ -456,20 +453,6 @@ export function TasteOnboardingClient() {
           </div>
 
           <div className="space-y-3">
-            <div className="space-y-1">
-              <label
-                htmlFor="onboarding-piped"
-                className="text-xs font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]"
-              >
-                Piped base URL (optional)
-              </label>
-              <Input
-                id="onboarding-piped"
-                value={pipedBaseUrl}
-                onChange={(e) => setPipedBaseUrl(e.target.value)}
-                placeholder="https://pipedapi.kavin.rocks"
-              />
-            </div>
             <div className="space-y-1">
               <label
                 htmlFor="onboarding-invidious"

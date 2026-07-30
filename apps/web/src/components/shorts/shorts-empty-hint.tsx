@@ -47,21 +47,10 @@ export function ShortsEmptyHint({ upstream, signedIn }: ShortsEmptyHintProps) {
     );
   }
 
-  const configured = [
-    upstream.pipedConfigured ? "Piped" : null,
-    upstream.invidiousConfigured ? "Invidious" : null,
-  ]
-    .filter(Boolean)
-    .join(" and ");
-
   return (
     <div className="space-y-2 text-xs text-white/60">
       <p>
-        {configured}{" "}
-        {upstream.pipedConfigured && upstream.invidiousConfigured
-          ? "are"
-          : "is"}{" "}
-        configured, but no shorts were returned for your region.
+        Invidious is configured, but no shorts were returned for your region.
       </p>
       {signedIn ? (
         <p>

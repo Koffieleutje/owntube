@@ -21,12 +21,6 @@ import {
   mapInvidiousChannelItem,
   mapInvidiousItem,
 } from "@/server/services/proxy/mappers/invidious";
-import {
-  mapPipedChannelItem,
-  mapPipedItem,
-  pipedNextPage,
-  pipedRootItems,
-} from "@/server/services/proxy/mappers/piped";
 import { liveUpstreamSource } from "@/server/services/proxy/normalize";
 import {
   cachedSearchPayloadSchema,
@@ -37,23 +31,6 @@ import {
   type UnifiedVideo,
 } from "@/server/services/proxy.types";
 import { acquireUpstreamSlot } from "@/server/services/rate-limiter";
-
-export function buildPipedSearchUrl(
-  base: string,
-  input: SearchVideosInput,
-  filter: "all" | "channels" = "all",
-): string {
-  const u = new URL("/search", `${base}/`);
-  u.searchParams.set("q", input.q);
-  u.searchParams.set("filter", filter);
-  if (input.region) {
-    u.searchParams.set("region", input.region.toUpperCase());
-  }
-  if (input.continuation) {
-    u.searchParams.set("nextpage", input.continuation);
-  }
-  return u.toString();
-}
 
 export function buildInvidiousSearchUrl(
   base: string,
@@ -114,35 +91,6 @@ function readStaleSearchCache(
 }
 
 const SEARCH_CHANNEL_LIMIT = 12;
-
-function parsePipedSearch(
-  data: unknown,
-  limit: number,
-  pipedBase: string,
-): {
-  videos: UnifiedVideo[];
-  channels: UnifiedChannel[];
-  continuation: string | null;
-} {
-  const items = pipedRootItems(data);
-  const videos: UnifiedVideo[] = [];
-  const channels: UnifiedChannel[] = [];
-  const seenChannelIds = new Set<string>();
-  for (const item of items) {
-    if (videos.length < limit) {
-      const v = mapPipedItem(item, pipedBase);
-      if (v) videos.push(v);
-    }
-    if (channels.length < SEARCH_CHANNEL_LIMIT) {
-      const c = mapPipedChannelItem(item, pipedBase);
-      if (c && !seenChannelIds.has(c.channelId)) {
-        seenChannelIds.add(c.channelId);
-        channels.push(c);
-      }
-    }
-  }
-  return { videos, channels, continuation: pipedNextPage(data) };
-}
 
 function parseInvidiousSearch(
   data: unknown,
@@ -213,64 +161,9 @@ async function searchVideosLive(
   const parsedInput = input;
   const limit = parsedInput.limit ?? 20;
 
-  const { pipedBases, invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
 
   const errors: string[] = [];
-
-  const tryPiped = async (): Promise<SearchVideosResult | null> => {
-    for (const pipedBase of pipedBases) {
-      try {
-        acquireUpstreamSlot();
-        const url = buildPipedSearchUrl(pipedBase, parsedInput);
-        logger.info("proxy.piped.request", {
-          url: url.replace(parsedInput.q, "[q]"),
-        });
-        const json = await fetchJson(url, {
-          source: "piped",
-          baseUrl: pipedBase,
-        });
-        let { videos, channels, continuation } = parsePipedSearch(
-          json,
-          limit,
-          pipedBase,
-        );
-        if (channels.length === 0 && !parsedInput.continuation) {
-          try {
-            acquireUpstreamSlot();
-            const channelUrl = buildPipedSearchUrl(
-              pipedBase,
-              parsedInput,
-              "channels",
-            );
-            const channelJson = await fetchJson(channelUrl, {
-              source: "piped",
-              baseUrl: pipedBase,
-            });
-            const channelOnly = parsePipedSearch(channelJson, limit, pipedBase);
-            if (channelOnly.channels.length > 0) {
-              channels = channelOnly.channels;
-            }
-          } catch {
-            // optional channel-only pass
-          }
-        }
-        const result: SearchVideosResult = {
-          videos,
-          channels,
-          continuation,
-          sourceUsed: "piped",
-        };
-        const safe = searchVideosResultSchema.parse(result);
-        return safe;
-      } catch (e) {
-        recordUpstreamFailure(e, "piped", errors, pipedBase);
-        logger.warn("proxy.piped.failed", {
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
-    return null;
-  };
 
   const tryInvidious = async (): Promise<SearchVideosResult | null> => {
     for (const invidiousBase of invidiousBases) {
@@ -345,18 +238,7 @@ async function searchVideosLive(
     return null;
   };
 
-  // Invidious is the primary upstream everywhere (it also exclusively powers
-  // playback manifests/captions); Piped is fallback only.
-  let resolved = await tryInvidious();
-  if (
-    !resolved ||
-    (resolved.videos.length === 0 && (resolved.channels?.length ?? 0) === 0)
-  ) {
-    const fromPiped = await tryPiped();
-    if (fromPiped) {
-      resolved = fromPiped;
-    }
-  }
+  const resolved = await tryInvidious();
 
   if (
     !resolved ||

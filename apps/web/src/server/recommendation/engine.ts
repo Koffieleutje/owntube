@@ -85,12 +85,6 @@ function recommendationPoolCacheKey(
   personalizedOnly: boolean,
 ): string {
   const region = opts.region ?? "US";
-  const piped = (
-    opts.overrides?.pipedBaseUrls ?? [opts.overrides?.pipedBaseUrl ?? ""]
-  )
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
   const invidious = (
     opts.overrides?.invidiousBaseUrls ?? [
       opts.overrides?.invidiousBaseUrl ?? "",
@@ -99,7 +93,7 @@ function recommendationPoolCacheKey(
     .map((url) => url.trim())
     .filter(Boolean)
     .join(",");
-  return `${userId}|${region}|${opts.pageSize}|${piped}|${invidious}|${excludeSubscribed ? "nosubs" : "subs"}|${personalizedOnly ? "ponly" : "blend"}`;
+  return `${userId}|${region}|${opts.pageSize}|${invidious}|${excludeSubscribed ? "nosubs" : "subs"}|${personalizedOnly ? "ponly" : "blend"}`;
 }
 
 function diversifiedRowToVideo(row: ScoredVideo): UnifiedVideo {

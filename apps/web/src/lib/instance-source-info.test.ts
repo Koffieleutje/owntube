@@ -8,52 +8,48 @@ describe("getInstanceSourceInfo", () => {
     process.env = env;
   });
 
-  it("reports env Piped URL when profile override is empty", () => {
-    process.env = {
-      ...env,
-      PIPED_BASE_URL: "https://piped.example",
-      INVIDIOUS_BASE_URL: "",
-    };
+  it("reports the env Invidious URL when there is no profile override", () => {
+    process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.example" };
     const info = getInstanceSourceInfo({});
-    expect(info.piped.envUrl).toBe("https://piped.example");
-    expect(info.piped.effectiveUrl).toBe("https://piped.example");
-    expect(info.piped.urls).toEqual(["https://piped.example"]);
-    expect(info.invidious.envRaw).toBeNull();
+    expect(info.invidious.envUrl).toBe("https://inv.example");
+    expect(info.invidious.effectiveUrl).toBe("https://inv.example");
+    expect(info.invidious.urls).toEqual(["https://inv.example"]);
+    expect(info.invidious.profileOverride).toBeNull();
+  });
+
+  it("reports a disabled env value instead of treating it as a URL", () => {
+    process.env = { ...env, INVIDIOUS_BASE_URL: "disabled" };
+    const info = getInstanceSourceInfo({});
+    expect(info.invidious.envDisabled).toBe(true);
+    expect(info.invidious.envUrl).toBeNull();
     expect(info.invidious.effectiveUrl).toBeNull();
+    expect(info.invidious.urls).toEqual([]);
   });
 
   it("prefers profile override over env", () => {
-    process.env = {
-      ...env,
-      PIPED_BASE_URL: "https://piped.env",
-      INVIDIOUS_BASE_URL: "",
-    };
+    process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.env" };
     const info = getInstanceSourceInfo({
-      pipedBaseUrl: "https://piped.profile",
+      invidiousBaseUrl: "https://inv.profile",
     });
-    expect(info.piped.envUrl).toBe("https://piped.env");
-    expect(info.piped.profileOverride).toBe("https://piped.profile");
-    expect(info.piped.effectiveUrl).toBe("https://piped.profile");
-    expect(info.piped.urls).toEqual(["https://piped.profile"]);
+    expect(info.invidious.envUrl).toBe("https://inv.env");
+    expect(info.invidious.profileOverride).toBe("https://inv.profile");
+    expect(info.invidious.effectiveUrl).toBe("https://inv.profile");
+    expect(info.invidious.urls).toEqual(["https://inv.profile"]);
   });
 
-  it("reports multiple profile overrides and preferred URL", () => {
-    process.env = {
-      ...env,
-      PIPED_BASE_URL: "https://piped.env",
-      INVIDIOUS_BASE_URL: "",
-    };
+  it("reports multiple profile overrides and orders the preferred URL first", () => {
+    process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.env" };
     const info = getInstanceSourceInfo({
-      pipedBaseUrls: ["https://one.profile", "https://two.profile"],
-      preferredPipedBaseUrl: "https://two.profile",
+      invidiousBaseUrls: ["https://one.profile", "https://two.profile"],
+      preferredInvidiousBaseUrl: "https://two.profile",
     });
-    expect(info.piped.profileOverride).toBe(
+    expect(info.invidious.profileOverride).toBe(
       "https://one.profile, https://two.profile",
     );
-    expect(info.piped.urls).toEqual([
+    expect(info.invidious.urls).toEqual([
       "https://two.profile",
       "https://one.profile",
     ]);
-    expect(info.piped.preferredUrl).toBe("https://two.profile");
+    expect(info.invidious.preferredUrl).toBe("https://two.profile");
   });
 });

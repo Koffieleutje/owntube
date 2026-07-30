@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { videoCache } from "@/server/db/schema";
-import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
 import {
   fetchChannelPage,
@@ -10,7 +9,6 @@ import {
   fetchVideoDetail,
   searchVideos,
 } from "@/server/services/proxy";
-import * as rateLimiter from "@/server/services/rate-limiter";
 import { resetRateLimiterForTests } from "@/server/services/rate-limiter";
 import { createTestDb } from "@/test/db";
 
@@ -25,220 +23,12 @@ describe("searchVideos", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.PIPED_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
     delete process.env.PORT;
   });
 
-  it("parses Piped channel items from search (url + title)", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              type: "channel",
-              url: "/channel/UCuAXFkgsw1L7xaCfnd5JJOw",
-              title: "Rick Astley",
-              thumbnail: "/avatars/rick.jpg",
-              subscriberCount: 4_200_000,
-            },
-            {
-              type: "stream",
-              url: "/watch?v=dQw4w9WgXcQ",
-              title: "Example",
-              uploaderUrl: "/channel/UCother",
-            },
-          ],
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "rick", limit: 10 });
-    expect(r.channels).toHaveLength(1);
-    expect(r.channels?.[0]?.channelId).toBe("UCuAXFkgsw1L7xaCfnd5JJOw");
-    expect(r.channels?.[0]?.name).toBe("Rick Astley");
-    expect(r.channels?.[0]?.avatarUrl).toBe(
-      "https://piped.test/avatars/rick.jpg",
-    );
-    expect(r.channels?.[0]?.subscriberCount).toBe(4_200_000);
-    sqlite.close();
-  });
-
-  it("collects channels after video limit in Piped search", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    const videoItems = Array.from({ length: 20 }, (_, i) => ({
-      type: "stream",
-      url: `/watch?v=${String(i).padStart(11, "0")}`,
-      title: `Video ${i}`,
-      uploaderUrl: "/channel/UCvideos",
-    }));
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            ...videoItems,
-            {
-              type: "channel",
-              url: "/channel/UCchannelAfterVideos",
-              title: "Late Channel",
-            },
-          ],
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "mix", limit: 20 });
-    expect(r.videos).toHaveLength(20);
-    expect(
-      r.channels?.some((c) => c.channelId === "UCchannelAfterVideos"),
-    ).toBe(true);
-    sqlite.close();
-  });
-
-  it("returns unified videos from Piped-shaped JSON", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              type: "stream",
-              url: "/watch?v=dQw4w9WgXcQ",
-              title: "Example",
-              thumbnail: "https://example.com/t.jpg",
-              duration: 212,
-              views: 1000,
-              uploaderName: "Channel",
-              uploaderUrl: "/channel/UCuAXFkgsw1L7xaCfnd5JJOw",
-              uploaderAvatar: "/avatars/u.jpg",
-            },
-          ],
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "music", limit: 10 });
-    expect(r.sourceUsed).toBe("piped");
-    expect(r.videos).toHaveLength(1);
-    expect(r.videos[0]?.videoId).toBe("dQw4w9WgXcQ");
-    expect(r.videos[0]?.channelId).toBe("UCuAXFkgsw1L7xaCfnd5JJOw");
-    expect(r.videos[0]?.channelAvatarUrl).toBe(
-      "https://piped.test/avatars/u.jpg",
-    );
-    sqlite.close();
-  });
-
-  it("drops Piped streams whose title indicates members-only", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              type: "stream",
-              url: "/watch?v=MEMBERSTITLE",
-              title: "Bonus clip (Members only)",
-              uploaderUrl: "/channel/UCx",
-            },
-            {
-              type: "stream",
-              url: "/watch?v=dQw4w9WgXcQ",
-              title: "Public upload",
-              uploaderUrl: "/channel/UCx",
-            },
-          ],
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "q", limit: 10 });
-    expect(r.videos).toHaveLength(1);
-    expect(r.videos[0]?.videoId).toBe("dQw4w9WgXcQ");
-    sqlite.close();
-  });
-
-  it("drops Piped streams marked premium or paid from unified lists", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              type: "stream",
-              url: "/watch?v=ONLYMEMBERS",
-              title: "Members only",
-              premium: true,
-              uploaderUrl: "/channel/UCx",
-            },
-            {
-              type: "stream",
-              url: "/watch?v=dQw4w9WgXcQ",
-              title: "Public",
-              uploaderUrl: "/channel/UCx",
-            },
-          ],
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "q", limit: 10 });
-    expect(r.videos).toHaveLength(1);
-    expect(r.videos[0]?.videoId).toBe("dQw4w9WgXcQ");
-    sqlite.close();
-  });
-
-  it("parses Piped view counts sent as strings or alternate keys", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              type: "stream",
-              url: "/watch?v=dQw4w9WgXcQ",
-              title: "String views",
-              viewCount: "2500000",
-              uploaderUrl: "/channel/UCx",
-            },
-            {
-              type: "stream",
-              url: "/watch?v=abcdefghijk",
-              title: "K suffix",
-              views: "1.2M",
-              uploaderUrl: "/channel/UCy",
-            },
-          ],
-        }),
-      ),
-    );
-
-    const r = await searchVideos(db, { q: "views", limit: 10 });
-    expect(r.videos[0]?.viewCount).toBe(2_500_000);
-    expect(r.videos[1]?.viewCount).toBe(1_200_000);
-    sqlite.close();
-  });
-
   it("parses Invidious channel items from search", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockResolvedValueOnce(
@@ -265,44 +55,8 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("falls back to Piped when Invidious fails", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.mocked(fetch)
-      .mockRejectedValueOnce(new Error("network"))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            items: [
-              {
-                type: "stream",
-                url: "/watch?v=abc12345678",
-                title: "From Piped",
-                uploaderName: "Creator",
-                uploaderUrl: "/channel/UCxyz",
-                uploaderAvatar: "https://example.com/ch.jpg",
-                thumbnail: "https://example.com/thumb.jpg",
-                duration: 60,
-                views: 500,
-                uploadedDate: "1 day ago",
-              },
-            ],
-            nextpage: "",
-          }),
-        ),
-      );
-
-    const r = await searchVideos(db, { q: "test", limit: 10 });
-    expect(r.sourceUsed).toBe("piped");
-    expect(r.videos[0]?.videoId).toBe("abc12345678");
-    sqlite.close();
-  });
-
   it("drops Invidious videos marked premium or paid from unified lists", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockResolvedValueOnce(
@@ -339,7 +93,6 @@ describe("searchVideos", () => {
 
   it("serves stale cache instantly while revalidating in the background", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockResolvedValueOnce(
@@ -370,57 +123,8 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("returns video detail from Piped stream endpoint", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          videoId: "dQw4w9WgXcQ",
-          title: "Stream title",
-          uploader: "Streamer",
-          uploaderId: "UC1",
-          hls: "https://media.example.com/master.m3u8",
-          audioStreams: [{ url: "https://media.example.com/audio.m4a" }],
-          videoStreams: [{ url: "https://media.example.com/video.mp4" }],
-        }),
-      ),
-    );
-    const detail = await fetchVideoDetail(db, { videoId: "dQw4w9WgXcQ" });
-    expect(detail.sourceUsed).toBe("piped");
-    expect(detail.hlsUrl).toContain(".m3u8");
-    sqlite.close();
-  });
-
-  it("maps Piped livestream with isLive and no zero duration", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    delete process.env.INVIDIOUS_BASE_URL;
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          videoId: "jfKfPfyJRdk",
-          title: "Lofi Girl",
-          livestream: true,
-          duration: 0,
-          hls: "https://media.example.com/live.m3u8",
-          audioStreams: [],
-          videoStreams: [
-            { url: "https://media.example.com/video.mp4", quality: "360p" },
-          ],
-        }),
-      ),
-    );
-    const detail = await fetchVideoDetail(db, { videoId: "jfKfPfyJRdk" });
-    expect(detail.isLive).toBe(true);
-    expect(detail.durationSeconds).toBeUndefined();
-    expect(detail.hlsUrl).toContain(".m3u8");
-    sqlite.close();
-  });
-
   it("maps Invidious liveNow on video detail", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://127.0.0.1:3001";
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
@@ -443,7 +147,6 @@ describe("searchVideos", () => {
 
   it("throws UpstreamLiveUpcomingError for scheduled Invidious premiere", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://127.0.0.1:3001";
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
@@ -464,7 +167,6 @@ describe("searchVideos", () => {
 
   it("maps liveNow on Invidious search items", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://127.0.0.1:3001";
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
@@ -495,47 +197,8 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("maps Piped stream when videoId is only in the request path", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    delete process.env.INVIDIOUS_BASE_URL;
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          title: "No id in payload",
-          uploader: "Artist",
-          uploaderUrl: "/channel/UCchan",
-          proxyUrl: "https://piped.test",
-          thumbnailUrl: "https://piped.test/vi/abcdefghijk/hqdefault.jpg",
-          audioStreams: [
-            {
-              url: "https://piped.test/videoplayback?itag=140",
-              mimeType: "audio/mp4",
-            },
-          ],
-          videoStreams: [
-            {
-              url: "https://piped.test/videoplayback?itag=137",
-              mimeType: "video/mp4",
-              codec: "avc1.640028",
-              videoOnly: true,
-            },
-          ],
-        }),
-      ),
-    );
-    const detail = await fetchVideoDetail(db, { videoId: "abcdefghijk" });
-    expect(detail.sourceUsed).toBe("piped");
-    expect(detail.videoId).toBe("abcdefghijk");
-    expect(detail.channelId).toBe("UCchan");
-    expect(detail.videoSources.length).toBeGreaterThan(0);
-    expect(detail.videoSources[0]?.mimeType).toContain("codecs=");
-    sqlite.close();
-  });
-
   it("fetchVideoDetail bypassDetailCache skips a fresh SQLite row", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://localhost:3001";
 
     let invCalls = 0;
@@ -590,51 +253,12 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("loads Piped related from /streams/:id relatedStreams", async () => {
+  it("returns related videos from the Invidious /related endpoint", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "disabled";
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("/streams/dQw4w9WgXcQ") && !u.includes("/related")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              videoId: "dQw4w9WgXcQ",
-              title: "Main",
-              relatedStreams: [
-                {
-                  url: "/watch?v=abc12345678",
-                  title: "Related clip",
-                  duration: 120,
-                  uploaderUrl: "/channel/UCx",
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const related = await fetchRelatedVideos(db, { videoId: "dQw4w9WgXcQ" }, 5);
-    expect(related.sourceUsed).toBe("piped");
-    expect(related.videos).toHaveLength(1);
-    expect(related.videos[0]?.videoId).toBe("abc12345678");
-    sqlite.close();
-  });
-
-  it("returns related videos from Invidious fallback", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockImplementation((input) => {
       const u = String(input);
-      if (u.includes("piped.test")) {
-        return Promise.reject(new Error("piped down"));
-      }
       if (u.includes("inv.test") && u.includes("/related")) {
         return Promise.resolve(
           new Response(
@@ -670,71 +294,8 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("fills related from uploader channel when instance returns no related list", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("/streams/dQw4w9WgXcQ") && !u.includes("/related")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              videoId: "dQw4w9WgXcQ",
-              title: "Main",
-              uploaderId: "UCchan",
-              uploader: "Artist",
-              relatedStreams: [],
-            }),
-          ),
-        );
-      }
-      if (u.includes("/streams/") && u.includes("/related")) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ relatedStreams: [] })),
-        );
-      }
-      if (u.includes("/api/v1/videos/") && u.includes("/related")) {
-        return Promise.resolve(new Response("[]"));
-      }
-      if (u.includes("/channel/UCchan")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              name: "Artist",
-              id: "UCchan",
-              relatedStreams: [
-                {
-                  type: "stream",
-                  url: "/watch?v=dQw4w9WgXcQ",
-                  title: "Main",
-                  uploaderUrl: "/channel/UCchan",
-                },
-                {
-                  type: "stream",
-                  url: "/watch?v=abcdefghijk",
-                  title: "Other upload",
-                  uploaderUrl: "/channel/UCchan",
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const r = await fetchRelatedVideos(db, { videoId: "dQw4w9WgXcQ" }, 5);
-    expect(r.videos).toHaveLength(1);
-    expect(r.videos[0]?.videoId).toBe("abcdefghijk");
-    expect(r.warning).toContain("same channel");
-    sqlite.close();
-  });
-
   it("treats Invidious 200 with empty body on /related as an empty list", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockImplementation((input) => {
@@ -753,7 +314,6 @@ describe("searchVideos", () => {
 
   it("resolves Invidious relative stream URLs and uses 127.0.0.1 instead of localhost", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://localhost:3001";
 
     vi.mocked(fetch).mockImplementation((input) => {
@@ -791,7 +351,6 @@ describe("searchVideos", () => {
 
   it("repairs malformed Invidious absolute URLs missing hostname", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.INVIDIOUS_BASE_URL = "http://192.168.1.11:3210";
 
     vi.mocked(fetch).mockImplementation((input) => {
@@ -834,7 +393,6 @@ describe("searchVideos", () => {
 
   it("rejects search when Invidious shares the same loopback port as Next", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "disabled";
     process.env.PORT = "3001";
     process.env.INVIDIOUS_BASE_URL = "http://127.0.0.1:3001";
 
@@ -860,113 +418,11 @@ describe("fetchChannelPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    delete process.env.PIPED_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
-  });
-
-  it("falls back to Invidious when Piped channel has no relatedStreams", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/channel/UCchan")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "UCchan",
-              name: "Artist",
-              relatedStreams: [],
-            }),
-          ),
-        );
-      }
-      if (u.includes("inv.test/api/v1/channels/UCchan")) {
-        if (u.includes("/videos")) {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                videos: [
-                  {
-                    type: "video",
-                    videoId: "abcdefghijk",
-                    title: "From Invidious uploads",
-                    authorId: "UCchan",
-                    author: "Artist",
-                  },
-                ],
-              }),
-            ),
-          );
-        }
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              authorId: "UCchan",
-              author: "Artist",
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const page = await fetchChannelPage(db, { channelId: "UCchan" });
-    expect(page.sourceUsed).toBe("invidious");
-    expect(page.videos).toHaveLength(1);
-    expect(page.videos[0]?.videoId).toBe("abcdefghijk");
-    sqlite.close();
-  });
-
-  it("loads Piped channel uploads via search when relatedStreams is empty", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    delete process.env.INVIDIOUS_BASE_URL;
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/channel/UCchan")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "UCchan",
-              name: "Artist Channel",
-              relatedStreams: [],
-            }),
-          ),
-        );
-      }
-      if (u.includes("piped.test/search?")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              items: [
-                {
-                  type: "stream",
-                  url: "/watch?v=abcdefghijk",
-                  title: "From Piped search",
-                  uploaderUrl: "/channel/UCchan",
-                  uploaderName: "Artist Channel",
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const page = await fetchChannelPage(db, { channelId: "UCchan" });
-    expect(page.sourceUsed).toBe("piped");
-    expect(page.videos).toHaveLength(1);
-    expect(page.videos[0]?.title).toBe("From Piped search");
-    sqlite.close();
   });
 
   it("loads Invidious channel uploads via RSS when /videos returns parse errors", async () => {
     const { db, sqlite } = createTestDb();
-    delete process.env.PIPED_BASE_URL;
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockImplementation((input) => {
@@ -1021,112 +477,8 @@ describe("fetchChannelPage", () => {
     sqlite.close();
   });
 
-  it("falls back to Invidious when Piped hits process rate limit", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    let slot = 0;
-    vi.spyOn(rateLimiter, "acquireUpstreamSlot").mockImplementation(() => {
-      slot += 1;
-      if (slot === 1) throw new RateLimitExceededError();
-    });
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("inv.test/api/v1/channels/UCchan")) {
-        if (u.includes("/videos")) {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                videos: [
-                  {
-                    type: "video",
-                    videoId: "abcdefghijk",
-                    title: "After rate limit",
-                    authorId: "UCchan",
-                    author: "Artist",
-                  },
-                ],
-              }),
-            ),
-          );
-        }
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ authorId: "UCchan", author: "Artist" }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const page = await fetchChannelPage(db, { channelId: "UCchan" });
-    expect(page.sourceUsed).toBe("invidious");
-    expect(page.videos[0]?.title).toBe("After rate limit");
-    sqlite.close();
-  });
-
-  it("merges Piped channel live tab into the videos tab", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    delete process.env.INVIDIOUS_BASE_URL;
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/channel/UCchan")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "UCchan",
-              name: "Artist",
-              relatedStreams: [
-                {
-                  type: "stream",
-                  url: "/watch?v=uploadvid01",
-                  title: "Regular upload",
-                  uploaderUrl: "/channel/UCchan",
-                  duration: 600,
-                },
-              ],
-              tabs: [{ name: "live", data: "live-tab" }],
-            }),
-          ),
-        );
-      }
-      if (u.includes("piped.test/channels/tabs?") && u.includes("live-tab")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              relatedStreams: [
-                {
-                  type: "livestream",
-                  url: "/watch?v=livestream1",
-                  title: "Live now",
-                  uploaderUrl: "/channel/UCchan",
-                  livestream: true,
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const page = await fetchChannelPage(db, { channelId: "UCchan" });
-    expect(page.sourceUsed).toBe("piped");
-    expect(page.videos.map((v) => v.videoId)).toEqual([
-      "livestream1",
-      "uploadvid01",
-    ]);
-    expect(page.videos[0]?.isLive).toBe(true);
-    sqlite.close();
-  });
-
   it("merges Invidious channel streams into the videos tab", async () => {
     const { db, sqlite } = createTestDb();
-    delete process.env.PIPED_BASE_URL;
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
     vi.mocked(fetch).mockImplementation((input) => {
@@ -1187,62 +539,9 @@ describe("fetchChannelPage", () => {
     );
     sqlite.close();
   });
-
-  it("loads Piped channel shorts via the shorts tab", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    delete process.env.INVIDIOUS_BASE_URL;
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/channel/UCchan")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "UCchan",
-              name: "Artist",
-              relatedStreams: [],
-              tabs: [
-                { name: "videos", data: "videos-tab" },
-                { name: "shorts", data: "shorts-tab" },
-              ],
-            }),
-          ),
-        );
-      }
-      if (u.includes("piped.test/channels/tabs?") && u.includes("shorts-tab")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              relatedStreams: [
-                {
-                  type: "stream",
-                  url: "/watch?v=shortvid11111",
-                  title: "A short #shorts",
-                  uploaderUrl: "/channel/UCchan",
-                  duration: 45,
-                  isShort: true,
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const page = await fetchChannelPage(db, {
-      channelId: "UCchan",
-      tab: "shorts",
-    });
-    expect(page.sourceUsed).toBe("piped");
-    expect(page.videos).toHaveLength(1);
-    expect(page.videos[0]?.title).toBe("A short #shorts");
-    sqlite.close();
-  });
 });
 
-describe("fetchTrendingVideos upstream fallback", () => {
+describe("fetchTrendingVideos", () => {
   beforeEach(() => {
     resetRateLimiterForTests();
     vi.stubGlobal(
@@ -1254,57 +553,40 @@ describe("fetchTrendingVideos upstream fallback", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    delete process.env.PIPED_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
   });
 
-  it("uses Invidious when Piped trending is empty", async () => {
+  it("returns trending videos from Invidious", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/trending")) {
-        return Promise.resolve(new Response(JSON.stringify([])));
-      }
-      if (u.includes("inv.test/api/v1/trending")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify([
-              {
-                type: "video",
-                videoId: "abcdefghijk",
-                title: "Invidious trend",
-                authorId: "UCx",
-                author: "Ch",
-              },
-            ]),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const t = await fetchTrendingVideos(db, { region: "US", limit: 10 });
-    expect(t.sourceUsed).toBe("invidious");
-    expect(t.videos[0]?.videoId).toBe("abcdefghijk");
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          {
+            type: "video",
+            videoId: "abc12345678",
+            title: "Trending one",
+            author: "Creator",
+            lengthSeconds: 120,
+          },
+        ]),
+      ),
+    );
+    const res = await fetchTrendingVideos(db, { region: "US", limit: 10 });
+    expect(res.sourceUsed).toBe("invidious");
+    expect(res.videos.map((v) => v.videoId)).toEqual(["abc12345678"]);
     sqlite.close();
   });
 
-  it("throws rate limit only when both upstreams are throttled", async () => {
+  it("throws when the only upstream is throttled", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.spyOn(rateLimiter, "acquireUpstreamSlot").mockImplementation(() => {
-      throw new RateLimitExceededError();
-    });
-
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("rate limited", { status: 429 }),
+    );
     await expect(
-      fetchTrendingVideos(db, { region: "US", limit: 5 }),
-    ).rejects.toBeInstanceOf(RateLimitExceededError);
-
+      fetchTrendingVideos(db, { region: "US", limit: 10 }),
+    ).rejects.toThrow();
     sqlite.close();
   });
 });
@@ -1320,46 +602,7 @@ describe("fetchVideoComments", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.PIPED_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
-  });
-
-  it("returns unified comments from Piped-shaped JSON", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          comments: [
-            {
-              author: "Alice",
-              commentId: "c1",
-              commentText: "Great video!",
-              commentedTime: "2 hours ago",
-              commentorUrl: "/channel/UCalice",
-              likeCount: 12,
-              pinned: true,
-              thumbnail: "https://piped.test/avatar.jpg",
-            },
-          ],
-          disabled: false,
-          nextpage: "token-abc",
-        }),
-      ),
-    );
-
-    const r = await fetchVideoComments(db, {
-      videoId: "dQw4w9WgXcQ",
-      sortBy: "top",
-    });
-    expect(r.sourceUsed).toBe("piped");
-    expect(r.comments).toHaveLength(1);
-    expect(r.comments[0]?.author).toBe("Alice");
-    expect(r.comments[0]?.authorId).toBe("UCalice");
-    expect(r.comments[0]?.isPinned).toBe(true);
-    expect(r.continuation).toBe("token-abc");
-    sqlite.close();
   });
 
   it("keeps Invidious contentHtml for timestamp anchor parsing", async () => {
@@ -1395,77 +638,6 @@ describe("fetchVideoComments", () => {
       'href="https://www.youtube.com/watch?v=cHocYnA_JVY&amp;t=102"',
     );
     expect(r.comments[0]?.text).toContain("1:42");
-    sqlite.close();
-  });
-
-  it("falls back to Invidious when Piped comments fail", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
-
-    vi.mocked(fetch).mockImplementation((input) => {
-      const u = String(input);
-      if (u.includes("piped.test/comments/")) {
-        return Promise.resolve(new Response("error", { status: 500 }));
-      }
-      if (u.includes("inv.test/api/v1/comments/")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              videoId: "dQw4w9WgXcQ",
-              commentCount: 1,
-              comments: [
-                {
-                  author: "Bob",
-                  authorId: "UCbob",
-                  commentId: "iv1",
-                  content: "Nice!",
-                  publishedText: "1 day ago",
-                  likeCount: 3,
-                  authorThumbnails: [
-                    { url: "/ggpht/avatar", width: 48, height: 48 },
-                  ],
-                },
-              ],
-            }),
-          ),
-        );
-      }
-      return Promise.reject(new Error(`unexpected fetch: ${u}`));
-    });
-
-    const r = await fetchVideoComments(db, {
-      videoId: "dQw4w9WgXcQ",
-      sortBy: "top",
-    });
-    expect(r.sourceUsed).toBe("invidious");
-    expect(r.comments[0]?.author).toBe("Bob");
-    expect(r.comments[0]?.authorAvatarUrl).toBe(
-      "https://inv.test/ggpht/avatar",
-    );
-    sqlite.close();
-  });
-
-  it("reports disabled comments from Piped", async () => {
-    const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
-
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          comments: [],
-          disabled: true,
-          nextpage: "",
-        }),
-      ),
-    );
-
-    const r = await fetchVideoComments(db, {
-      videoId: "dQw4w9WgXcQ",
-      sortBy: "top",
-    });
-    expect(r.disabled).toBe(true);
-    expect(r.comments).toHaveLength(0);
     sqlite.close();
   });
 });

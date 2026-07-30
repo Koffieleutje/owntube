@@ -30,11 +30,8 @@ import { protectedProcedure, router } from "@/server/trpc/init";
 const settingsPatchSchema = z.object({
   theme: appSettingsSchema.shape.theme.optional(),
   visualTheme: appSettingsSchema.shape.visualTheme.optional(),
-  pipedBaseUrl: z.string().max(512).optional(),
   invidiousBaseUrl: z.string().max(512).optional(),
-  pipedBaseUrls: z.array(z.string().max(512)).max(8).optional(),
   invidiousBaseUrls: z.array(z.string().max(512)).max(8).optional(),
-  preferredPipedBaseUrl: z.string().max(512).optional(),
   preferredInvidiousBaseUrl: z.string().max(512).optional(),
   trendingRegion: z.string().length(2).optional(),
   hideRestrictedVideos: z.boolean().optional(),
@@ -60,11 +57,8 @@ const settingsPatchSchema = z.object({
 });
 
 const healthCheckInputSchema = z.object({
-  pipedBaseUrl: z.string().max(512).optional(),
   invidiousBaseUrl: z.string().max(512).optional(),
-  pipedBaseUrls: z.array(z.string().max(512)).max(8).optional(),
   invidiousBaseUrls: z.array(z.string().max(512)).max(8).optional(),
-  preferredPipedBaseUrl: z.string().max(512).optional(),
   preferredInvidiousBaseUrl: z.string().max(512).optional(),
 });
 
@@ -107,7 +101,7 @@ function nowUnix(): number {
 }
 
 async function checkUrl(
-  source: "piped" | "invidious",
+  source: "invidious",
   baseUrl: string,
   url: string,
 ): Promise<boolean> {
@@ -151,47 +145,31 @@ export const settingsRouter = router({
     .query(async ({ ctx, input }) => {
       const current = getUserSettings(ctx.db, ctx.userId);
       const overrides =
-        input?.pipedBaseUrl !== undefined ||
         input?.invidiousBaseUrl !== undefined ||
-        input?.pipedBaseUrls !== undefined ||
         input?.invidiousBaseUrls !== undefined
           ? {
-              pipedBaseUrl: input.pipedBaseUrl ?? current.pipedBaseUrl,
               invidiousBaseUrl:
                 input.invidiousBaseUrl ?? current.invidiousBaseUrl,
-              pipedBaseUrls: input.pipedBaseUrls ?? current.pipedBaseUrls,
               invidiousBaseUrls:
                 input.invidiousBaseUrls ?? current.invidiousBaseUrls,
-              preferredPipedBaseUrl:
-                input.preferredPipedBaseUrl ?? current.preferredPipedBaseUrl,
               preferredInvidiousBaseUrl:
                 input.preferredInvidiousBaseUrl ??
                 current.preferredInvidiousBaseUrl,
             }
           : getUserProxyOverrides(ctx.db, ctx.userId);
-      const { pipedBases, invidiousBases } =
-        resolveProxyBaseCandidates(overrides);
-      const pipedResults = await Promise.all(
-        pipedBases.map((baseUrl) =>
-          checkUrl("piped", baseUrl, `${baseUrl}/trending?region=US`),
-        ),
-      );
+      const { invidiousBases } = resolveProxyBaseCandidates(overrides);
       const invidiousResults = await Promise.all(
         invidiousBases.map((baseUrl) =>
           checkUrl("invidious", baseUrl, `${baseUrl}/api/v1/stats`),
         ),
       );
       const instanceSources = getInstanceSourceInfo({
-        pipedBaseUrls: pipedBases,
         invidiousBaseUrls: invidiousBases,
-        preferredPipedBaseUrl:
-          overrides?.preferredPipedBaseUrl ?? current.preferredPipedBaseUrl,
         preferredInvidiousBaseUrl:
           overrides?.preferredInvidiousBaseUrl ??
           current.preferredInvidiousBaseUrl,
       });
       return {
-        pipedOk: pipedResults.length > 0 ? pipedResults.some(Boolean) : null,
         invidiousOk:
           invidiousResults.length > 0 ? invidiousResults.some(Boolean) : null,
         instanceSources,

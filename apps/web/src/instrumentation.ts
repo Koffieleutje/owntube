@@ -7,7 +7,7 @@ import { hasSurroundingQuotes } from "@/lib/upstream-base-url";
 /**
  * Warn about any env var whose value is wrapped in quotes. Environment values
  * are not a quoted format, so the quotes become part of the value (e.g.
- * `PIPED_BASE_URL="disabled"` is read as the literal string `"disabled"`, not
+ * `INVIDIOUS_BASE_URL="disabled"` is read as the literal string `"disabled"`, not
  * the disable keyword). Generic on purpose — not tied to any single var.
  */
 function warnQuotedEnvValues() {
@@ -20,8 +20,8 @@ function warnQuotedEnvValues() {
   console.warn(
     `\n\x1b[33m[OwnTube]\x1b[0m Environment variables wrapped in quotes: ${quoted.join(", ")}.\n` +
       "Env values are not a quoted format, so the quotes become part of the value\n" +
-      '(e.g. PIPED_BASE_URL="disabled" is read as the literal string \'"disabled"\', not the disable keyword).\n' +
-      "Write them unquoted, e.g. PIPED_BASE_URL=disabled.\n",
+      '(e.g. INVIDIOUS_BASE_URL="disabled" is read as the literal string \'"disabled"\', not the disable keyword).\n' +
+      "Write them unquoted, e.g. INVIDIOUS_BASE_URL=disabled.\n",
   );
 }
 

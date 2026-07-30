@@ -24,7 +24,7 @@ export function normalizeUpstreamBaseUrl(
 /**
  * True when a value is wrapped in matching surrounding quotes. Environment
  * variables are not a quoted format, so this signals a `.env` mistake (e.g.
- * `PIPED_BASE_URL="disabled"`) — the value should be written unquoted. Callers
+ * `INVIDIOUS_BASE_URL="disabled"`) — the value should be written unquoted. Callers
  * warn on this rather than silently stripping it.
  */
 export function hasSurroundingQuotes(

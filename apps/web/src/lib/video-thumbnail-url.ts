@@ -37,7 +37,7 @@ function youtubeThumbUrl(videoId: string, filename: string): string {
   return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/${filename}`;
 }
 
-/** Piped `/vi/{id}/{file}?host=…&rs=…` — tier and signature must stay paired. */
+/** Proxied `/vi/{id}/{file}?host=…&rs=…` — tier and signature must stay paired. */
 export function isSignedInstanceThumbUrl(u: URL): boolean {
   return u.search.length > 0 && isInstanceVideoThumbPath(u.pathname);
 }
@@ -53,7 +53,7 @@ function isShortOarFilename(filename: string): boolean {
   return SHORT_OAR_FILENAME.test(base);
 }
 
-/** True when the still name is below maxres (Piped lists often ship hq720). */
+/** True when the still name is below maxres (upstream lists often ship hq720). */
 export function isLowerTierVideoThumbnailFilename(filename: string): boolean {
   const base = filename.split("?")[0]?.trim() ?? "";
   return LOWER_TIER_THUMB.test(base);
@@ -112,7 +112,7 @@ export function preferShortVideoThumbnailUrl(
 }
 
 /**
- * Prefer maxres when safe (direct YouTube CDN). Keeps signed Piped/Invidious
+ * Prefer maxres when safe (direct YouTube CDN). Keeps signed Invidious
  * proxy URLs unchanged — upgrading the filename invalidates `rs` signatures.
  */
 export function preferHighResVideoThumbnailUrl(

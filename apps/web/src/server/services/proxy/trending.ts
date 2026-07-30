@@ -20,10 +20,6 @@ import {
 import { fetchJson } from "@/server/services/proxy/http";
 import { mapInvidiousItem } from "@/server/services/proxy/mappers/invidious";
 import {
-  mapPipedItem,
-  pipedRootItems,
-} from "@/server/services/proxy/mappers/piped";
-import {
   liveUpstreamSource,
   normalizeBaseUrl,
 } from "@/server/services/proxy/normalize";
@@ -77,17 +73,6 @@ function readStaleTrendingCache(
   };
 }
 
-export function buildPipedTrendingUrl(
-  base: string,
-  region: string,
-  category?: string,
-): string {
-  const u = new URL("/trending", `${normalizeBaseUrl(base)}/`);
-  u.searchParams.set("region", region.toUpperCase());
-  if (category) u.searchParams.set("type", category);
-  return u.toString();
-}
-
 export function buildInvidiousTrendingUrl(
   base: string,
   region: string,
@@ -97,21 +82,6 @@ export function buildInvidiousTrendingUrl(
   u.searchParams.set("region", region.toUpperCase());
   if (category) u.searchParams.set("type", category);
   return u.toString();
-}
-
-function parsePipedTrending(
-  data: unknown,
-  limit: number,
-  pipedBase: string,
-): UnifiedVideo[] {
-  const items = Array.isArray(data) ? data : pipedRootItems(data);
-  const videos: UnifiedVideo[] = [];
-  for (const item of items) {
-    const m = mapPipedItem(item, pipedBase);
-    if (m) videos.push(m);
-    if (videos.length >= limit) break;
-  }
-  return videos;
 }
 
 function parseInvidiousTrending(
@@ -143,8 +113,7 @@ export async function fetchTrendingVideos(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<TrendingVideosResult> => {
-    const { pipedBases, invidiousBases } =
-      resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
     const errors: string[] = [];
 
     let resolved: TrendingVideosResult | null = null;
@@ -172,29 +141,6 @@ export async function fetchTrendingVideos(
         }
       }
       if (resolved && resolved.videos.length > 0) break;
-    }
-  
-
-    if (!resolved || resolved.videos.length === 0) {
-      for (const pipedBase of pipedBases) {
-        try {
-          acquireUpstreamSlot();
-          const json = await fetchJson(
-            buildPipedTrendingUrl(pipedBase, region, input.category),
-            { emptyBodyAs: [], source: "piped", baseUrl: pipedBase },
-          );
-          const videos = parsePipedTrending(json, limit, pipedBase);
-          if (videos.length > 0) {
-            resolved = trendingVideosResultSchema.parse({
-              videos,
-              sourceUsed: "piped",
-            });
-          }
-        } catch (e) {
-          recordUpstreamFailure(e, "piped", errors, pipedBase);
-        }
-        if (resolved && resolved.videos.length > 0) break;
-      }
     }
 
     if (!resolved || resolved.videos.length === 0) {

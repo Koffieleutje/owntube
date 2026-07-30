@@ -4,7 +4,6 @@ import {
   filterShortsFeedVideos,
   invidiousItemIsDiscoveryShort,
   isDiscoveryShortVideo,
-  pipedItemIsDiscoveryShort,
 } from "@/lib/short-video";
 import {
   SHORTS_DISCOVERY_FALLBACK_QUERIES,
@@ -28,20 +27,9 @@ import {
 } from "@/server/services/proxy/errors";
 import { fetchJson } from "@/server/services/proxy/http";
 import { mapInvidiousItem } from "@/server/services/proxy/mappers/invidious";
-import {
-  mapPipedItem,
-  pipedNextPage,
-  pipedRootItems,
-} from "@/server/services/proxy/mappers/piped";
 import { liveUpstreamSource } from "@/server/services/proxy/normalize";
-import {
-  buildInvidiousSearchUrl,
-  buildPipedSearchUrl,
-} from "@/server/services/proxy/search";
-import {
-  buildInvidiousTrendingUrl,
-  buildPipedTrendingUrl,
-} from "@/server/services/proxy/trending";
+import { buildInvidiousSearchUrl } from "@/server/services/proxy/search";
+import { buildInvidiousTrendingUrl } from "@/server/services/proxy/trending";
 import {
   cachedShortsFeedPayloadSchema,
   type ShortsFeedInput,
@@ -108,7 +96,7 @@ function readStaleShortsFeedCache(
   };
 }
 
-/** Piped search queries are regionalized via {@link shortsSearchQueriesForRegion}. */
+/** Discovery queries are regionalized via {@link shortsSearchQueriesForRegion}. */
 const INVIDIOUS_SHORTS_SEARCH_QUERY = "#shorts";
 
 const SHORTS_FEED_EMPTY_WARNING =
@@ -140,24 +128,6 @@ function parseInvidiousShortsList(
   return videos;
 }
 
-function parsePipedShortsSearch(
-  data: unknown,
-  limit: number,
-  pipedBase: string,
-): { videos: UnifiedVideo[]; continuation: string | null } {
-  const items = pipedRootItems(data);
-  const videos: UnifiedVideo[] = [];
-  for (const item of items) {
-    const v = mapPipedItem(item, pipedBase);
-    if (!v) continue;
-    if (pipedItemIsDiscoveryShort(item) || isDiscoveryShortVideo(v)) {
-      videos.push(v);
-      if (videos.length >= limit) break;
-    }
-  }
-  return { videos, continuation: pipedNextPage(data) };
-}
-
 function mergeDiscoveryShortVideos(
   limit: number,
   seen: Set<string>,
@@ -171,24 +141,6 @@ function mergeDiscoveryShortVideos(
     if (out.length >= limit) return true;
   }
   return out.length >= limit;
-}
-
-function parsePipedTrendingShorts(
-  data: unknown,
-  limit: number,
-  pipedBase: string,
-): UnifiedVideo[] {
-  const items = Array.isArray(data) ? data : pipedRootItems(data);
-  const videos: UnifiedVideo[] = [];
-  for (const item of items) {
-    const v = mapPipedItem(item, pipedBase);
-    if (!v) continue;
-    if (pipedItemIsDiscoveryShort(item) || isDiscoveryShortVideo(v)) {
-      videos.push(v);
-      if (videos.length >= limit) break;
-    }
-  }
-  return videos;
 }
 
 function invidiousShortsSearchPage(continuation: string | undefined): number {
@@ -225,8 +177,7 @@ export async function fetchShortsFeed(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<ShortsFeedResult> => {
-    const { pipedBases, invidiousBases } =
-      resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
     const errors: string[] = [];
     let resolved: ShortsFeedResult | null = null;
 
@@ -330,139 +281,12 @@ export async function fetchShortsFeed(
       return null;
     };
 
-    const tryPiped = async (): Promise<ShortsFeedResult | null> => {
-      for (const pipedBase of pipedBases) {
-        const discoveryQueries = resolveShortsDiscoveryQueries(input, region);
-        const tasteDiscovery = (input.discoveryQueries?.length ?? 0) > 0;
-
-        const fetchPipedSearchShorts = async (
-          q: string,
-          continuation?: string,
-        ): Promise<UnifiedVideo[]> => {
-          try {
-            acquireUpstreamSlot();
-            const searchUrl = buildPipedSearchUrl(
-              pipedBase,
-              {
-                q,
-                limit: Math.min(40, limit * 3),
-                continuation,
-                region,
-              },
-              "all",
-            );
-            const json = await fetchJson(searchUrl, {
-              source: "piped",
-              baseUrl: pipedBase,
-            });
-            return parsePipedShortsSearch(json, limit, pipedBase).videos;
-          } catch (e) {
-            recordUpstreamFailure(e, "piped", errors, pipedBase);
-            return [];
-          }
-        };
-
-        if (!input.continuation) {
-          const seen = new Set<string>();
-          const videos: UnifiedVideo[] = [];
-
-          if (!tasteDiscovery) {
-            try {
-              acquireUpstreamSlot();
-              const trendingJson = await fetchJson(
-                buildPipedTrendingUrl(pipedBase, region),
-                { emptyBodyAs: [], source: "piped", baseUrl: pipedBase },
-              );
-              mergeDiscoveryShortVideos(
-                limit,
-                seen,
-                videos,
-                parsePipedTrendingShorts(trendingJson, limit, pipedBase),
-              );
-            } catch (e) {
-              recordUpstreamFailure(e, "piped", errors, pipedBase);
-            }
-          }
-
-          for (const q of discoveryQueries) {
-            if (videos.length >= limit) break;
-            const found = await fetchPipedSearchShorts(q);
-            if (mergeDiscoveryShortVideos(limit, seen, videos, found)) break;
-          }
-
-          if (videos.length > 0) {
-            return shortsFeedResultSchema.parse({
-              videos: videos.slice(0, limit),
-              continuation: "piped:search",
-              sourceUsed: "piped",
-            });
-          }
-        }
-
-        const pipedContinuation =
-          input.continuation === "piped:search"
-            ? undefined
-            : input.continuation?.startsWith("piped:")
-              ? input.continuation.slice("piped:".length)
-              : input.continuation;
-
-        for (const q of discoveryQueries) {
-          try {
-            acquireUpstreamSlot();
-            const searchUrl = buildPipedSearchUrl(
-              pipedBase,
-              {
-                q,
-                limit: Math.min(40, limit * 3),
-                continuation: pipedContinuation,
-                region,
-              },
-              "all",
-            );
-            const json = await fetchJson(searchUrl, {
-              source: "piped",
-              baseUrl: pipedBase,
-            });
-            const { videos, continuation } = parsePipedShortsSearch(
-              json,
-              limit,
-              pipedBase,
-            );
-            if (videos.length === 0) continue;
-            const next =
-              continuation && continuation.length > 0
-                ? `piped:${continuation}`
-                : null;
-            return shortsFeedResultSchema.parse({
-              videos,
-              continuation: next,
-              sourceUsed: "piped",
-            });
-          } catch (e) {
-            recordUpstreamFailure(e, "piped", errors, pipedBase);
-          }
-        }
-      }
-      return null;
-    };
-
     const continuation = input.continuation ?? "";
-    const pipedContinuation =
-      continuation === "piped:search" || continuation.startsWith("piped:");
     const invidiousContinuation =
       continuation.startsWith("inv:page:") || continuation === "";
 
     if (invidiousContinuation) {
       resolved = await tryInvidious();
-    }
-    if (
-      (!resolved || resolved.videos.length === 0) &&
-      (pipedContinuation || !continuation)
-    ) {
-      const fromPiped = await tryPiped();
-      if (fromPiped && fromPiped.videos.length > 0) {
-        resolved = fromPiped;
-      }
     }
 
     if (!resolved || resolved.videos.length === 0) {
@@ -471,16 +295,10 @@ export async function fetchShortsFeed(
       if (errors.length > 0) {
         throwIfUpstreamFailed(errors, "shorts feed unavailable");
       }
-      const fallbackSource =
-        pipedBases.length > 0
-          ? "piped"
-          : invidiousBases.length > 0
-            ? "invidious"
-            : "piped";
       return shortsFeedResultSchema.parse({
         videos: [],
         continuation: null,
-        sourceUsed: liveUpstreamSource(fallbackSource),
+        sourceUsed: liveUpstreamSource("invidious"),
         warning: SHORTS_FEED_EMPTY_WARNING,
       });
     }

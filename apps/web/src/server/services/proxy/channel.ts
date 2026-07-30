@@ -6,7 +6,6 @@ import { sortVideosNewestFirst } from "@/lib/published-sort-key";
 import {
   invidiousItemIsStrictShort,
   isStrictShortVideo,
-  pipedItemIsStrictShort,
 } from "@/lib/short-video";
 import { preferHighResVideoThumbnailUrl } from "@/lib/video-thumbnail-url";
 import type { AppDb } from "@/server/db/client";
@@ -28,11 +27,6 @@ import {
 } from "@/server/services/proxy/errors";
 import { FETCH_TIMEOUT_MS, fetchJson } from "@/server/services/proxy/http";
 import { mapInvidiousItem } from "@/server/services/proxy/mappers/invidious";
-import {
-  mapPipedItem,
-  pipedListItemsFromPayload,
-  pipedRootItems,
-} from "@/server/services/proxy/mappers/piped";
 import {
   liveUpstreamSource,
   normalizeBaseUrl,
@@ -103,26 +97,6 @@ function readStaleChannelCache(
   };
 }
 
-function buildPipedChannelUrl(base: string, channelId: string): string {
-  return new URL(
-    `/channel/${encodeURIComponent(channelId)}`,
-    `${normalizeBaseUrl(base)}/`,
-  ).toString();
-}
-
-function buildPipedChannelNextUrl(
-  base: string,
-  channelId: string,
-  continuation: string,
-): string {
-  const u = new URL(
-    `/nextpage/channel/${encodeURIComponent(channelId)}`,
-    `${normalizeBaseUrl(base)}/`,
-  );
-  u.searchParams.set("nextpage", continuation);
-  return u.toString();
-}
-
 function buildInvidiousChannelMetaUrl(base: string, channelId: string): string {
   return new URL(
     `/api/v1/channels/${encodeURIComponent(channelId)}`,
@@ -168,51 +142,6 @@ function buildInvidiousChannelStreamsUrl(
   return u.toString();
 }
 
-const PIPED_CHANNEL_LIVE_TAB_NAMES = new Set([
-  "live",
-  "streams",
-  "livestreams",
-  "live streams",
-]);
-
-async function fetchPipedChannelLiveTabVideos(
-  pipedBase: string,
-  channelId: string,
-  channelPayload: unknown,
-): Promise<UnifiedVideo[]> {
-  if (!channelPayload || typeof channelPayload !== "object") return [];
-  const tabs = (channelPayload as Record<string, unknown>).tabs;
-  if (!Array.isArray(tabs)) return [];
-  const out: UnifiedVideo[] = [];
-  for (const tab of tabs) {
-    if (!tab || typeof tab !== "object") continue;
-    const t = tab as Record<string, unknown>;
-    const tabName = typeof t.name === "string" ? t.name.toLowerCase() : "";
-    if (!PIPED_CHANNEL_LIVE_TAB_NAMES.has(tabName)) continue;
-    const data = typeof t.data === "string" ? t.data : null;
-    if (!data) continue;
-    try {
-      acquireUpstreamSlot();
-      const json = await fetchJson(buildPipedChannelTabsUrl(pipedBase, data));
-      out.push(
-        ...videosFromPipedListItems(
-          pipedListItemsFromPayload(json),
-          pipedBase,
-          channelId,
-          { excludeShorts: true },
-        ),
-      );
-    } catch (e) {
-      logger.warn("proxy.piped.channel_live_tab_failed", {
-        channelId,
-        tab: tabName,
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  return out;
-}
-
 async function fetchInvidiousChannelLiveStreams(
   invidiousBase: string,
   channelId: string,
@@ -241,53 +170,20 @@ async function enrichChannelVideosWithLiveStreams(
   videos: UnifiedVideo[],
   channelId: string,
   opts: {
-    pipedBase?: string;
     invidiousBase?: string;
     sourceUsed: ChannelPageResult["sourceUsed"];
-    pipedChannelPayload?: unknown;
   },
 ): Promise<UnifiedVideo[]> {
-  const { pipedBase, invidiousBase, sourceUsed, pipedChannelPayload } = opts;
+  const { invidiousBase, sourceUsed } = opts;
   if (sourceUsed === "cache") return videos;
   let liveCandidates: UnifiedVideo[] = [];
-  if (sourceUsed === "piped" && pipedBase) {
-    try {
-      let payload = pipedChannelPayload;
-      if (!payload) {
-        acquireUpstreamSlot();
-        payload = await fetchJson(buildPipedChannelUrl(pipedBase, channelId));
-      }
-      liveCandidates = await fetchPipedChannelLiveTabVideos(
-        pipedBase,
-        channelId,
-        payload,
-      );
-    } catch (e) {
-      logger.warn("proxy.piped.channel_live_enrich_failed", {
-        channelId,
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  } else if (sourceUsed === "invidious" && invidiousBase) {
+  if (sourceUsed === "invidious" && invidiousBase) {
     liveCandidates = await fetchInvidiousChannelLiveStreams(
       invidiousBase,
       channelId,
     );
   }
   return mergeActiveLiveVideosFirst(videos, liveCandidates);
-}
-
-function buildPipedChannelVideosSearchUrl(base: string, query: string): string {
-  const u = new URL("/search", `${normalizeBaseUrl(base)}/`);
-  u.searchParams.set("q", query);
-  u.searchParams.set("filter", "videos");
-  return u.toString();
-}
-
-function buildPipedChannelTabsUrl(base: string, tabData: string): string {
-  const u = new URL("/channels/tabs", `${normalizeBaseUrl(base)}/`);
-  u.searchParams.set("data", tabData);
-  return u.toString();
 }
 
 function buildInvidiousChannelRssUrl(base: string, channelId: string): string {
@@ -308,37 +204,8 @@ function buildInvidiousChannelVideosSearchUrl(
   return u.toString();
 }
 
-function filterVideosForChannel(
-  videos: UnifiedVideo[],
-  channelId: string,
-): UnifiedVideo[] {
-  return videos.filter((v) => !v.channelId || v.channelId === channelId);
-}
-
-const pipedItemIsShort = pipedItemIsStrictShort;
 const unifiedVideoIsLikelyShort = isStrictShortVideo;
 const invidiousItemIsShort = invidiousItemIsStrictShort;
-
-function videosFromPipedListItems(
-  items: unknown[],
-  pipedBase: string,
-  channelId: string,
-  opts?: { excludeShorts?: boolean; shortsOnly?: boolean },
-): UnifiedVideo[] {
-  const videos: UnifiedVideo[] = [];
-  for (const item of items) {
-    const isShort = pipedItemIsShort(item);
-    if (opts?.excludeShorts && isShort) continue;
-    if (opts?.shortsOnly && !isShort) continue;
-    const v = mapPipedItem(item, pipedBase);
-    if (!v) continue;
-    if (v.channelId && v.channelId !== channelId) continue;
-    if (opts?.excludeShorts && unifiedVideoIsLikelyShort(v)) continue;
-    if (opts?.shortsOnly && !unifiedVideoIsLikelyShort(v)) continue;
-    videos.push(v);
-  }
-  return videos;
-}
 
 function extractXmlTagContent(
   block: string,
@@ -419,105 +286,6 @@ function parseInvidiousChannelRssFeed(
   return videos;
 }
 
-async function tryPipedChannelVideoFallbacks(
-  pipedBase: string,
-  channelId: string,
-  initialPayload: unknown,
-  channelName: string,
-): Promise<UnifiedVideo[]> {
-  const seen = new Set<string>();
-  const out: UnifiedVideo[] = [];
-  const push = (list: UnifiedVideo[]) => {
-    for (const v of list) {
-      if (seen.has(v.videoId)) continue;
-      seen.add(v.videoId);
-      out.push(v);
-      if (out.length >= 60) return;
-    }
-  };
-
-  const nextpage = pipedChannelNextContinuation(initialPayload);
-  if (nextpage) {
-    try {
-      acquireUpstreamSlot();
-      const json = await fetchJson(
-        buildPipedChannelNextUrl(pipedBase, channelId, nextpage),
-      );
-      push(
-        videosFromPipedListItems(
-          pipedListItemsFromPayload(json),
-          pipedBase,
-          channelId,
-        ),
-      );
-    } catch (e) {
-      logger.warn("proxy.piped.channel_nextpage_failed", {
-        channelId,
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  if (out.length >= 12) return out;
-
-  const query = channelName.trim();
-  if (query.length >= 2) {
-    try {
-      acquireUpstreamSlot();
-      const json = await fetchJson(
-        buildPipedChannelVideosSearchUrl(pipedBase, query),
-      );
-      push(
-        filterVideosForChannel(
-          videosFromPipedListItems(pipedRootItems(json), pipedBase, channelId),
-          channelId,
-        ),
-      );
-    } catch (e) {
-      logger.warn("proxy.piped.channel_search_failed", {
-        channelId,
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-  if (out.length >= 12) return out;
-
-  if (initialPayload && typeof initialPayload === "object") {
-    const tabs = (initialPayload as Record<string, unknown>).tabs;
-    if (Array.isArray(tabs)) {
-      for (const tab of tabs) {
-        if (out.length >= 60) break;
-        if (!tab || typeof tab !== "object") continue;
-        const t = tab as Record<string, unknown>;
-        const tabName = typeof t.name === "string" ? t.name.toLowerCase() : "";
-        if (tabName === "shorts" || tabName === "playlists") continue;
-        const data = typeof t.data === "string" ? t.data : null;
-        if (!data) continue;
-        try {
-          acquireUpstreamSlot();
-          const json = await fetchJson(
-            buildPipedChannelTabsUrl(pipedBase, data),
-          );
-          push(
-            videosFromPipedListItems(
-              pipedListItemsFromPayload(json),
-              pipedBase,
-              channelId,
-              { excludeShorts: true },
-            ),
-          );
-        } catch (e) {
-          logger.warn("proxy.piped.channel_tab_failed", {
-            channelId,
-            tab: tabName,
-            message: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-    }
-  }
-  return out;
-}
-
 async function tryInvidiousChannelVideoFallbacks(
   invidiousBase: string,
   channelId: string,
@@ -582,132 +350,6 @@ async function tryInvidiousChannelVideoFallbacks(
     }
   }
   return out;
-}
-
-function pipedChannelNextContinuation(data: unknown): string | null {
-  if (!data || typeof data !== "object") return null;
-  const n = (data as Record<string, unknown>).nextpage;
-  if (typeof n === "string" && n.length > 0) return n;
-  return null;
-}
-
-/** Piped `/channel/{id}` payloads vary by instance; avatar may be missing on the root but present on items. */
-function pickPipedChannelAvatarUrl(
-  o: Record<string, unknown>,
-  pipedBase: string,
-): string | undefined {
-  const stringCandidates = [
-    o.avatarUrl,
-    o.avatar,
-    o.uploaderAvatar,
-    o.thumbnailUrl,
-  ];
-  for (const raw of stringCandidates) {
-    if (typeof raw !== "string") continue;
-    const u = resolveInvidiousAbsoluteMediaUrl(raw, pipedBase);
-    if (u?.startsWith("http")) return u;
-  }
-  for (const key of ["avatars", "authorThumbnails", "thumbnails"] as const) {
-    const u = resolveInvidiousThumbnail(o[key], pipedBase);
-    if (u?.startsWith("http")) return u;
-  }
-  const streams = Array.isArray(o.relatedStreams) ? o.relatedStreams : [];
-  for (const item of streams) {
-    if (!item || typeof item !== "object") continue;
-    const s = item as Record<string, unknown>;
-    const ua = s.uploaderAvatar;
-    if (typeof ua === "string") {
-      const u = resolveInvidiousAbsoluteMediaUrl(ua, pipedBase);
-      if (u?.startsWith("http")) return u;
-    }
-  }
-  return undefined;
-}
-
-function pickPipedChannelBannerUrl(
-  o: Record<string, unknown>,
-  pipedBase: string,
-): string | undefined {
-  const stringCandidates = [o.bannerUrl, o.banner, o.authorBanner];
-  for (const raw of stringCandidates) {
-    if (typeof raw !== "string") continue;
-    const u = resolveInvidiousAbsoluteMediaUrl(raw, pipedBase);
-    if (u?.startsWith("http")) return u;
-  }
-  const u = resolveInvidiousThumbnail(o.banners ?? o.authorBanners, pipedBase);
-  if (u?.startsWith("http")) return u;
-  return undefined;
-}
-
-function parsePipedChannelPage(
-  data: unknown,
-  channelId: string,
-  pipedBase: string,
-): ChannelPageResult | null {
-  if (!data || typeof data !== "object") return null;
-  const o = data as Record<string, unknown>;
-  const name = typeof o.name === "string" ? o.name : "";
-  const id = typeof o.id === "string" && o.id.length > 0 ? o.id : channelId;
-  const description =
-    typeof o.description === "string" ? o.description : undefined;
-  const avatarUrl = pickPipedChannelAvatarUrl(o, pipedBase);
-  const bannerUrl = pickPipedChannelBannerUrl(o, pipedBase);
-  const subscriberCount =
-    typeof o.subscriberCount === "number" && Number.isFinite(o.subscriberCount)
-      ? Math.round(o.subscriberCount)
-      : undefined;
-  const streams = Array.isArray(o.relatedStreams) ? o.relatedStreams : [];
-  const videos: UnifiedVideo[] = [];
-  for (const item of streams) {
-    if (pipedItemIsShort(item)) continue;
-    const m = mapPipedItem(item, pipedBase);
-    if (m && !unifiedVideoIsLikelyShort(m)) videos.push(m);
-  }
-  if (!name && videos.length === 0) return null;
-  const continuation = pipedChannelNextContinuation(data);
-  return channelPageResultSchema.parse({
-    channelId: id,
-    name: name || "Channel",
-    description,
-    avatarUrl,
-    bannerUrl,
-    subscriberCount,
-    videos,
-    continuation,
-    sourceUsed: "piped",
-  });
-}
-
-function parsePipedChannelContinuation(
-  data: unknown,
-  channelId: string,
-  pipedBase: string,
-  opts?: { shortsOnly?: boolean },
-): ChannelPageResult | null {
-  if (!data || typeof data !== "object") return null;
-  const o = data as Record<string, unknown>;
-  const streams = Array.isArray(o.relatedStreams) ? o.relatedStreams : [];
-  const videos: UnifiedVideo[] = [];
-  for (const item of streams) {
-    const isShort = pipedItemIsShort(item);
-    if (opts?.shortsOnly) {
-      if (!isShort) continue;
-    } else if (isShort) {
-      continue;
-    }
-    const m = mapPipedItem(item, pipedBase);
-    if (!m) continue;
-    if (opts?.shortsOnly && !unifiedVideoIsLikelyShort(m)) continue;
-    if (!opts?.shortsOnly && unifiedVideoIsLikelyShort(m)) continue;
-    videos.push(m);
-  }
-  const continuation = pipedChannelNextContinuation(data);
-  return channelPageResultSchema.parse({
-    channelId,
-    videos,
-    continuation,
-    sourceUsed: "piped",
-  });
 }
 
 function parseInvidiousChannelCombined(
@@ -798,74 +440,6 @@ function parseInvidiousChannelVideosContinuation(
     videos,
     continuation,
     sourceUsed: "invidious",
-  });
-}
-
-async function fetchPipedChannelShortsPage(
-  pipedBase: string,
-  channelId: string,
-  continuation?: string,
-): Promise<ChannelPageResult | null> {
-  if (continuation) {
-    const json = await fetchJson(
-      buildPipedChannelNextUrl(pipedBase, channelId, continuation),
-      { source: "piped", baseUrl: pipedBase },
-    );
-    return parsePipedChannelContinuation(json, channelId, pipedBase, {
-      shortsOnly: true,
-    });
-  }
-
-  const json = await fetchJson(buildPipedChannelUrl(pipedBase, channelId), {
-    source: "piped",
-    baseUrl: pipedBase,
-  });
-  if (!json || typeof json !== "object") return null;
-  const root = json as Record<string, unknown>;
-  const name = typeof root.name === "string" ? root.name : undefined;
-  const id =
-    typeof root.id === "string" && root.id.length > 0 ? root.id : channelId;
-
-  const tabs = Array.isArray(root.tabs) ? root.tabs : [];
-  for (const tab of tabs) {
-    if (!tab || typeof tab !== "object") continue;
-    const t = tab as Record<string, unknown>;
-    const tabName = typeof t.name === "string" ? t.name.toLowerCase() : "";
-    if (tabName !== "shorts") continue;
-    const data = typeof t.data === "string" ? t.data : null;
-    if (!data) continue;
-    const tabJson = await fetchJson(buildPipedChannelTabsUrl(pipedBase, data), {
-      source: "piped",
-      baseUrl: pipedBase,
-    });
-    const videos = videosFromPipedListItems(
-      pipedListItemsFromPayload(tabJson),
-      pipedBase,
-      channelId,
-      { shortsOnly: true },
-    );
-    return channelPageResultSchema.parse({
-      channelId: id,
-      name,
-      videos,
-      continuation: pipedChannelNextContinuation(tabJson),
-      sourceUsed: "piped",
-    });
-  }
-
-  const fallback = videosFromPipedListItems(
-    pipedListItemsFromPayload(json),
-    pipedBase,
-    channelId,
-    { shortsOnly: true },
-  );
-  if (fallback.length === 0) return null;
-  return channelPageResultSchema.parse({
-    channelId: id,
-    name,
-    videos: fallback,
-    continuation: pipedChannelNextContinuation(json),
-    sourceUsed: "piped",
   });
 }
 
@@ -1102,14 +676,11 @@ export async function fetchChannelPage(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<ChannelPageResult> => {
-    const { pipedBases, invidiousBases } =
-      resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
     const errors: string[] = [];
     const tab = input.tab ?? "videos";
 
     let resolved: ChannelPageResult | null = null;
-    let pipedChannelPayload: unknown;
-    let usedPipedBase = "";
     let usedInvidiousBase = "";
 
     if (tab === "shorts") {
@@ -1136,26 +707,6 @@ export async function fetchChannelPage(
           }
         } catch (e) {
           recordUpstreamFailure(e, "invidious", errors, invidiousBase);
-        }
-      }
-    
-      if (!resolved) {
-        for (const pipedBase of pipedBases) {
-          try {
-            acquireUpstreamSlot();
-            if (!input.continuation) acquireUpstreamSlot();
-            resolved = await fetchPipedChannelShortsPage(
-              pipedBase,
-              input.channelId,
-              input.continuation,
-            );
-            if (resolved) {
-              usedPipedBase = pipedBase;
-              break;
-            }
-          } catch (e) {
-            recordUpstreamFailure(e, "piped", errors, pipedBase);
-          }
         }
       }
     } else {
@@ -1246,52 +797,6 @@ export async function fetchChannelPage(
   
     }
 
-    if (tab !== "shorts" && !resolved) {
-        for (const pipedBase of pipedBases) {
-          try {
-            acquireUpstreamSlot();
-            const url = input.continuation
-              ? buildPipedChannelNextUrl(
-                  pipedBase,
-                  input.channelId,
-                  input.continuation,
-                )
-              : buildPipedChannelUrl(pipedBase, input.channelId);
-            const json = await fetchJson(url, {
-              source: "piped",
-              baseUrl: pipedBase,
-            });
-            if (!input.continuation) pipedChannelPayload = json;
-            resolved = input.continuation
-              ? parsePipedChannelContinuation(json, input.channelId, pipedBase)
-              : parsePipedChannelPage(json, input.channelId, pipedBase);
-            if (resolved && resolved.videos.length === 0 && !input.continuation) {
-              const channelLabel =
-                resolved.name && resolved.name !== "Channel"
-                  ? resolved.name
-                  : input.channelId;
-              const fallbackVideos = await tryPipedChannelVideoFallbacks(
-                pipedBase,
-                input.channelId,
-                json,
-                channelLabel,
-              );
-              if (fallbackVideos.length > 0) {
-                resolved = { ...resolved, videos: fallbackVideos };
-              } else {
-                resolved = null;
-              }
-            }
-            if (resolved) {
-              usedPipedBase = pipedBase;
-              break;
-            }
-          } catch (e) {
-            recordUpstreamFailure(e, "piped", errors, pipedBase);
-          }
-        }
-    }
-
     if (!resolved) {
       const stale = readStaleChannelCache(db, key);
       if (stale) return stale;
@@ -1305,10 +810,8 @@ export async function fetchChannelPage(
           resolved.videos,
           input.channelId,
           {
-            pipedBase: usedPipedBase,
             invidiousBase: usedInvidiousBase,
             sourceUsed: resolved.sourceUsed,
-            pipedChannelPayload,
           },
         ),
       };

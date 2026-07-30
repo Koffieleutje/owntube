@@ -1,6 +1,6 @@
 import {
   looksLikeHtmlDescription,
-  normalizePipedDescription,
+  normalizeUpstreamDescription,
 } from "@/lib/normalize-video-description";
 
 export type VideoChapter = {
@@ -32,7 +32,7 @@ export function parseChaptersFromDescription(
   if (!description) return [];
 
   const plain = looksLikeHtmlDescription(description)
-    ? normalizePipedDescription(description)
+    ? normalizeUpstreamDescription(description)
     : description;
 
   const lines = plain

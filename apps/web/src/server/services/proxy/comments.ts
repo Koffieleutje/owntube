@@ -19,7 +19,6 @@ import {
   channelIdFromPath,
   liveUpstreamSource,
   normalizeBaseUrl,
-  resolveInvidiousAbsoluteMediaUrl,
   resolveInvidiousThumbnail,
 } from "@/server/services/proxy/normalize";
 import {
@@ -43,26 +42,6 @@ export class CommentsCacheMissError extends Error {
   }
 }
 
-function buildPipedCommentsUrl(base: string, videoId: string): string {
-  return new URL(
-    `/comments/${encodeURIComponent(videoId)}`,
-    `${normalizeBaseUrl(base)}/`,
-  ).toString();
-}
-
-function buildPipedCommentsNextUrl(
-  base: string,
-  videoId: string,
-  nextpage: string,
-): string {
-  const u = new URL(
-    `/nextpage/comments/${encodeURIComponent(videoId)}`,
-    `${normalizeBaseUrl(base)}/`,
-  );
-  u.searchParams.set("nextpage", nextpage);
-  return u.toString();
-}
-
 function buildInvidiousCommentsUrl(
   base: string,
   videoId: string,
@@ -77,69 +56,6 @@ function buildInvidiousCommentsUrl(
   u.searchParams.set("source", "youtube");
   if (continuation) u.searchParams.set("continuation", continuation);
   return u.toString();
-}
-
-function mapPipedComment(
-  raw: unknown,
-  pipedBase: string,
-): UnifiedComment | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  const commentId = typeof o.commentId === "string" ? o.commentId.trim() : "";
-  const author = typeof o.author === "string" ? o.author.trim() : "";
-  const text = typeof o.commentText === "string" ? o.commentText.trim() : "";
-  if (!commentId || !author || !text) return null;
-  const commentorUrl =
-    typeof o.commentorUrl === "string" ? o.commentorUrl : undefined;
-  const thumb = typeof o.thumbnail === "string" ? o.thumbnail : undefined;
-  const likeCount =
-    typeof o.likeCount === "number" && Number.isFinite(o.likeCount)
-      ? Math.max(0, Math.floor(o.likeCount))
-      : undefined;
-  const parsed = unifiedCommentSchema.safeParse({
-    commentId,
-    author,
-    authorId: channelIdFromPath(commentorUrl),
-    text,
-    publishedText:
-      typeof o.commentedTime === "string" ? o.commentedTime : undefined,
-    authorAvatarUrl: resolveInvidiousAbsoluteMediaUrl(thumb, pipedBase),
-    likeCount,
-    isPinned: o.pinned === true,
-    isHearted: o.hearted === true,
-    isVerified: o.verified === true,
-  });
-  if (!parsed.success) return null;
-  return parsed.data;
-}
-
-function mapPipedComments(
-  data: unknown,
-  pipedBase: string,
-  videoId: string,
-): VideoCommentsResult | null {
-  if (!data || typeof data !== "object") return null;
-  const o = data as Record<string, unknown>;
-  const comments: UnifiedComment[] = [];
-  if (Array.isArray(o.comments)) {
-    for (const raw of o.comments) {
-      const mapped = mapPipedComment(raw, pipedBase);
-      if (mapped) comments.push(mapped);
-    }
-  }
-  const nextpage =
-    typeof o.nextpage === "string" && o.nextpage.trim().length > 0
-      ? o.nextpage.trim()
-      : null;
-  const parsed = videoCommentsResultSchema.safeParse({
-    videoId,
-    comments,
-    disabled: o.disabled === true,
-    continuation: nextpage,
-    sourceUsed: "piped",
-  });
-  if (!parsed.success) return null;
-  return parsed.data;
 }
 
 function mapInvidiousComment(
@@ -301,7 +217,7 @@ async function fetchVideoCommentsLive(
   input: VideoCommentsInput,
   overrides?: ProxySourceOverrides,
 ): Promise<VideoCommentsResult> {
-  const { pipedBases, invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
   const errors: string[] = [];
   const continuation = input.continuation?.trim() || undefined;
 
@@ -328,25 +244,6 @@ async function fetchVideoCommentsLive(
       break;
     } catch (error) {
       recordUpstreamFailure(error, "invidious", errors, invidiousBase);
-    }
-  }
-
-  if (!resolved && input.sortBy === "top") {
-    for (const pipedBase of pipedBases) {
-      try {
-        acquireUpstreamSlot();
-        const url = continuation
-          ? buildPipedCommentsNextUrl(pipedBase, input.videoId, continuation)
-          : buildPipedCommentsUrl(pipedBase, input.videoId);
-        const json = await fetchJson(url, {
-          source: "piped",
-          baseUrl: pipedBase,
-        });
-        resolved = mapPipedComments(json, pipedBase, input.videoId);
-        break;
-      } catch (error) {
-        recordUpstreamFailure(error, "piped", errors, pipedBase);
-      }
     }
   }
 

@@ -96,8 +96,8 @@ export function looksLikeHtmlDescription(text: string): boolean {
   return /<(?:br|a|p|div|span|b|i|ul|li)\b/i.test(text);
 }
 
-/** Convert Piped / YouTube HTML descriptions to plain text for display. */
-export function normalizePipedDescription(raw: string): string {
+/** Convert an upstream's HTML video description to plain text for display. */
+export function normalizeUpstreamDescription(raw: string): string {
   let text = raw.trim();
   if (!text) return "";
 

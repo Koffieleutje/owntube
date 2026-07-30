@@ -12,53 +12,54 @@ describe("videoRouter", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.PIPED_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
   });
 
   it("returns detail query payload", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
+    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
+    // Only the /api/v1/videos call is mocked; the optional storyboard follow-up
+    // rejects and is swallowed, which is the normal path when it isn't needed.
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           videoId: "dQw4w9WgXcQ",
           title: "Title",
-          proxyUrl: "https://piped.test",
-          videoStreams: [
+          formatStreams: [
             {
-              url: "https://piped.test/videoplayback?itag=18",
-              quality: "360p",
-              videoOnly: false,
-              mimeType: "video/mp4",
+              url: "https://inv.test/videoplayback?itag=18",
+              qualityLabel: "360p",
+              type: "video/mp4",
             },
           ],
-          audioStreams: [],
+          adaptiveFormats: [],
         }),
       ),
     );
     const caller = appRouter.createCaller({ db, userId: null });
     const detail = await caller.video.detail({ videoId: "dQw4w9WgXcQ" });
     expect(detail.title).toBe("Title");
+    expect(detail.sourceUsed).toBe("invidious");
     sqlite.close();
   });
 
   it("returns comments query payload", async () => {
     const { db, sqlite } = createTestDb();
-    process.env.PIPED_BASE_URL = "https://piped.test";
+    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(
         JSON.stringify({
+          videoId: "dQw4w9WgXcQ",
           comments: [
             {
               author: "Viewer",
               commentId: "x",
-              commentText: "Hello",
-              commentedTime: "now",
+              content: "Hello",
+              publishedText: "now",
             },
           ],
-          disabled: false,
-          nextpage: "",
+          commentCount: 1,
+          continuation: null,
         }),
       ),
     );

@@ -19,8 +19,6 @@ describe("isYoutubeAvatarCdn", () => {
 
 describe("toBrowserChannelAvatarUrl", () => {
   afterEach(() => {
-    delete process.env.PIPED_BASE_URL;
-    delete process.env.PIPED_PROXY_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
   });
 
@@ -56,13 +54,11 @@ describe("toBrowserChannelAvatarUrl", () => {
 
 describe("isAllowedChannelAvatarFetchTarget", () => {
   afterEach(() => {
-    delete process.env.PIPED_BASE_URL;
-    delete process.env.PIPED_PROXY_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
   });
 
   it("allows configured upstream origins", () => {
-    process.env.PIPED_BASE_URL = "http://192.168.1.11:8091";
+    process.env.INVIDIOUS_BASE_URL = "http://192.168.1.11:8091";
     expect(
       isAllowedChannelAvatarFetchTarget(
         new URL("http://192.168.1.11:8091/avatars/x.jpg"),
@@ -71,7 +67,7 @@ describe("isAllowedChannelAvatarFetchTarget", () => {
   });
 
   it("rejects arbitrary hosts", () => {
-    process.env.PIPED_BASE_URL = "http://192.168.1.11:8091";
+    process.env.INVIDIOUS_BASE_URL = "http://192.168.1.11:8091";
     expect(
       isAllowedChannelAvatarFetchTarget(new URL("http://evil.example/x.jpg")),
     ).toBe(false);
@@ -87,8 +83,6 @@ describe("isAllowedChannelAvatarFetchTarget", () => {
 
 describe("toBrowserUpstreamImageUrl", () => {
   afterEach(() => {
-    delete process.env.PIPED_BASE_URL;
-    delete process.env.PIPED_PROXY_BASE_URL;
     delete process.env.INVIDIOUS_BASE_URL;
   });
 

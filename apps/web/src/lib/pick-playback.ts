@@ -4,7 +4,6 @@ import {
   streamLooksLikeOriginalAudio,
 } from "@/lib/audio-track-label";
 import { reorderVariantsForDefaultQuality } from "@/lib/default-playback-quality";
-import { isPipedHostedProgressiveUrl } from "@/lib/upstream-playback-catalog";
 import type { VideoDetail } from "@/server/services/proxy.types";
 
 type VideoStreamSource = VideoDetail["videoSources"][number];
@@ -315,7 +314,6 @@ function buildAllSplitVariants(
       ({ s }) =>
         keep(s) &&
         s.url &&
-        isPipedHostedProgressiveUrl(detail, s.url) &&
         streamIsVideoOnly(s) &&
         !isDashPath(s.url) &&
         !isHlsPath(s.url),
@@ -372,7 +370,6 @@ function collectMuxed(
     .map((s, i) => {
       const u = s.url;
       if (!u || isDashPath(u) || isHlsPath(u)) return null;
-      if (!isPipedHostedProgressiveUrl(detail, u)) return null;
       if (s.videoOnly) return null;
       if (streamIsVideoOnly(s)) return null;
       if (!keep(s)) return null;

@@ -2,7 +2,7 @@ import { parseRelativePublishedToUnix } from "@/lib/published-sort-key";
 import { preferHighResVideoThumbnailUrl } from "@/lib/video-thumbnail-url";
 import type { VideoStoryboard } from "@/server/services/proxy.types";
 
-/** Cache rows store the real upstream name (`piped` / `invidious`), never `"cache"`. */
+/** Cache rows store the real upstream name (`invidious`), never `"cache"`. */
 export function liveUpstreamSource(
   label: "piped" | "invidious" | "cache",
 ): "piped" | "invidious" {

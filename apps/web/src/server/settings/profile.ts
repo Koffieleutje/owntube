@@ -428,18 +428,10 @@ export function getUserProxyOverrides(
 ): ProxySourceOverrides | undefined {
   if (!userId) return undefined;
   const settings = getUserSettings(db, userId);
-  if (
-    settings.pipedBaseUrls.length === 0 &&
-    settings.invidiousBaseUrls.length === 0
-  ) {
-    return undefined;
-  }
+  if (settings.invidiousBaseUrls.length === 0) return undefined;
   return {
-    pipedBaseUrl: settings.pipedBaseUrl,
     invidiousBaseUrl: settings.invidiousBaseUrl,
-    pipedBaseUrls: settings.pipedBaseUrls,
     invidiousBaseUrls: settings.invidiousBaseUrls,
-    preferredPipedBaseUrl: settings.preferredPipedBaseUrl,
     preferredInvidiousBaseUrl: settings.preferredInvidiousBaseUrl,
   };
 }

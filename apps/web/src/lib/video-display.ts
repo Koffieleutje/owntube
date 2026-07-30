@@ -120,7 +120,7 @@ export function formatPublishedDebugTitle(
   return null;
 }
 
-/** Upstream relative date string (e.g. Invidious / Piped `publishedText`). */
+/** Upstream relative date string (e.g. Invidious `publishedText`). */
 export function formatPublishedLabel(
   publishedText: string | undefined,
   publishedAt?: number,

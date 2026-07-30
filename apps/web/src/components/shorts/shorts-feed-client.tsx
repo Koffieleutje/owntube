@@ -252,7 +252,6 @@ export function ShortsFeedClient({
                   warning: initialFeed.warning,
                   stale: initialFeed.stale,
                   upstream: initialUpstream ?? {
-                    pipedConfigured: false,
                     invidiousConfigured: false,
                     anyConfigured: false,
                   },

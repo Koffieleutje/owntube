@@ -66,17 +66,13 @@ function trendingTailCacheKey(
   excludeSubscribed: boolean,
   overrides: ReturnType<typeof getUserProxyOverrides>,
 ): string {
-  const piped = (overrides?.pipedBaseUrls ?? [overrides?.pipedBaseUrl ?? ""])
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
   const invidious = (
     overrides?.invidiousBaseUrls ?? [overrides?.invidiousBaseUrl ?? ""]
   )
     .map((url) => url.trim())
     .filter(Boolean)
     .join(",");
-  return `tail|${userId ?? "anon"}|${region}|${hideRestricted ? 1 : 0}|${excludeSubscribed ? 1 : 0}|${piped}|${invidious}`;
+  return `tail|${userId ?? "anon"}|${region}|${hideRestricted ? 1 : 0}|${excludeSubscribed ? 1 : 0}|${invidious}`;
 }
 
 /**

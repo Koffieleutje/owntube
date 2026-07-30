@@ -2,7 +2,7 @@
   "name": "web",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hosted privacy-first YouTube frontend backed by Piped and Invidious. No Google APIs.",
+  "description": "Self-hosted privacy-first YouTube frontend backed by Invidious. No Google APIs.",
   "license": "MIT",
   "homepage": "https://github.com/spookiss/owntube#readme",
   "repository": {
@@ -14,7 +14,6 @@
   },
   "keywords": [
     "youtube",
-    "piped",
     "invidious",
     "self-hosted",
     "privacy",

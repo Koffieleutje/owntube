@@ -1,7 +1,5 @@
 import { invidiousPortCollidesWithNextApp } from "@/lib/invidious-port-collision";
 import { logger } from "@/lib/logger";
-import { pipedRelatedListItems } from "@/lib/piped-related-items";
-import { pickLivePlaybackDetail } from "@/lib/upstream-playback-catalog";
 import type { AppDb } from "@/server/db/client";
 import {
   detailCacheKey,
@@ -26,10 +24,6 @@ import {
   mapInvidiousItem,
   mapInvidiousVideo,
 } from "@/server/services/proxy/mappers/invidious";
-import {
-  mapPipedItem,
-  mapPipedStream,
-} from "@/server/services/proxy/mappers/piped";
 import {
   liveUpstreamSource,
   pickInvidiousStoryboard,
@@ -168,23 +162,9 @@ function readStaleRelatedCache(
   };
 }
 
-function buildPipedStreamsUrl(base: string, videoId: string): string {
-  return new URL(
-    `/streams/${encodeURIComponent(videoId)}`,
-    `${base}/`,
-  ).toString();
-}
-
 function buildInvidiousVideosUrl(base: string, videoId: string): string {
   return new URL(
     `/api/v1/videos/${encodeURIComponent(videoId)}`,
-    `${base}/`,
-  ).toString();
-}
-
-function buildPipedRelatedUrl(base: string, videoId: string): string {
-  return new URL(
-    `/streams/${encodeURIComponent(videoId)}/related`,
     `${base}/`,
   ).toString();
 }
@@ -198,12 +178,10 @@ function buildInvidiousRelatedUrl(base: string, videoId: string): string {
 
 export type FetchVideoDetailOptions = {
   /**
-   * When true, skip the SQLite “fresh” row for this video so Invidious/Piped
-   * return a new `hlsUrl` and adaptive URLs (signed links go 404 quickly).
+   * When true, skip the SQLite “fresh” row for this video so Invidious returns
+   * a new `hlsUrl` and adaptive URLs (signed links go 404 quickly).
    */
   bypassDetailCache?: boolean;
-  /** Prefer this upstream for live HLS when both Piped and Invidious are set. */
-  preferUpstream?: VideoDetailInput["preferUpstream"];
 };
 
 export async function fetchVideoDetail(
@@ -218,13 +196,10 @@ export async function fetchVideoDetail(
     if (cached) return cached;
   }
 
-  const { pipedBases, invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
   const errors: string[] = [];
 
   let resolved: VideoDetail | null = null;
-  let pipedResolved: VideoDetail | null = null;
-  let invidiousResolved: VideoDetail | null = null;
-  const preferUpstream = opts?.preferUpstream ?? input.preferUpstream;
 
   const fetchInvidiousDetail = async (): Promise<VideoDetail | null> => {
     for (const invidiousBase of invidiousBases) {
@@ -260,45 +235,10 @@ export async function fetchVideoDetail(
     return null;
   };
 
-  // Invidious is the primary upstream (it also exclusively powers playback
-  // manifests, captions and storyboards). Piped is consulted only when
-  // Invidious yields nothing, for live-source arbitration, or when a
-  // `?upstream=piped` preference asks for it.
+  // Invidious is the only upstream: it also exclusively powers playback
+  // manifests, captions and storyboards.
   if (invidiousBases.length > 0) {
-    invidiousResolved = await fetchInvidiousDetail();
-    resolved = invidiousResolved;
-  }
-
-  const liveFromInvidious = invidiousResolved?.isLive === true;
-  const shouldConsultPiped =
-    !resolved || liveFromInvidious || preferUpstream === "piped";
-
-  if (shouldConsultPiped && pipedBases.length > 0) {
-    for (const pipedBase of pipedBases) {
-      try {
-        acquireUpstreamSlot();
-        const json = await fetchJson(
-          buildPipedStreamsUrl(pipedBase, input.videoId),
-          { source: "piped", baseUrl: pipedBase },
-        );
-        pipedResolved = mapPipedStream(json, pipedBase, input.videoId);
-        break;
-      } catch (error) {
-        recordUpstreamFailure(error, "piped", errors, pipedBase);
-      }
-    }
-    if (!resolved) {
-      resolved = pipedResolved;
-    } else if (
-      pipedResolved &&
-      (invidiousResolved?.isLive || pipedResolved.isLive)
-    ) {
-      resolved = pickLivePlaybackDetail(
-        pipedResolved,
-        invidiousResolved,
-        preferUpstream,
-      );
-    }
+    resolved = await fetchInvidiousDetail();
   }
 
   if (!resolved) {
@@ -324,21 +264,6 @@ export async function fetchVideoDetail(
     "streams",
   );
   return enriched;
-}
-
-function parseRelatedFromPiped(
-  data: unknown,
-  limit: number,
-  pipedBase: string,
-): UnifiedVideo[] {
-  const items = pipedRelatedListItems(data);
-  const videos: UnifiedVideo[] = [];
-  for (const item of items) {
-    const mapped = mapPipedItem(item, pipedBase);
-    if (mapped) videos.push(mapped);
-    if (videos.length >= limit) break;
-  }
-  return videos;
 }
 
 function parseRelatedFromInvidious(
@@ -466,7 +391,7 @@ async function fetchRelatedVideosLive(
   limit: number,
   overrides?: ProxySourceOverrides,
 ): Promise<RelatedVideosResult> {
-  const { pipedBases, invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
   const errors: string[] = [];
 
   let resolved: RelatedVideosResult | null = null;
@@ -490,47 +415,6 @@ async function fetchRelatedVideosLive(
       if (resolved.videos.length > 0) break;
     } catch (error) {
       recordUpstreamFailure(error, "invidious", errors, invidiousBase);
-    }
-  }
-
-
-  if (!resolved || resolved.videos.length === 0) {
-    for (const pipedBase of pipedBases) {
-      try {
-        acquireUpstreamSlot();
-        const json = await fetchJson(
-          buildPipedStreamsUrl(pipedBase, input.videoId),
-          { source: "piped", baseUrl: pipedBase },
-        );
-        const fromStreams = parseRelatedFromPiped(json, limit, pipedBase);
-        if (fromStreams.length > 0) {
-          resolved = relatedVideosResultSchema.parse({
-            videos: fromStreams,
-            sourceUsed: "piped",
-          });
-        }
-      } catch (error) {
-        recordUpstreamFailure(error, "piped", errors, pipedBase);
-      }
-      if (!resolved || resolved.videos.length === 0) {
-        try {
-          acquireUpstreamSlot();
-          const json = await fetchJson(
-            buildPipedRelatedUrl(pipedBase, input.videoId),
-            { emptyBodyAs: [], source: "piped", baseUrl: pipedBase },
-          );
-          const fromRelatedRoute = parseRelatedFromPiped(json, limit, pipedBase);
-          if (fromRelatedRoute.length > 0) {
-            resolved = relatedVideosResultSchema.parse({
-              videos: fromRelatedRoute,
-              sourceUsed: "piped",
-            });
-          }
-        } catch (error) {
-          recordUpstreamFailure(error, "piped", errors, pipedBase);
-        }
-      }
-      if (resolved && resolved.videos.length > 0) break;
     }
   }
 

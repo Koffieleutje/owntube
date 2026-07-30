@@ -25,7 +25,6 @@ import {
   MAX_VARIANT_FALLBACK_ATTEMPTS,
   playbackResumeStorageKey,
   shouldAutoRecoverPlaybackSource,
-  tryLiveUpstreamFallback,
   tryOneShotPlaybackRecovery,
 } from "@/components/player/player-recovery";
 import type { SponsorBlockChromeProps } from "@/components/player/player-types";
@@ -116,8 +115,6 @@ export type VideoPlayerProps = {
   sponsorBlockPrefs?: SponsorBlockPrefs;
   /** Active live HLS broadcast — live chrome, no SponsorBlock/scrub preview. */
   isLive?: boolean;
-  /** Upstream that produced the current playback URL (live fallback). */
-  playbackSourceUsed?: "piped" | "invidious";
 };
 
 /* ------------------------------- Top level ------------------------------- */
@@ -152,7 +149,6 @@ export function VideoPlayer({
   cinema,
   sponsorBlockPrefs: sponsorBlockPrefsProp,
   isLive = false,
-  playbackSourceUsed,
 }: VideoPlayerProps) {
   const playerMediaRootRef = useRef<HTMLDivElement>(null);
   // Autoplay on the full watch page only (never in the mini player or Shorts,
@@ -456,14 +452,6 @@ export function VideoPlayer({
 
   const handlePlaybackError = useCallback(() => {
     if (
-      isLive &&
-      playbackSourceUsed &&
-      tryLiveUpstreamFallback(playbackSourceUsed, videoId)
-    ) {
-      return;
-    }
-
-    if (
       effectivePayload.mode === "progressive" &&
       progressiveMobileSafe &&
       progressiveMobileSafe.length > 1
@@ -518,9 +506,7 @@ export function VideoPlayer({
   }, [
     active,
     effectivePayload.mode,
-    isLive,
     onEndedExternal,
-    playbackSourceUsed,
     progressiveMobileSafe,
     qualityIndex,
     setQualityWithResume,

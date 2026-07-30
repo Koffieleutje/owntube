@@ -26,9 +26,7 @@ export const videoRouter = router({
     .query(async ({ ctx, input }) => {
       const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       try {
-        return await fetchVideoDetail(ctx.db, input, overrides, {
-          preferUpstream: input.preferUpstream,
-        });
+        return await fetchVideoDetail(ctx.db, input, overrides);
       } catch (e) {
         if (e instanceof UpstreamAgeRestrictedError) {
           throw new TRPCError({

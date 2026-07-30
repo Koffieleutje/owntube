@@ -73,12 +73,6 @@ function shortsPoolCacheKey(
   userId: number,
   opts: { pageSize: number; region: string; overrides?: ProxySourceOverrides },
 ): string {
-  const piped = (
-    opts.overrides?.pipedBaseUrls ?? [opts.overrides?.pipedBaseUrl ?? ""]
-  )
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
   const invidious = (
     opts.overrides?.invidiousBaseUrls ?? [
       opts.overrides?.invidiousBaseUrl ?? "",
@@ -92,7 +86,7 @@ function shortsPoolCacheKey(
   // short. Hard-window seen filtering happens downstream
   // (`fetchShortsFeedForViewer`); the soft band (45–90d) only changes daily,
   // so baking its penalty into the cached pool is safe.
-  return `shorts|${userId}|${opts.region}|${opts.pageSize}|${piped}|${invidious}`;
+  return `shorts|${userId}|${opts.region}|${opts.pageSize}|${invidious}`;
 }
 
 function sliceShortsPool(

@@ -57,11 +57,7 @@ export function collectInvidiousOrigins(): string[] {
 /** Origins allowed for `/channel-avatar` upstream fetches (server-side). */
 export function collectAllowedChannelAvatarOrigins(): string[] {
   const out = new Set<string>();
-  for (const raw of [
-    process.env.PIPED_BASE_URL,
-    process.env.PIPED_PROXY_BASE_URL,
-    process.env.INVIDIOUS_BASE_URL,
-  ]) {
+  for (const raw of [process.env.INVIDIOUS_BASE_URL]) {
     const base = normalizeUpstreamBaseUrl(raw);
     if (!base) continue;
     try {
@@ -95,7 +91,7 @@ export function isAllowedChannelAvatarFetchTarget(url: URL): boolean {
 
 /**
  * Same-origin `/invidious/…` path only when the URL belongs to the configured
- * Invidious instance (not Piped proxy `/vi/` on another origin).
+ * Invidious instance (not a `/vi/` proxy on another origin).
  */
 export function invidiousUpstreamProxyPath(
   resolvedUrl: string,

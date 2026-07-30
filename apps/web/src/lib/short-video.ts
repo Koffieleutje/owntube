@@ -6,7 +6,7 @@ export const MAX_SHORT_DURATION_SECONDS = 60;
 /** Slightly looser cap for upstream discovery when metadata is sparse or a few seconds over 60. */
 export const DISCOVERY_SHORT_MAX_DURATION_SECONDS = 90;
 
-/** Piped often sends `duration: -1` when length is unknown — treat as missing, not “zero seconds”. */
+/** Upstreams sometimes send `0`/`-1` when length is unknown — treat as missing, not “zero seconds”. */
 export function hasKnownPositiveDuration(
   seconds: number | undefined,
 ): seconds is number {
@@ -24,21 +24,6 @@ export function isStrictShortVideo(video: UnifiedVideo): boolean {
     return d <= MAX_SHORT_DURATION_SECONDS;
   }
   return titleHasShortsTag(video.title);
-}
-
-export function pipedItemIsStrictShort(item: unknown): boolean {
-  if (!item || typeof item !== "object") return false;
-  const o = item as Record<string, unknown>;
-  if (o.isShort === true) return true;
-  const duration =
-    typeof o.duration === "number" && Number.isFinite(o.duration)
-      ? o.duration
-      : undefined;
-  if (hasKnownPositiveDuration(duration)) {
-    return duration <= MAX_SHORT_DURATION_SECONDS;
-  }
-  const title = typeof o.title === "string" ? o.title : "";
-  return titleHasShortsTag(title);
 }
 
 export function invidiousItemIsStrictShort(item: unknown): boolean {
@@ -64,22 +49,6 @@ export function isDiscoveryShortVideo(video: UnifiedVideo): boolean {
     return d <= DISCOVERY_SHORT_MAX_DURATION_SECONDS;
   }
   return titleHasShortsTag(video.title);
-}
-
-export function pipedItemIsDiscoveryShort(item: unknown): boolean {
-  if (pipedItemIsStrictShort(item)) return true;
-  if (!item || typeof item !== "object") return false;
-  const o = item as Record<string, unknown>;
-  if (o.isShort === true) return true;
-  const duration =
-    typeof o.duration === "number" && Number.isFinite(o.duration)
-      ? o.duration
-      : undefined;
-  if (hasKnownPositiveDuration(duration)) {
-    return duration <= DISCOVERY_SHORT_MAX_DURATION_SECONDS;
-  }
-  const title = typeof o.title === "string" ? o.title : "";
-  return titleHasShortsTag(title);
 }
 
 export function invidiousItemIsDiscoveryShort(item: unknown): boolean {

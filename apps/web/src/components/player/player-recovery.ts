@@ -1,7 +1,5 @@
 "use client";
 
-import { alternateLiveUpstream } from "@/lib/upstream-playback-catalog";
-
 export function shouldAutoRecoverPlaybackSource(src: string): boolean {
   if (src.includes("/videoplayback")) return true;
   return (
@@ -18,27 +16,6 @@ export const MAX_VARIANT_FALLBACK_ATTEMPTS = 8;
 export function playbackResumeStorageKey(): string {
   if (typeof window === "undefined") return "ot:playback-resume:";
   return `ot:playback-resume:${window.location.pathname}`;
-}
-
-export function tryLiveUpstreamFallback(
-  currentSource: "piped" | "invidious",
-  videoId: string,
-): boolean {
-  if (typeof window === "undefined") return false;
-  const alternate = alternateLiveUpstream(currentSource);
-  if (!alternate) return false;
-  try {
-    const storageKey = `ot:live-upstream-fallback:${videoId}`;
-    if (window.sessionStorage.getItem(storageKey)) return false;
-    window.sessionStorage.setItem(storageKey, alternate);
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.set("upstream", alternate);
-    nextUrl.searchParams.delete("_pr");
-    window.location.assign(nextUrl.toString());
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function tryOneShotPlaybackRecovery(
