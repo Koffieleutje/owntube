@@ -1,20 +1,10 @@
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import { mediaCorsPreflight, withMediaCors } from "@/lib/media-cors";
 import { normalizeUpstreamBaseUrl } from "@/lib/upstream-base-url";
+import { companionInternalBase } from "@/server/services/companion";
 
 function invidiousUpstreamBase(): string {
   return normalizeUpstreamBaseUrl(process.env.INVIDIOUS_BASE_URL);
-}
-
-/**
- * Public base carrying invidious-companion under `/companion` — the same one
- * `/dash` uses for its manifest fallback. The companion has no dedicated
- * internal env var here, and its caption tracks are listed with paths that
- * already include its configured `base_path`, so joining them to this base is
- * all that's needed.
- */
-function companionBase(): string {
-  return (process.env.INVIDIOUS_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
 }
 
 /**
@@ -106,19 +96,18 @@ function pickCompanionTrack(
 }
 
 /**
- * Fallback for when Invidious can't produce a usable track: ask
- * invidious-companion directly. Invidious fetches `timedtext` from its own IP,
- * which Google intermittently blocks (see `looksLikeUsableVtt`) — the companion
- * fetches with a po_token and isn't blocked, so it routinely holds the exact
- * track Invidious just failed to return. Two hops: list the tracks, then fetch
- * the matching one's URL.
+ * Ask invidious-companion directly — the primary source. Invidious fetches
+ * `timedtext` from its own IP, which Google intermittently blocks (see
+ * `looksLikeUsableVtt`); the companion fetches with a po_token and isn't
+ * blocked, so it holds tracks Invidious cannot return. Two hops: list the
+ * tracks, then fetch the matching one's URL.
  */
 async function fetchCaptionsVttFromCompanion(
   videoId: string,
   label?: string,
   lang?: string,
 ): Promise<string | null> {
-  const base = companionBase();
+  const base = companionInternalBase();
   if (!base) return null;
   try {
     const listUrl = new URL(
@@ -156,10 +145,10 @@ async function fetchCaptionsVttFromCompanion(
 
 /**
  * Subtitle proxy: `/captions/{videoId}?label=…` (or `?lang=…`), on the media
- * origin (see media-origin.ts). Fetches the WebVTT track from Invidious,
- * rejects the intermittent Google block page, falls back to invidious-companion,
- * caches good results, and serves `text/vtt` with CORS so a
- * `<track crossorigin>` can attach it. Returns 404 (not garbage) when
+ * origin (see media-origin.ts). Fetches the WebVTT track from
+ * invidious-companion, falls back to Invidious, rejects the intermittent Google
+ * block page either way, caches good results, and serves `text/vtt` with CORS so
+ * a `<track crossorigin>` can attach it. Returns 404 (not garbage) when
  * unavailable from both.
  */
 export async function GET(
@@ -200,9 +189,15 @@ async function handleGET(
     return vttResponse(hit.vtt);
   }
 
-  // Call Invidious's public caption API; it owns the routing (a caption-capable
-  // instance redirects to its companion, which fetches the track with a
-  // po_token). `fetch` follows that redirect transparently.
+  // Companion first. It is the source that actually works: it fetches the track
+  // with a po_token, so it is not subject to the Google timedtext IP block that
+  // makes Invidious's own fetch fail intermittently. Going here first also skips
+  // the Invidious retry/backoff below, which cost 3-5s on every affected track,
+  // and removes the fork-patched Invidious redirect from the hot path — that
+  // patch has been silently lost by a rebuild before.
+  //
+  // Invidious stays as the fallback: it is still correct when it works, and this
+  // keeps captions alive if the companion is the thing that's down.
   const upstream = new URL(
     `api/v1/captions/${encodeURIComponent(videoId)}`,
     `${inv}/`,
@@ -211,8 +206,8 @@ async function handleGET(
   if (lang) upstream.searchParams.set("lang", lang);
 
   const vtt =
-    (await fetchCaptionsVtt(upstream)) ??
-    (await fetchCaptionsVttFromCompanion(videoId, label, lang));
+    (await fetchCaptionsVttFromCompanion(videoId, label, lang)) ??
+    (await fetchCaptionsVtt(upstream));
   if (vtt === null) {
     return new Response("captions unavailable", { status: 404 });
   }

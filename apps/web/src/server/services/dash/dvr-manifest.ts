@@ -16,14 +16,15 @@
  * becomes invisible: a tab paused for hours resumes fine.
  */
 
+import {
+  companionInternalBase,
+  toInternalCompanionUrl,
+} from "@/server/services/companion";
+
 const COMPANION_MANIFEST_TTL_MS = 60_000;
 
 type CachedManifest = { at: number; mpd: string };
 const manifestCache = new Map<string, CachedManifest>();
-
-function companionBase(): string {
-  return (process.env.INVIDIOUS_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
-}
 
 /**
  * The companion intermittently fails to build a DVR manifest (it re-fetches the
@@ -36,7 +37,9 @@ const MANIFEST_ATTEMPTS = 3;
 async function fetchFreshCompanionManifest(
   videoId: string,
 ): Promise<string | null> {
-  const base = companionBase();
+  // Fetched internally; the manifest we ask for still uses `local=true` so its
+  // segment URLs go through the companion proxy rather than googlevideo.
+  const base = companionInternalBase();
   if (!base) return null;
   const url = `${base}/companion/api/manifest/dash/id/${encodeURIComponent(videoId)}?local=true`;
   for (let i = 0; i < MANIFEST_ATTEMPTS; i++) {
@@ -63,9 +66,10 @@ async function fetchFreshCompanionManifest(
 
 /**
  * Fetch invidious-companion's own DASH manifest, with `local=true` so segment
- * URLs point at the companion proxy (CORS-open) rather than googlevideo directly
- * (which the browser can't fetch). Built from the PUBLIC base because the URLs
- * inside must be reachable by the browser too, not just by this server.
+ * URLs point at the companion proxy rather than googlevideo directly. Fetched
+ * from the INTERNAL base: nothing in this manifest is handed to the browser —
+ * `rewriteDvrManifestSegmentUrls` replaces every segment URL with a `/dvr/...`
+ * path first — so only this server needs to reach it.
  *
  * Cached briefly so a play doesn't re-fetch it per segment. When a refresh fails
  * the previous copy is served anyway: it's past its TTL but its URLs stay valid
@@ -197,9 +201,14 @@ export async function resolveDvrSegmentUrl(
     if (/\bid="([^"]+)"/.exec(m[1])?.[1] !== repId) continue;
     const media = /<SegmentTemplate\b[^>]*\bmedia="([^"]*)"/.exec(m[2])?.[1];
     if (!media) return { ok: false, reason: "no-representation" };
+    // The companion builds these from its own SERVER_BASE_URL, so they arrive
+    // pointing at the public origin even though we fetched the manifest
+    // internally. Only this server fetches them, so send it internally too.
     return {
       ok: true,
-      url: decodeXmlEntities(media).replaceAll("$Number$", sq),
+      url: toInternalCompanionUrl(
+        decodeXmlEntities(media).replaceAll("$Number$", sq),
+      ),
     };
   }
   return { ok: false, reason: "no-representation" };
