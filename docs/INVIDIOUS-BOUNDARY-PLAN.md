@@ -1,6 +1,7 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: **Phases 0-2 shipped, Phases 3-5 outstanding.** Last updated 2026-07-30.
+Status: **Phases 0-2 and 3.1 shipped; 3.2-3.7, 4 and 5 outstanding.** Last
+updated 2026-07-30.
 
 | phase | state | commits |
 |---|---|---|
@@ -9,7 +10,8 @@ Status: **Phases 0-2 shipped, Phases 3-5 outstanding.** Last updated 2026-07-30.
 | 1b(a) — collapse `sourceUsed` unions | **done** | `590a02e` |
 | 1b(b) — remove per-account overrides | **done** | `fd9ac84` (+293 / −945, 47 files) |
 | 2 — companion direct + internal | **done** | `ad8504f`, `6c2c9e3` |
-| 3 — close data gaps upstream | **not started** | — |
+| 3.1 — `audioTrack` upstream | **done** | `71fa2f4`, `8181c80` + Invidious `94911a03` |
+| 3.2-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
 | 5 — restructure media routes | **not started** | — |
 
@@ -117,6 +119,8 @@ phases will be debugging blind.
       - `adaptiveFormats` entries carry `init` + `index` byte ranges
       - trending items have non-zero `lengthSeconds`
       - a known video id still resolves with streams
+      - `adaptiveFormats[].audioTrack` is present on a multi-language video
+        (added with Phase 3.1, which deleted the fallback that hid its absence)
       Each of these was broken at some point and found only by accident. This
       catches upstream *behaviour* drift, which the provenance check cannot see.
 - [ ] **Record the contract** (still outstanding). `proxy.types.ts` is already the schema; add a short
@@ -257,11 +261,71 @@ counts — `videos` 14, `channels` 10, `manifest` 8, `trending` 3, `search` 3,
 
 </details>
 
-## Phase 3 — Close data gaps upstream, then delete OwnTube's inference — **NEXT**
+## Phase 3 — Close data gaps upstream, then delete OwnTube's inference
 
 Each item: upstream has the data, doesn't emit it, and OwnTube guesses. Land the
 upstream change on `nedworks/integration` (and open the PR per Phase 4), then
 delete the inference behind it.
+
+### 3.1 — Audio tracks — **DONE** (`71fa2f4`, `8181c80`; Invidious `94911a03`)
+
+The upstream patch is 17 lines in `video_json.cr` (5 of data, the rest comment),
+emitting `adaptiveFormats[].audioTrack.{id,displayName,audioIsDefault}` — the
+same three fields `manifest.cr:71-74` already read to build its own DASH
+manifest. Deployed image reports `2026.07.30-94911a03`, branch
+`nedworks/integration`, 6 patches carried.
+
+Verified against a real 24-language video (`0e3GPea1Tyg`): 24 distinct track ids,
+all named, exactly one flagged original, end to end through `video.detail` on the
+deployed stack. Single-audio videos carry no `audioTrack` at all, which is
+correct rather than a gap — there is no second track to distinguish — so no
+fallback was kept.
+
+`8181c80` adds an `audioTracks` canary check. That is not optional here: with the
+scraping deleted, `audioTrack` is the *only* source of audio-language data, so
+losing it (dropped patch, or YouTube withdrawing the field) would be silent.
+Canary is now **5 PASS + 1 KNOWN**.
+
+**Correction to the estimate below — it was wrong by more than an order of
+magnitude.** The claim was "~5 lines upstream deletes ~300 lines of the most
+fragile code". Measured: ~96 lines of genuine inference deleted
+(`languageFromGoogleVideoUrl` 33, `inferLanguageFromTrackId` 16, the `xtags`
+branch of `streamLooksLikeOriginalAudio` ~14, the mapper's six fallback shapes
+~33), against ~73 lines added for correct localised labelling — **net −23 lines
+of production code**, −73 including tests.
+
+The error was treating all 257 lines of `audio-track-label.ts` as inference. Most
+of it is *presentation* — `Intl.DisplayNames` lookups, label composition — which
+belongs in OwnTube and had to stay: upstream `displayName` is always English,
+while these labels are localised. Only the URL parsing was inference. Phase 3's
+"measure success as lines of inference deleted" is the right metric; the
+line-count *forecast* for this item was not.
+
+The value delivered is real but is not line count:
+- **No silent failure mode.** The deleted code guessed at undocumented
+  googlevideo query strings; what replaces it reads a field upstream already
+  parses, guarded by a canary.
+- **Two bugs fixed, both found by feeding real upstream data through the
+  existing labeller** rather than by reading it:
+  1. Audio rows were keyed on the *primary* language subtag, so `zh-Hans` and
+     `zh-Hant` collapsed into one "Chinese" row and one of the two dubs was
+     **unreachable in the picker**. Now keyed on the full tag, and named
+     "Simplified Chinese" / "Traditional Chinese". Pre-existing — the old
+     `xtags` path also reduced to `zh`.
+  2. Appending upstream `displayName` unconditionally produced "English (English
+     (US) original)" and "Chinese (Chinese (Simplified))" as soon as the fields
+     arrived, and *already* produced "French (French [131k])" for DASH manifest
+     labels. It is now appended only when its words add something the resolved
+     language name does not, so "Commentary" survives and restatements don't.
+- **`qualityLabel` guessing is gone.** The old last-resort branch invented a
+  track *name* from a quality string, so a track could be labelled "medium".
+
+Worth noting for 3.2-3.7: the general lesson is that closing a data gap is not
+purely subtractive. Inference deleted, presentation kept, and the *new* data will
+expose whatever the old guesses were papering over — budget for that rather than
+for a pure deletion.
+
+<details><summary>Original estimate (kept for the reasoning, and because it was wrong)</summary>
 
 1. **Audio tracks — highest value.** `lib/audio-track-label.ts` (257 lines)
    scrapes googlevideo query strings (`lang=`, `xtags=acont%3Doriginal%3Alang%3D…`,
@@ -271,6 +335,11 @@ delete the inference behind it.
    `video_json.cr:79-150` emits **zero** audioTrack fields. A ~5-line serialisation
    change deletes ~300 lines of the most fragile code in OwnTube. Today, an `xtags`
    format change breaks audio labelling silently.
+
+</details>
+
+### 3.2-3.7 — remaining gaps
+
 2. **Trending/list serialiser is wrong, not just sparse.** Measured: 15/15 trending
    items report `lengthSeconds: 0` **and** `liveNow: false`, while
    `/api/v1/videos` reports `liveNow: true` for the same ids. Fix upstream.
@@ -376,8 +445,8 @@ clients — needs a compatibility alias during rollout.
 
 Phases 0, 1 and 2 are done. Remaining, in order:
 
-1. **Phase 3.1 — `audioTrack` upstream.** The highest-value item left: ~5 lines in
-   `video_json.cr` deletes ~300 lines of the most fragile code in OwnTube.
+1. ~~Phase 3.1 — `audioTrack` upstream.~~ **Done** — see Phase 3.1 above,
+   including a correction to this item's line-count forecast.
 2. **Phase 3.2 — the trending list serialiser** (`lengthSeconds` / `liveNow`).
    This is the canary's one acknowledged `KNOWN` failure; fixing it upstream lets
    the entry be removed from `UPSTREAM_CHECK_KNOWN_FAILING`, which locks it in.
@@ -392,6 +461,22 @@ Phases 0, 1 and 2 are done. Remaining, in order:
    permanent rebase set.
 
 ## Open items and honest gaps
+
+**Found broken on 2026-07-30, during Phase 3.1 — the canary was not running.**
+The `owntube-upstream-canary` service had been **commented out** in
+`/var/data/config/owntube/docker-compose.yml`, and its container had exited
+(137) hours earlier. So for some unknown window, the guard this plan calls "the
+strategy's safety net" was silently absent — the same failure *shape* as the July
+23 incident it exists to catch: the mechanism was fine, it just wasn't running,
+and nothing said so. Restored (with a timestamped `.bak-*` first) and verified
+reporting 5 PASS + 1 KNOWN.
+
+Worth drawing the obvious conclusion: a canary that can be switched off without
+anything noticing is only half a guard. It has no external heartbeat — nothing
+asserts *that it ran*, only what it found when it did. If this recurs, the fix is
+a dead-man's check (last-success timestamp somewhere observable), not more
+assertions inside the canary. Left undone deliberately; noting it so the gap is
+on the record rather than rediscovered.
 
 **Never verified, still outstanding from the DVR work:**
 - **iPad Safari playback of a post-live-DVR video.** The original goal. The test
