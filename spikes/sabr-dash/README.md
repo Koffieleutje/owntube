@@ -75,7 +75,9 @@ server returns empty responses forever:
 Established about it:
 
 - **Not our fork.** Stock `googlevideo@4.1.1` fails identically at the same point.
-- **Not attestation.** A po_token is attached, bound either way.
+- **Not a missing po_token.** One is attached, bound either way — though see the
+  root cause below: the server *escalates* the attestation requirement mid-stream,
+  and re-minting on that signal does not clear it.
 - **Not the client.** WEB / ANDROID / IOS / TV / ANDROID_VR all stall the same.
 - **Not fixed by restarting.** Reopening a session at the stall point (using the
   seek patch) yields exactly one more segment, then stalls again — 13 passes,
@@ -84,12 +86,63 @@ Established about it:
   `nextRequestPolicy.backoffTimeMs` on every retry, the way yt-dlp's
   `_check_vod_ad_wait` does, changes nothing; the server sends no new policy at
   the stall.
-- **yt-dlp downloads the same video completely** (75 MB), so it is solvable —
-  something in its `processor` handling (consumed ranges, `sabr_contexts_to_send`
-  round-tripping) that `SabrStream` does not do.
+- **yt-dlp downloads the same video completely** (75 MB), so it is solvable.
+
+### Root cause
+
+googlevideo drops unknown UMP parts silently — the dispatcher is
+`if (handler) handler(part)` with no `else` — so the interesting half of the
+server's answer was invisible. Logging every part received makes the stall
+response identical on every retry:
+
+```
+STALL DIAGNOSTIC: protectionStatus=2 parts=[47,58,52,53,35]
+```
+
+Decoded against yt-dlp's `UMPPartId`:
+
+| id | part | googlevideo |
+|---|---|---|
+| 47 | `PLAYBACK_START_POLICY` | **ignored** |
+| **58** | **`STREAM_PROTECTION_STATUS`** | handled → **status 2** |
+| 52 | `REQUEST_IDENTIFIER` | **ignored** |
+| 53 | `REQUEST_CANCELLATION_POLICY` | **ignored** |
+| 35 | `NEXT_REQUEST_POLICY` | handled |
+
+No media, no cuepoint, no `SABR_SEEK`, no redirect. **The server escalates
+attestation mid-stream**: a session that has been served happily for 57s is told
+its protection status is now 2, and `SabrStream` treats that as fatal
+(`status >= 2` with no media part → throw).
+
+What does **not** clear it: re-minting a fresh po_token on the escalation signal
+(tried, forced past the cache, both bindings), and no client avoids it — WEB,
+ANDROID, IOS, TV and ANDROID_VR all stop at the same 57s.
+
+The remaining asymmetry with yt-dlp is that **it handles 13 UMP parts googlevideo
+ignores**, three of which are in the very response that stalls us
+(`PLAYBACK_START_POLICY`, `REQUEST_IDENTIFIER`, `REQUEST_CANCELLATION_POLICY`):
+
+```
+ALLOWED_CACHED_FORMATS  CUEPOINT_LIST  LIVE_METADATA  PAUSE_BW_SAMPLING_HINT
+PLAYBACK_START_POLICY   PREWARM_CONNECTION  REQUEST_CANCELLATION_POLICY
+REQUEST_IDENTIFIER      REQUEST_PIPELINING  SABR_SEEK  SELECTABLE_FORMATS
+SNACKBAR_MESSAGE        START_BW_SAMPLING_HINT
+```
+
+A client that never acknowledges request identity or cancellation state
+plausibly reads as unattested once the server decides to escalate. That is a
+hypothesis, not a demonstrated cause — but it is the only structural difference
+left between us and an implementation that succeeds on this exact video.
+
+### Next step
+
+Implement handlers for those parts and echo their state back in the following
+request, mirroring yt-dlp's processor. That is a targeted change to one known
+file rather than more black-box probing.
 
 So the converter is proven on short VOD and **not yet usable for long videos**.
-That is the blocker to close before wiring it into anything.
+That is the blocker to close before wiring it into anything — almost every real
+video is longer than 57s.
 
 ## What it proves
 
