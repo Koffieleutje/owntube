@@ -13,7 +13,6 @@ import {
 } from "@/server/db/schema";
 import { getChannelRssEntries } from "@/server/rss/cache";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 
 /**
  * Remote-control publisher: turns each user's local library (playlists, queue,
@@ -134,16 +133,14 @@ async function mapWithConcurrency<T, R>(
  */
 async function enrichVideoItems(
   db: AppDb,
-  userId: number,
   rows: { videoId: string; title?: string | null }[],
   appOrigin: string,
   concurrency: number,
 ): Promise<FeedItem[]> {
-  const overrides = getUserProxyOverrides(db, userId);
   const items = await mapWithConcurrency(rows, concurrency, async (r) => {
     const enc = enclosures(r.videoId, appOrigin);
     try {
-      const d = await fetchVideoDetail(db, { videoId: r.videoId }, overrides);
+      const d = await fetchVideoDetail(db, { videoId: r.videoId });
       return {
         videoId: r.videoId,
         title: d.title ?? r.title ?? r.videoId,
@@ -251,13 +248,7 @@ async function buildFeedsForUser(
       .orderBy(asc(playlistItems.position), asc(playlistItems.addedAt))
       .all();
     if (itemRows.length === 0) continue;
-    const items = await enrichVideoItems(
-      db,
-      userId,
-      itemRows,
-      appOrigin,
-      concurrency,
-    );
+    const items = await enrichVideoItems(db, itemRows, appOrigin, concurrency);
     feeds.push({
       kind: "playlist",
       slug: p(
@@ -280,13 +271,7 @@ async function buildFeedsForUser(
     .orderBy(asc(watchQueue.position))
     .all();
   if (queueRows.length > 0) {
-    const items = await enrichVideoItems(
-      db,
-      userId,
-      queueRows,
-      appOrigin,
-      concurrency,
-    );
+    const items = await enrichVideoItems(db, queueRows, appOrigin, concurrency);
     feeds.push({
       kind: "queue",
       slug: p("queue"),
@@ -307,13 +292,7 @@ async function buildFeedsForUser(
     .orderBy(desc(interactions.createdAt))
     .all();
   if (savedRows.length > 0) {
-    const items = await enrichVideoItems(
-      db,
-      userId,
-      savedRows,
-      appOrigin,
-      concurrency,
-    );
+    const items = await enrichVideoItems(db, savedRows, appOrigin, concurrency);
     feeds.push({
       kind: "saved",
       slug: p("saved"),

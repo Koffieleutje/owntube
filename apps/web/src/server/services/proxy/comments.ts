@@ -6,10 +6,7 @@ import {
   registerInFlight,
   writeCache,
 } from "@/server/services/proxy/cache";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -176,13 +173,12 @@ function readCommentsCacheRow(
 export async function fetchVideoComments(
   db: AppDb,
   input: VideoCommentsInput,
-  overrides?: ProxySourceOverrides,
   opts?: { cacheOnly?: boolean },
 ): Promise<VideoCommentsResult> {
   const continuationRequested = Boolean(input.continuation?.trim());
   if (continuationRequested) {
     if (opts?.cacheOnly) throw new CommentsCacheMissError();
-    return fetchVideoCommentsLive(input, overrides);
+    return fetchVideoCommentsLive(input);
   }
 
   const key = commentsCacheKey(input.videoId, input.sortBy);
@@ -202,7 +198,7 @@ export async function fetchVideoComments(
   const inFlight = inFlightComments.get(key);
   if (inFlight) return inFlight;
   const task = (async () => {
-    const live = await fetchVideoCommentsLive(input, overrides);
+    const live = await fetchVideoCommentsLive(input);
     writeCache(db, key, liveUpstreamSource(live.sourceUsed), live, "comments");
     return live;
   })();
@@ -215,9 +211,8 @@ export async function fetchVideoComments(
 
 async function fetchVideoCommentsLive(
   input: VideoCommentsInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<VideoCommentsResult> {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
   const continuation = input.continuation?.trim() || undefined;
 

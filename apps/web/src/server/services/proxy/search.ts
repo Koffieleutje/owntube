@@ -8,10 +8,7 @@ import {
   searchCacheKey,
   writeCache,
 } from "@/server/services/proxy/cache";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -133,7 +130,6 @@ export function clearSearchInFlight(): void {
 export async function searchVideos(
   db: AppDb,
   input: SearchVideosInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<SearchVideosResult> {
   const key = searchCacheKey(input);
 
@@ -142,7 +138,7 @@ export async function searchVideos(
 
   const inFlight = inFlightSearch.get(key);
   if (inFlight) return inFlight;
-  const task = searchVideosLive(db, input, key, overrides);
+  const task = searchVideosLive(db, input, key);
   registerInFlight(inFlightSearch, key, task);
 
   // Serve-stale-and-revalidate: an expired row answers instantly while the
@@ -156,12 +152,11 @@ async function searchVideosLive(
   db: AppDb,
   input: SearchVideosInput,
   key: string,
-  overrides?: ProxySourceOverrides,
 ): Promise<SearchVideosResult> {
   const parsedInput = input;
   const limit = parsedInput.limit ?? 20;
 
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
 
   const errors: string[] = [];
 

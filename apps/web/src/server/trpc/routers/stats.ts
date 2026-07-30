@@ -6,7 +6,6 @@ import {
 } from "@/server/recommendation/engine";
 import { fetchChannelPage } from "@/server/services/proxy";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
@@ -78,15 +77,12 @@ export const statsRouter = router({
       .orderBy(sql`count(*) desc`)
       .limit(8)
       .all();
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     const topChannels = await Promise.all(
       topChannelsRaw.map(async (row) => {
         try {
-          const channel = await fetchChannelPage(
-            ctx.db,
-            { channelId: row.channelId },
-            overrides,
-          );
+          const channel = await fetchChannelPage(ctx.db, {
+            channelId: row.channelId,
+          });
           return { ...row, channelName: channel.name ?? row.channelId };
         } catch {
           return { ...row, channelName: row.channelId };
@@ -121,12 +117,10 @@ export const statsRouter = router({
   algorithmInsights: protectedProcedure.query(async ({ ctx }) => {
     const settings = getUserSettings(ctx.db, ctx.userId);
     const region = normalizeTrendingRegionStored(settings.trendingRegion);
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     let insights = EMPTY_INSIGHTS;
     try {
       insights = await getRecommendationInsights(ctx.db, ctx.userId, {
         region,
-        overrides,
       });
     } catch {
       // Upstream may be momentarily unavailable; the page still renders keywords

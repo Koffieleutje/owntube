@@ -10,7 +10,6 @@ import {
   generateMpd,
 } from "@/server/services/dash/generate";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { createCaller } from "@/server/trpc/caller";
 
 /**
@@ -40,11 +39,7 @@ async function recordPlay(request: Request, videoId: string): Promise<void> {
     const db = getDb();
     // channelId is required by the history event; the detail is already cached
     // from the same upstream fetch the manifest used.
-    const detail = await fetchVideoDetail(
-      db,
-      { videoId },
-      getUserProxyOverrides(db, null),
-    );
+    const detail = await fetchVideoDetail(db, { videoId });
     if (!detail.channelId) return;
     await caller.history.upsertEvent({
       videoId,

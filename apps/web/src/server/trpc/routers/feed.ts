@@ -39,7 +39,6 @@ import {
   unifiedVideoSchema,
 } from "@/server/services/proxy.types";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
@@ -64,15 +63,8 @@ function trendingTailCacheKey(
   region: string,
   hideRestricted: boolean,
   excludeSubscribed: boolean,
-  overrides: ReturnType<typeof getUserProxyOverrides>,
 ): string {
-  const invidious = (
-    overrides?.invidiousBaseUrls ?? [overrides?.invidiousBaseUrl ?? ""]
-  )
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
-  return `tail|${userId ?? "anon"}|${region}|${hideRestricted ? 1 : 0}|${excludeSubscribed ? 1 : 0}|${invidious}`;
+  return `tail|${userId ?? "anon"}|${region}|${hideRestricted ? 1 : 0}|${excludeSubscribed ? 1 : 0}`;
 }
 
 /**
@@ -107,15 +99,10 @@ async function buildTrendingTailPoolUncached(
   db: Parameters<typeof fetchTrendingVideos>[0],
   userId: number | null,
   region: string,
-  overrides: ReturnType<typeof getUserProxyOverrides>,
   hideRestricted: boolean,
   excludeSubscribed: boolean,
 ) {
-  const trending = await fetchTrendingVideos(
-    db,
-    { region, limit: 200 },
-    overrides,
-  );
+  const trending = await fetchTrendingVideos(db, { region, limit: 200 });
   // Drop live/upcoming streams: regional trending leaks foreign 24/7 live TV
   // (e.g. news channels) that matches no interest and never ends — pure noise in
   // a personalized home tail.
@@ -193,7 +180,6 @@ async function buildTrendingTailPool(
   db: Parameters<typeof fetchTrendingVideos>[0],
   userId: number | null,
   region: string,
-  overrides: ReturnType<typeof getUserProxyOverrides>,
   hideRestricted: boolean,
   excludeSubscribed: boolean,
 ) {
@@ -202,7 +188,6 @@ async function buildTrendingTailPool(
     region,
     hideRestricted,
     excludeSubscribed,
-    overrides,
   );
   const now = Date.now();
   const cached = trendingTailPoolCache.get(cacheKey);
@@ -220,7 +205,6 @@ async function buildTrendingTailPool(
       db,
       userId,
       region,
-      overrides,
       hideRestricted,
       excludeSubscribed,
     );
@@ -291,7 +275,6 @@ type HomeFeedDb = Parameters<typeof getPersonalizedFeedVideos>[0];
 type HomeStreamOpts = {
   pageSize: number;
   region: string;
-  overrides: ReturnType<typeof getUserProxyOverrides>;
 };
 
 /** The full merged home stream (personalized recs + optional trending tail). */
@@ -309,7 +292,6 @@ async function computeHomeStream(
           db,
           userId,
           opts.region,
-          opts.overrides,
           settings.hideRestrictedVideos,
           settings.excludeSubscribedFromRecommendations,
         ),
@@ -406,7 +388,6 @@ export const feedRouter = router({
     const region = normalizeTrendingRegionStored(
       input?.region ?? savedRegion ?? "US",
     );
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     try {
       if (ctx.userId && !category) {
         // Materialized read-through: SSR prefetch is cache-only (never blocks on
@@ -414,7 +395,6 @@ export const feedRouter = router({
         const { stream, coldStart } = await getHomeStream(ctx.db, ctx.userId, {
           pageSize,
           region,
-          overrides,
           cacheOnly: ctx.prefetchCacheOnly ?? false,
         });
         const { videos, hasMore } = sliceHomeFeedStream(stream, skip, pageSize);
@@ -428,11 +408,11 @@ export const feedRouter = router({
         };
       }
       const limit = Math.min(200, skip + pageSize + pageSize);
-      const trending = await fetchTrendingVideos(
-        ctx.db,
-        { region, limit, category },
-        overrides,
-      );
+      const trending = await fetchTrendingVideos(ctx.db, {
+        region,
+        limit,
+        category,
+      });
       let pool = stripRestrictedListVideos(trending.videos);
       if (ctx.userId) {
         const settings = getUserSettings(ctx.db, ctx.userId);

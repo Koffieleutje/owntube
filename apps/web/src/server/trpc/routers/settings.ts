@@ -21,7 +21,6 @@ import {
 } from "@/server/services/upstream-health";
 import {
   appSettingsSchema,
-  getUserProxyOverrides,
   getUserSettings,
   upsertUserSettings,
 } from "@/server/settings/profile";
@@ -54,12 +53,6 @@ const settingsPatchSchema = z.object({
   homeBlocks: appSettingsSchema.shape.homeBlocks.optional(),
   bottomNav: appSettingsSchema.shape.bottomNav.optional(),
   sectionPrefs: appSettingsSchema.shape.sectionPrefs.optional(),
-});
-
-const healthCheckInputSchema = z.object({
-  invidiousBaseUrl: z.string().max(512).optional(),
-  invidiousBaseUrls: z.array(z.string().max(512)).max(8).optional(),
-  preferredInvidiousBaseUrl: z.string().max(512).optional(),
 });
 
 const exportPayloadSchema = z.object({
@@ -130,7 +123,7 @@ export const settingsRouter = router({
     const settings = getUserSettings(ctx.db, ctx.userId);
     return {
       ...settings,
-      instanceSources: getInstanceSourceInfo(settings),
+      instanceSources: getInstanceSourceInfo(),
     };
   }),
 
@@ -140,41 +133,20 @@ export const settingsRouter = router({
       upsertUserSettings(ctx.db, ctx.userId, input),
     ),
 
-  checkInstances: protectedProcedure
-    .input(healthCheckInputSchema.optional())
-    .query(async ({ ctx, input }) => {
-      const current = getUserSettings(ctx.db, ctx.userId);
-      const overrides =
-        input?.invidiousBaseUrl !== undefined ||
-        input?.invidiousBaseUrls !== undefined
-          ? {
-              invidiousBaseUrl:
-                input.invidiousBaseUrl ?? current.invidiousBaseUrl,
-              invidiousBaseUrls:
-                input.invidiousBaseUrls ?? current.invidiousBaseUrls,
-              preferredInvidiousBaseUrl:
-                input.preferredInvidiousBaseUrl ??
-                current.preferredInvidiousBaseUrl,
-            }
-          : getUserProxyOverrides(ctx.db, ctx.userId);
-      const { invidiousBases } = resolveProxyBaseCandidates(overrides);
-      const invidiousResults = await Promise.all(
-        invidiousBases.map((baseUrl) =>
-          checkUrl("invidious", baseUrl, `${baseUrl}/api/v1/stats`),
-        ),
-      );
-      const instanceSources = getInstanceSourceInfo({
-        invidiousBaseUrls: invidiousBases,
-        preferredInvidiousBaseUrl:
-          overrides?.preferredInvidiousBaseUrl ??
-          current.preferredInvidiousBaseUrl,
-      });
-      return {
-        invidiousOk:
-          invidiousResults.length > 0 ? invidiousResults.some(Boolean) : null,
-        instanceSources,
-      };
-    }),
+  checkInstances: protectedProcedure.query(async () => {
+    const { invidiousBases } = resolveProxyBaseCandidates();
+    const invidiousResults = await Promise.all(
+      invidiousBases.map((baseUrl) =>
+        checkUrl("invidious", baseUrl, `${baseUrl}/api/v1/stats`),
+      ),
+    );
+    const instanceSources = getInstanceSourceInfo();
+    return {
+      invidiousOk:
+        invidiousResults.length > 0 ? invidiousResults.some(Boolean) : null,
+      instanceSources,
+    };
+  }),
 
   clearCaches: protectedProcedure.mutation(({ ctx }) => {
     const proxy = clearProxyCaches(ctx.db);

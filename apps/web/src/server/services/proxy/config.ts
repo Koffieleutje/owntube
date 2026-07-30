@@ -1,8 +1,5 @@
 import { isUpstreamDisabled } from "@/lib/upstream-base-url";
-import {
-  normalizePreferredUpstreamInstance,
-  normalizeUpstreamInstanceList,
-} from "@/lib/upstream-instances";
+import { normalizeUpstreamInstanceList } from "@/lib/upstream-instances";
 import { normalizeInvidiousOutboundBase } from "@/server/services/proxy/normalize";
 import {
   orderUpstreamCandidates,
@@ -10,32 +7,22 @@ import {
   upstreamHealthSnapshot,
 } from "@/server/services/upstream-health";
 
-export type ProxySourceOverrides = {
-  invidiousBaseUrl?: string | null;
-  invidiousBaseUrls?: string[] | null;
-  preferredInvidiousBaseUrl?: string | null;
-};
-
 export type UpstreamAvailability = {
   invidiousConfigured: boolean;
   anyConfigured: boolean;
 };
 
-export function describeUpstreamAvailability(
-  overrides?: ProxySourceOverrides,
-): UpstreamAvailability {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+export function describeUpstreamAvailability(): UpstreamAvailability {
+  const { invidiousBases } = resolveProxyBaseCandidates();
   return {
     invidiousConfigured: invidiousBases.length > 0,
     anyConfigured: invidiousBases.length > 0,
   };
 }
 
-/** Resolved Invidious base (env + per-user overrides). */
-export function resolveEffectiveProxyBases(overrides?: ProxySourceOverrides): {
-  invidiousBase: string;
-} {
-  return resolveProxyBases(overrides);
+/** Resolved Invidious base. */
+export function resolveEffectiveProxyBases(): { invidiousBase: string } {
+  return resolveProxyBases();
 }
 
 export type InstanceSourceRow = {
@@ -43,12 +30,9 @@ export type InstanceSourceRow = {
   envRaw: string | null;
   envUrl: string | null;
   envDisabled: boolean;
-  /** Per-account URL saved in Settings (empty = not overriding). */
-  profileOverride: string | null;
   /** URL OwnTube actually uses. */
   effectiveUrl: string | null;
   urls: string[];
-  preferredUrl: string | null;
   health: UpstreamHealthSnapshot[];
 };
 
@@ -59,10 +43,6 @@ export type InstanceSourceInfo = {
 function readEnvInvidiousRaw(): string | null {
   const raw = process.env.INVIDIOUS_BASE_URL?.trim();
   return raw || null;
-}
-
-function readEnvInvidiousUrl(): string | null {
-  return readEnvInvidiousUrls()[0] ?? null;
 }
 
 function splitConfiguredUrls(raw: string | null): string[] {
@@ -79,41 +59,22 @@ function readEnvInvidiousUrls(): string[] {
   ).map(normalizeInvidiousOutboundBase);
 }
 
-/** Server env + optional profile overrides — for Settings display. */
-export function getInstanceSourceInfo(profile?: {
-  invidiousBaseUrl?: string;
-  invidiousBaseUrls?: string[];
-  preferredInvidiousBaseUrl?: string;
-}): InstanceSourceInfo {
-  const profileInvUrls = normalizeUpstreamInstanceList([
-    ...(profile?.invidiousBaseUrls ?? []),
-    ...(profile?.invidiousBaseUrl ? [profile.invidiousBaseUrl] : []),
-  ]).map(normalizeInvidiousOutboundBase);
-  const overrides =
-    profileInvUrls.length > 0
-      ? {
-          invidiousBaseUrls: profileInvUrls,
-          preferredInvidiousBaseUrl: profile?.preferredInvidiousBaseUrl,
-        }
-      : undefined;
-  const { invidiousBases, preferredInvidiousBase } =
-    resolveProxyBaseCandidates(overrides);
-
+/**
+ * The configured upstream, for Settings display. There are no per-account
+ * overrides: `INVIDIOUS_BASE_URL` in the server environment is the only source
+ * (it may list several instances, whitespace/comma separated).
+ */
+export function getInstanceSourceInfo(): InstanceSourceInfo {
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const invEnvRaw = readEnvInvidiousRaw();
-
+  const configured = invEnvRaw && !isUpstreamDisabled(invEnvRaw);
   return {
     invidious: {
       envRaw: invEnvRaw,
-      envUrl:
-        invEnvRaw && !isUpstreamDisabled(invEnvRaw)
-          ? readEnvInvidiousUrl()
-          : null,
+      envUrl: configured ? (readEnvInvidiousUrls()[0] ?? null) : null,
       envDisabled: Boolean(invEnvRaw && isUpstreamDisabled(invEnvRaw)),
-      profileOverride:
-        profileInvUrls.length > 0 ? profileInvUrls.join(", ") : null,
       effectiveUrl: invidiousBases[0] ?? null,
       urls: invidiousBases,
-      preferredUrl: preferredInvidiousBase ?? null,
       health: invidiousBases.map((url) =>
         upstreamHealthSnapshot("invidious", url),
       ),
@@ -121,38 +82,16 @@ export function getInstanceSourceInfo(profile?: {
   };
 }
 
-export function resolveProxyBaseCandidates(overrides?: ProxySourceOverrides): {
-  invidiousBases: string[];
-  preferredInvidiousBase?: string;
-} {
-  const rawInvidious =
-    overrides?.invidiousBaseUrls && overrides.invidiousBaseUrls.length > 0
-      ? overrides.invidiousBaseUrls
-      : overrides?.invidiousBaseUrl !== undefined
-        ? [overrides.invidiousBaseUrl ?? ""]
-        : readEnvInvidiousUrls();
-
-  const invidiousBases = normalizeUpstreamInstanceList(rawInvidious).map(
-    normalizeInvidiousOutboundBase,
-  );
-  const preferredInvidiousBase = normalizePreferredUpstreamInstance(
-    overrides?.preferredInvidiousBaseUrl ?? undefined,
-    invidiousBases,
-  );
-
+export function resolveProxyBaseCandidates(): { invidiousBases: string[] } {
   return {
     invidiousBases: orderUpstreamCandidates(
       "invidious",
-      invidiousBases,
-      preferredInvidiousBase,
+      readEnvInvidiousUrls(),
     ),
-    preferredInvidiousBase,
   };
 }
 
-export function resolveProxyBases(overrides?: ProxySourceOverrides): {
-  invidiousBase: string;
-} {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+export function resolveProxyBases(): { invidiousBase: string } {
+  const { invidiousBases } = resolveProxyBaseCandidates();
   return { invidiousBase: invidiousBases[0] ?? "" };
 }

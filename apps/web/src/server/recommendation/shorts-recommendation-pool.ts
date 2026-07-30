@@ -43,7 +43,6 @@ import {
 } from "@/server/recommendation/tfidf";
 import type { ScoredVideo } from "@/server/recommendation/types";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
-import type { ProxySourceOverrides } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 import { getUserSettings } from "@/server/settings/profile";
 
@@ -71,22 +70,14 @@ const shortsPoolInFlight = new Map<string, Promise<ShortsPoolCacheEntry>>();
 
 function shortsPoolCacheKey(
   userId: number,
-  opts: { pageSize: number; region: string; overrides?: ProxySourceOverrides },
+  opts: { pageSize: number; region: string },
 ): string {
-  const invidious = (
-    opts.overrides?.invidiousBaseUrls ?? [
-      opts.overrides?.invidiousBaseUrl ?? "",
-    ]
-  )
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
   // `shorts seen` is deliberately NOT part of the key: it grows on every scroll
   // and would bust the 90s cache (forcing a full channel-tab refetch) on each
   // short. Hard-window seen filtering happens downstream
   // (`fetchShortsFeedForViewer`); the soft band (45–90d) only changes daily,
   // so baking its penalty into the cached pool is safe.
-  return `shorts|${userId}|${opts.region}|${opts.pageSize}|${invidious}`;
+  return `shorts|${userId}|${opts.region}|${opts.pageSize}`;
 }
 
 function sliceShortsPool(
@@ -129,7 +120,6 @@ export async function getShortsRecommendations(
     page: number;
     pageSize: number;
     region?: string;
-    overrides?: ProxySourceOverrides;
     additionalExcludeVideoIds?: readonly string[];
     forcePoolRefresh?: boolean;
     /** Limits channel tab fetches when building the pool (home shelf). */
@@ -140,7 +130,6 @@ export async function getShortsRecommendations(
   const cacheKey = shortsPoolCacheKey(userId, {
     pageSize: opts.pageSize,
     region,
-    overrides: opts.overrides,
   });
   const now = Date.now();
   if (opts.forcePoolRefresh) {
@@ -196,7 +185,6 @@ export async function getShortsRecommendations(
     const { tagged, recentCoverageByChannel, coldStart } =
       await collectShortsCandidates(db, userId, {
         region,
-        overrides: opts.overrides,
         signals,
         tasteDiscoveryQueries,
         blockedChannelIds: blocked,
@@ -289,7 +277,6 @@ export async function getShortsRecommendations(
         scored,
         coldStart,
         limits: SHORTS_RELATED_LIMITS,
-        overrides: opts.overrides,
         excludeVideoIds: watchedEver,
         signals,
         tasteModel,

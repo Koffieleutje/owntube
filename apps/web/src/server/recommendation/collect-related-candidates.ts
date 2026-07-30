@@ -11,10 +11,7 @@ import {
   termFrequencyVector,
 } from "@/server/recommendation/tfidf";
 import type { ScoredVideo } from "@/server/recommendation/types";
-import {
-  fetchRelatedVideos,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchRelatedVideos } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 export type RelatedSeed = { videoId: string; rawScore: number };
@@ -54,7 +51,6 @@ const DEFAULT_CONCURRENCY = 4;
 const RELATED_SEED_SCORE_BOOST = 0.06;
 
 export type CollectRelatedVideoCandidatesOpts = RelatedCollectionLimits & {
-  overrides?: ProxySourceOverrides;
   excludeVideoIds?: ReadonlySet<string>;
   /** Video ids already in the scored pool — skip duplicates. */
   excludeFromPool?: ReadonlySet<string>;
@@ -74,7 +70,6 @@ export async function collectRelatedVideoCandidates(
     maxSeeds,
     limitPerSeed,
     maxRelatedTotal,
-    overrides,
     excludeVideoIds = new Set<string>(),
     excludeFromPool = new Set<string>(),
     concurrency = DEFAULT_CONCURRENCY,
@@ -96,7 +91,6 @@ export async function collectRelatedVideoCandidates(
           db,
           { videoId: seed.videoId },
           limitPerSeed,
-          overrides,
         );
         return { seed, videos: result.videos };
       }),
@@ -132,7 +126,6 @@ export type ExpandScoredPoolWithRelatedOpts = {
   scored: ScoredVideo[];
   coldStart: boolean;
   limits: RelatedCollectionLimits;
-  overrides?: ProxySourceOverrides;
   excludeVideoIds: ReadonlySet<string>;
   signals: UserSignals;
   tasteModel: TfidfModel;
@@ -155,7 +148,6 @@ export async function expandScoredPoolWithRelatedCandidates(
     scored,
     coldStart,
     limits,
-    overrides,
     excludeVideoIds,
     signals,
     tasteModel,
@@ -180,7 +172,6 @@ export async function expandScoredPoolWithRelatedCandidates(
 
   const relatedTagged = await collectRelatedVideoCandidates(db, seeds, {
     ...limits,
-    overrides,
     excludeVideoIds,
     excludeFromPool: poolIds,
     filterVideo,

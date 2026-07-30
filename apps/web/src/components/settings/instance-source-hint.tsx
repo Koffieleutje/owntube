@@ -31,16 +31,6 @@ export function InstanceSourceHint({ row }: InstanceSourceHintProps) {
           {envLabel(row)}
         </code>
       </li>
-      {row.profileOverride ? (
-        <li>
-          <span className="font-medium text-[hsl(var(--foreground))]/80">
-            Your override:
-          </span>{" "}
-          <code className="break-all rounded bg-[hsl(var(--muted))] px-1 py-0.5 font-mono text-[11px]">
-            {row.profileOverride}
-          </code>
-        </li>
-      ) : null}
       <li>
         <span className="font-medium text-[hsl(var(--foreground))]/80">
           Effective:
@@ -49,16 +39,6 @@ export function InstanceSourceHint({ row }: InstanceSourceHintProps) {
           {row.urls.length > 0 ? row.urls.join(", ") : "not configured"}
         </code>
       </li>
-      {row.preferredUrl ? (
-        <li>
-          <span className="font-medium text-[hsl(var(--foreground))]/80">
-            Preferred:
-          </span>{" "}
-          <code className="break-all rounded bg-[hsl(var(--muted))] px-1 py-0.5 font-mono text-[11px]">
-            {row.preferredUrl}
-          </code>
-        </li>
-      ) : null}
       {row.health.map((health) => (
         <li key={`${health.source}-${health.url}`} className="space-y-0.5">
           <span className="font-medium text-[hsl(var(--foreground))]/80">

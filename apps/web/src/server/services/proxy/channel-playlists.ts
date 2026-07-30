@@ -1,8 +1,5 @@
 import { invidiousPortCollidesWithNextApp } from "@/lib/invidious-port-collision";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -100,11 +97,10 @@ function parseInvidiousPlaylistSummaries(
 }
 
 /** The channel's public YouTube playlists (first page — plenty for browsing). */
-export async function fetchChannelPlaylists(
-  input: { channelId: string },
-  overrides?: ProxySourceOverrides,
-): Promise<ChannelPlaylistsResult> {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+export async function fetchChannelPlaylists(input: {
+  channelId: string;
+}): Promise<ChannelPlaylistsResult> {
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
 
   // Invidious has a dedicated endpoint — prefer it.
@@ -134,11 +130,10 @@ export async function fetchChannelPlaylists(
 }
 
 /** A public YouTube playlist's metadata + first page of videos. */
-export async function fetchYtPlaylist(
-  input: { playlistId: string },
-  overrides?: ProxySourceOverrides,
-): Promise<YtPlaylistResult> {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+export async function fetchYtPlaylist(input: {
+  playlistId: string;
+}): Promise<YtPlaylistResult> {
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
   // Invidious sometimes serves playlist metadata with a broken (empty) video
   // list. Hold that aside and keep trying the remaining instances for a page

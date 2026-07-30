@@ -244,7 +244,6 @@ describe("searchVideos", () => {
     const d3 = await fetchVideoDetail(
       db,
       { videoId: "dQw4w9WgXcQ" },
-      undefined,
       { bypassDetailCache: true },
     );
     expect(d3.hlsUrl).toContain("c=3");

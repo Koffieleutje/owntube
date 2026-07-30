@@ -17,10 +17,7 @@ import {
   shortsFeedCacheKey,
   writeCache,
 } from "@/server/services/proxy/cache";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -162,7 +159,6 @@ function nextInvidiousShortsContinuation(
 export async function fetchShortsFeed(
   db: AppDb,
   input: ShortsFeedInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<ShortsFeedResult> {
   const region = input.region.toUpperCase();
   const limit = Math.min(40, input.limit ?? 20);
@@ -177,7 +173,7 @@ export async function fetchShortsFeed(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<ShortsFeedResult> => {
-    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates();
     const errors: string[] = [];
     let resolved: ShortsFeedResult | null = null;
 

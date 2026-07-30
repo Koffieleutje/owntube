@@ -59,7 +59,6 @@ import {
 import type { UnifiedVideo, VideoDetail } from "@/server/services/proxy.types";
 import { videoDetailInputSchema } from "@/server/services/proxy.types";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
@@ -117,10 +116,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   const db = getDb();
   const session = await auth();
   const userId = session?.user?.id ? Number.parseInt(session.user.id, 10) : NaN;
-  const overrides = getUserProxyOverrides(
-    db,
-    Number.isFinite(userId) ? userId : null,
-  );
   const h = await headers();
   const requestHost =
     h.get("x-forwarded-host")?.split(",")[0]?.trim() ?? h.get("host") ?? "";
@@ -142,7 +137,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   let ageRestricted: UpstreamAgeRestrictedError | null = null;
   let unavailable: UpstreamVideoUnavailableError | null = null;
   try {
-    detail = await fetchVideoDetail(db, input, overrides, {
+    detail = await fetchVideoDetail(db, input, {
       bypassDetailCache: true,
     });
   } catch (error) {
@@ -196,7 +191,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   ).length;
   const relatedResult =
     detail && detailRelatedCount < RELATED_SIDEBAR_TARGET
-      ? await fetchRelatedVideos(db, input, 24, overrides).catch(() => null)
+      ? await fetchRelatedVideos(db, input, 24).catch(() => null)
       : null;
 
   const applyRestrictedFilter = (videos: UnifiedVideo[]) =>
@@ -224,16 +219,10 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
             page: 1,
             pageSize: 28,
             region: feedRegion,
-            overrides,
           })
         ).videos
-      : (
-          await fetchTrendingVideos(
-            db,
-            { region: feedRegion, limit: 28 },
-            overrides,
-          )
-        ).videos;
+      : (await fetchTrendingVideos(db, { region: feedRegion, limit: 28 }))
+          .videos;
     sidebarVideos = applyRestrictedFilter(feedVideosRaw)
       .filter((v) => v.videoId !== videoId)
       .slice(0, 20);

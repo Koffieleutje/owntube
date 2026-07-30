@@ -200,7 +200,6 @@ export function TasteOnboardingClient() {
     if (!settingsQuery.data || setupInitialized.current) return;
     setupInitialized.current = true;
     setTrendingRegion(settingsQuery.data.trendingRegion ?? "US");
-    setInvidiousBaseUrl(settingsQuery.data.invidiousBaseUrl ?? "");
   }, [settingsQuery.data]);
 
   useEffect(() => {

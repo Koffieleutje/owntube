@@ -10,10 +10,7 @@ import { loadShortSeenVideoIds } from "@/server/recommendation/shorts-seen";
 import { collectUserSignals } from "@/server/recommendation/signals";
 import { readCachedDetailTitlesForVideos } from "@/server/recommendation/taste-corpus";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
-import {
-  fetchShortsFeed,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchShortsFeed } from "@/server/services/proxy";
 import type {
   ShortsFeedInput,
   ShortsFeedResult,
@@ -167,7 +164,6 @@ async function resolvePersonalizedShortsPage(
   startPage: number,
   pageSize: number,
   region: string,
-  overrides: ProxySourceOverrides | undefined,
   watchedEver: Set<string> | null,
   additionalExcludeVideoIds?: readonly string[],
   forcePoolRefresh?: boolean,
@@ -186,7 +182,6 @@ async function resolvePersonalizedShortsPage(
       page,
       pageSize,
       region,
-      overrides,
       additionalExcludeVideoIds,
       forcePoolRefresh: forcePoolRefresh && skip === 0,
     });
@@ -222,7 +217,6 @@ const ALL_SHORTS_SEEN_WARNING =
 async function fetchUnwatchedGenericShorts(
   db: AppDb,
   input: ShortsFeedInput,
-  overrides: ProxySourceOverrides | undefined,
   watchedEver: Set<string> | null,
   limit: number,
 ): Promise<ShortsFeedResult> {
@@ -241,7 +235,7 @@ async function fetchUnwatchedGenericShorts(
   for (let attempt = 0; attempt < MAX_UNWATCHED_FETCH_ATTEMPTS; attempt++) {
     let page: ShortsFeedResult;
     try {
-      page = await fetchShortsFeed(db, { ...input, continuation }, overrides);
+      page = await fetchShortsFeed(db, { ...input, continuation });
     } catch (e) {
       if (e instanceof UpstreamUnavailableError) {
         upstreamUnavailable = e;
@@ -288,7 +282,6 @@ async function fetchUnwatchedGenericShorts(
     return fetchUnwatchedGenericShorts(
       db,
       { ...input, continuation: undefined },
-      overrides,
       null,
       limit,
     );
@@ -327,7 +320,6 @@ function fetchTasteDiscoveryShorts(
   db: AppDb,
   region: string,
   discoveryQueries: string[],
-  overrides: ProxySourceOverrides | undefined,
   watchedEver: Set<string> | null,
   limit: number,
   fetchLimit: number = SHORTS_DISCOVERY_FETCH_LIMIT,
@@ -335,7 +327,6 @@ function fetchTasteDiscoveryShorts(
   return fetchUnwatchedGenericShorts(
     db,
     { region, limit: fetchLimit, discoveryQueries },
-    overrides,
     watchedEver,
     limit,
   );
@@ -349,7 +340,6 @@ async function fetchShortsShelfFeed(
   db: AppDb,
   userId: number | null,
   input: ShortsFeedInput,
-  overrides: ProxySourceOverrides | undefined,
   region: string,
   limit: number,
 ): Promise<ShortsFeedResult> {
@@ -367,7 +357,6 @@ async function fetchShortsShelfFeed(
       page: 1,
       pageSize: limit,
       region,
-      overrides,
       additionalExcludeVideoIds: input.excludeVideoIds,
       maxChannels: SHORTS_SHELF_MAX_CHANNELS,
     });
@@ -394,19 +383,15 @@ async function fetchShortsShelfFeed(
       pageIndex < SHORTS_SHELF_DISCOVERY_PAGES && videos.length < limit;
       pageIndex++
     ) {
-      const page = await fetchShortsFeed(
-        db,
-        {
-          region,
-          // Over-fetch: channel diversity (≤2/channel) and seen/watched filtering
-          // thin the result, so pull a wider pool to keep the row full.
-          limit: Math.min(40, limit * 2),
-          continuation,
-          purpose: "shelf",
-          excludeVideoIds: input.excludeVideoIds,
-        },
-        overrides,
-      );
+      const page = await fetchShortsFeed(db, {
+        region,
+        // Over-fetch: channel diversity (≤2/channel) and seen/watched filtering
+        // thin the result, so pull a wider pool to keep the row full.
+        limit: Math.min(40, limit * 2),
+        continuation,
+        purpose: "shelf",
+        excludeVideoIds: input.excludeVideoIds,
+      });
       sourceUsed = page.sourceUsed;
       warning = page.warning;
       stale = page.stale;
@@ -429,11 +414,11 @@ async function fetchShortsShelfFeed(
     // Skipped when nothing was filtered out: a refetch could not add anything.
     if (videos.length < limit && exclusionDroppedAny) {
       try {
-        const fallback = await fetchShortsFeed(
-          db,
-          { region, limit: Math.min(40, limit * 2), purpose: "shelf" },
-          overrides,
-        );
+        const fallback = await fetchShortsFeed(db, {
+          region,
+          limit: Math.min(40, limit * 2),
+          purpose: "shelf",
+        });
         const homeFeedIds = new Set(
           (input.excludeVideoIds ?? []).map((id) => id.trim()),
         );
@@ -478,7 +463,6 @@ export async function fetchShortsFeedForViewer(
   db: AppDb,
   userId: number | null,
   input: ShortsFeedInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<ShortsFeedResult> {
   const region = input.region.toUpperCase();
   const purpose = input.purpose ?? "feed";
@@ -488,7 +472,7 @@ export async function fetchShortsFeedForViewer(
       : Math.min(40, input.limit ?? SHORTS_PAGE_SIZE);
 
   if (purpose === "shelf") {
-    return fetchShortsShelfFeed(db, userId, input, overrides, region, limit);
+    return fetchShortsShelfFeed(db, userId, input, region, limit);
   }
   const forcePoolRefresh = shortsContinuationForcesPoolRefresh(
     input.continuation,
@@ -506,13 +490,7 @@ export async function fetchShortsFeedForViewer(
     !input.continuation.startsWith("rec:");
 
   if (!userId || isUpstreamContinuation) {
-    return fetchUnwatchedGenericShorts(
-      db,
-      input,
-      overrides,
-      watchedEver,
-      limit,
-    );
+    return fetchUnwatchedGenericShorts(db, input, watchedEver, limit);
   }
 
   const tasteDiscoveryQueries = await buildTasteDiscoveryQueries(
@@ -528,7 +506,6 @@ export async function fetchShortsFeedForViewer(
     startPage,
     pageSize,
     region,
-    overrides,
     watchedEver,
     input.excludeVideoIds,
     forcePoolRefresh,
@@ -545,7 +522,6 @@ export async function fetchShortsFeedForViewer(
       db,
       region,
       tasteDiscoveryQueries,
-      overrides,
       watchedEver,
       limit,
     );
@@ -580,7 +556,6 @@ export async function fetchShortsFeedForViewer(
         db,
         region,
         tasteDiscoveryQueries,
-        overrides,
         watchedEver,
         limit,
       );
@@ -606,7 +581,6 @@ export async function fetchShortsFeedForViewer(
       1,
       pageSize,
       region,
-      overrides,
       watchedEver,
       input.excludeVideoIds,
       true,
@@ -626,7 +600,6 @@ export async function fetchShortsFeedForViewer(
       db,
       region,
       tasteDiscoveryQueries,
-      overrides,
       watchedEver,
       limit,
     );
@@ -664,7 +637,6 @@ export async function fetchShortsFeedForViewer(
     1,
     pageSize,
     region,
-    overrides,
     watchedEver,
     input.excludeVideoIds,
     true,
@@ -684,7 +656,6 @@ export async function fetchShortsFeedForViewer(
     db,
     region,
     tasteDiscoveryQueries,
-    overrides,
     watchedEver,
     limit,
     limit,

@@ -10,10 +10,7 @@ import {
   writeCache,
 } from "@/server/services/proxy/cache";
 import { fetchChannelPage } from "@/server/services/proxy/channel";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   rethrowIfInvidiousUpcoming,
@@ -187,7 +184,6 @@ export type FetchVideoDetailOptions = {
 export async function fetchVideoDetail(
   db: AppDb,
   input: VideoDetailInput,
-  overrides?: ProxySourceOverrides,
   opts?: FetchVideoDetailOptions,
 ): Promise<VideoDetail> {
   const key = detailCacheKey(input);
@@ -196,7 +192,7 @@ export async function fetchVideoDetail(
     if (cached) return cached;
   }
 
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
 
   let resolved: VideoDetail | null = null;
@@ -285,13 +281,12 @@ async function relatedVideosFromSameUploader(
   db: AppDb,
   input: VideoDetailInput,
   limit: number,
-  overrides?: ProxySourceOverrides,
 ): Promise<UnifiedVideo[] | null> {
   try {
-    const detail = await fetchVideoDetail(db, input, overrides);
+    const detail = await fetchVideoDetail(db, input);
     const channelId = detail.channelId;
     if (!channelId) return null;
-    const page = await fetchChannelPage(db, { channelId }, overrides);
+    const page = await fetchChannelPage(db, { channelId });
     const list = page.videos.filter((v) => v.videoId !== input.videoId);
     if (list.length === 0) return null;
     return list.slice(0, limit);
@@ -366,7 +361,6 @@ export async function fetchRelatedVideos(
   db: AppDb,
   input: VideoDetailInput,
   limit = 20,
-  overrides?: ProxySourceOverrides,
 ): Promise<RelatedVideosResult> {
   const key = relatedCacheKey(input);
   const cached = readFreshRelatedCache(db, key);
@@ -374,7 +368,7 @@ export async function fetchRelatedVideos(
 
   const inFlight = inFlightRelated.get(key);
   if (inFlight) return inFlight;
-  const task = fetchRelatedVideosLive(db, input, key, limit, overrides);
+  const task = fetchRelatedVideosLive(db, input, key, limit);
   registerInFlight(inFlightRelated, key, task);
 
   // Serve-stale-and-revalidate: an expired row answers instantly while the
@@ -389,9 +383,8 @@ async function fetchRelatedVideosLive(
   input: VideoDetailInput,
   key: string,
   limit: number,
-  overrides?: ProxySourceOverrides,
 ): Promise<RelatedVideosResult> {
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
 
   let resolved: RelatedVideosResult | null = null;
@@ -425,7 +418,7 @@ async function fetchRelatedVideosLive(
   }
 
   let warning = resolved.warning;
-  const seed = await fetchVideoDetail(db, input, overrides).catch(() => null);
+  const seed = await fetchVideoDetail(db, input).catch(() => null);
   if (seed) {
     const current = resolved.videos.filter((v) => v.videoId !== input.videoId);
     const crossChannelCount = current.filter(
@@ -435,11 +428,10 @@ async function fetchRelatedVideosLive(
       current.length < limit || (current.length > 0 && crossChannelCount === 0);
     let extraPool: UnifiedVideo[] = [];
     if (needsBroaderPool) {
-      const fromSearch = await searchVideos(
-        db,
-        { q: seed.title, limit: Math.min(50, Math.max(limit * 3, 24)) },
-        overrides,
-      ).catch(() => null);
+      const fromSearch = await searchVideos(db, {
+        q: seed.title,
+        limit: Math.min(50, Math.max(limit * 3, 24)),
+      }).catch(() => null);
       if (fromSearch?.videos?.length) {
         extraPool = fromSearch.videos;
         warning =
@@ -464,12 +456,7 @@ async function fetchRelatedVideosLive(
   }
 
   if (resolved.videos.length === 0) {
-    const fallback = await relatedVideosFromSameUploader(
-      db,
-      input,
-      limit,
-      overrides,
-    );
+    const fallback = await relatedVideosFromSameUploader(db, input, limit);
     if (fallback && fallback.length > 0) {
       resolved = {
         videos: fallback,

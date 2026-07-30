@@ -1,10 +1,7 @@
 import { z } from "zod";
 import { invidiousPortCollidesWithNextApp } from "@/lib/invidious-port-collision";
 import { logger } from "@/lib/logger";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy";
 import { acquireUpstreamSlot } from "@/server/services/rate-limiter";
 import { upstreamGetText } from "@/server/services/upstream-get";
 import {
@@ -87,7 +84,6 @@ async function fetchSuggestionsJson(
 
 export async function fetchSearchQuerySuggestions(
   input: SearchSuggestionsInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<SearchSuggestionsResult> {
   const q = input.q.trim();
   if (!q) {
@@ -97,7 +93,7 @@ export async function fetchSearchQuerySuggestions(
     });
   }
 
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
 
   for (const invidiousBase of invidiousBases) {
     if (invidiousPortCollidesWithNextApp(invidiousBase)) continue;

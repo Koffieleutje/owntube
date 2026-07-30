@@ -6,7 +6,6 @@ import {
 import type { AppDb } from "@/server/db/client";
 import { readFreshCacheRow, writeCache } from "@/server/services/proxy/cache";
 import { fetchChannelPage } from "@/server/services/proxy/channel";
-import type { ProxySourceOverrides } from "@/server/services/proxy/config";
 import { fetchRelatedVideos } from "@/server/services/proxy/video";
 
 const UCID_RE = /^UC[0-9A-Za-z_-]{22}$/;
@@ -41,11 +40,10 @@ export type RelatedChannelsResult = z.infer<typeof relatedChannelsResultSchema>;
 export async function fetchRelatedChannels(
   db: AppDb,
   channelId: string,
-  overrides?: ProxySourceOverrides,
 ): Promise<RelatedChannelsResult> {
   // fetchChannelPage normalizes the token and resolves the handle → UC id, and
   // gives us the recent uploads to seed from in one call.
-  const page = await fetchChannelPage(db, { channelId }, overrides);
+  const page = await fetchChannelPage(db, { channelId });
   const canonical = page.channelId;
 
   const key = `related-channels:v1:${canonical}`;
@@ -65,12 +63,7 @@ export async function fetchRelatedChannels(
   const related = await Promise.all(
     seedIds.map(async (videoId) => {
       try {
-        return await fetchRelatedVideos(
-          db,
-          { videoId },
-          RELATED_PER_SEED,
-          overrides,
-        );
+        return await fetchRelatedVideos(db, { videoId }, RELATED_PER_SEED);
       } catch {
         return null;
       }
@@ -116,9 +109,7 @@ export async function fetchRelatedChannels(
   // stale/missing rows first (fresh rows are a no-op), then read them back.
   const ids = ranked.map((c) => c.channelId);
   await Promise.all(
-    ids.map((id) =>
-      refreshChannelMetaIfStale(db, id, overrides).catch(() => null),
-    ),
+    ids.map((id) => refreshChannelMetaIfStale(db, id).catch(() => null)),
   );
   const meta = readChannelMetaByIds(db, ids);
   const channels: SuggestedChannel[] = ranked.map((c) => {

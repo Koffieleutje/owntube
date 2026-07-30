@@ -9,10 +9,7 @@ import {
   trendingCacheKey,
   writeCache,
 } from "@/server/services/proxy/cache";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -102,7 +99,6 @@ function parseInvidiousTrending(
 export async function fetchTrendingVideos(
   db: AppDb,
   input: TrendingInput,
-  overrides?: ProxySourceOverrides,
 ): Promise<TrendingVideosResult> {
   const region = input.region.toUpperCase();
   const limit = Math.min(200, input.limit ?? 40);
@@ -113,7 +109,7 @@ export async function fetchTrendingVideos(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<TrendingVideosResult> => {
-    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates();
     const errors: string[] = [];
 
     let resolved: TrendingVideosResult | null = null;

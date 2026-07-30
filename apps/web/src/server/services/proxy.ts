@@ -7,7 +7,6 @@ export {
   getInstanceSourceInfo,
   type InstanceSourceInfo,
   type InstanceSourceRow,
-  type ProxySourceOverrides,
   resolveEffectiveProxyBases,
   resolveProxyBaseCandidates,
   resolveProxyBases,

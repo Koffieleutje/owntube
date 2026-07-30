@@ -1,9 +1,8 @@
 import { and, asc, eq } from "drizzle-orm";
-import { watchHref } from "@/lib/yt-routes";
 import { z } from "zod";
+import { watchHref } from "@/lib/yt-routes";
 import { watchQueue } from "@/server/db/schema";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
 function nowUnix(): number {
@@ -48,15 +47,12 @@ export const queueRouter = router({
       .where(eq(watchQueue.userId, ctx.userId))
       .orderBy(asc(watchQueue.position))
       .all();
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     return Promise.all(
       items.map(async (row) => {
         try {
-          const detail = await fetchVideoDetail(
-            ctx.db,
-            { videoId: row.videoId },
-            overrides,
-          );
+          const detail = await fetchVideoDetail(ctx.db, {
+            videoId: row.videoId,
+          });
           return {
             videoId: row.videoId,
             position: row.position,

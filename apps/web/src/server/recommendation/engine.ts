@@ -49,7 +49,6 @@ import {
 } from "@/server/recommendation/tfidf";
 import { clearTrendingTailCacheForUser } from "@/server/recommendation/trending-tail-cache";
 import type { ScoredVideo } from "@/server/recommendation/types";
-import type { ProxySourceOverrides } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 import { getUserSettings } from "@/server/settings/profile";
 
@@ -79,21 +78,12 @@ function recommendationPoolCacheKey(
   opts: {
     pageSize: number;
     region?: string;
-    overrides?: ProxySourceOverrides;
   },
   excludeSubscribed: boolean,
   personalizedOnly: boolean,
 ): string {
   const region = opts.region ?? "US";
-  const invidious = (
-    opts.overrides?.invidiousBaseUrls ?? [
-      opts.overrides?.invidiousBaseUrl ?? "",
-    ]
-  )
-    .map((url) => url.trim())
-    .filter(Boolean)
-    .join(",");
-  return `${userId}|${region}|${opts.pageSize}|${invidious}|${excludeSubscribed ? "nosubs" : "subs"}|${personalizedOnly ? "ponly" : "blend"}`;
+  return `${userId}|${region}|${opts.pageSize}|${excludeSubscribed ? "nosubs" : "subs"}|${personalizedOnly ? "ponly" : "blend"}`;
 }
 
 function diversifiedRowToVideo(row: ScoredVideo): UnifiedVideo {
@@ -218,7 +208,6 @@ export async function getPersonalizedFeedVideos(
   opts: {
     pageSize: number;
     region?: string;
-    overrides?: ProxySourceOverrides;
   },
 ): Promise<{ videos: UnifiedVideo[]; coldStart: boolean }> {
   const entry = await ensureRecommendationPool(db, userId, opts);
@@ -265,7 +254,6 @@ export async function getRecommendationInsights(
   userId: number,
   opts: {
     region?: string;
-    overrides?: ProxySourceOverrides;
     topVideoCount?: number;
     topTopicCount?: number;
   } = {},
@@ -273,7 +261,6 @@ export async function getRecommendationInsights(
   const entry = await ensureRecommendationPool(db, userId, {
     pageSize: 24,
     region: opts.region,
-    overrides: opts.overrides,
   });
   const pool = entry.diversified;
 
@@ -322,7 +309,6 @@ async function ensureRecommendationPool(
   opts: {
     pageSize: number;
     region?: string;
-    overrides?: ProxySourceOverrides;
   },
 ): Promise<RecommendationPoolCacheEntry> {
   // Read here (not just in the builder) so the flags participate in the cache
@@ -384,7 +370,6 @@ async function ensureRecommendationPool(
       trendingWarning,
     } = await collectTaggedVideoCandidates(db, userId, {
       region,
-      overrides: opts.overrides,
       signals,
       tasteKeywords: userSettings.tasteKeywords,
     });
@@ -553,7 +538,6 @@ async function ensureRecommendationPool(
         limits: personalizedOnly
           ? HOME_RELATED_LIMITS_DEEP
           : HOME_RELATED_LIMITS,
-        overrides: opts.overrides,
         excludeVideoIds: excludedVideoIds,
         signals,
         tasteModel,
@@ -672,7 +656,6 @@ export async function getRecommendations(
     page: number;
     pageSize: number;
     region?: string;
-    overrides?: ProxySourceOverrides;
   },
 ): Promise<RecommendationResult> {
   const entry = await ensureRecommendationPool(db, userId, opts);

@@ -17,13 +17,8 @@ import {
   normalizeSponsorBlockCategories,
   sponsorBlockCategorySchema,
 } from "@/lib/sponsorblock";
-import {
-  normalizePreferredUpstreamInstance,
-  normalizeUpstreamInstanceList,
-} from "@/lib/upstream-instances";
 import type { AppDb } from "@/server/db/client";
 import { userProfile } from "@/server/db/schema";
-import type { ProxySourceOverrides } from "@/server/services/proxy";
 
 export const themeSchema = z.enum(["system", "light", "dark"]);
 export const visualThemeSchema = z.enum(["default", "terminal"]);
@@ -74,12 +69,6 @@ const sectionPagePrefsSchema = z
 export const appSettingsSchema = z.object({
   theme: themeSchema.default("system"),
   visualTheme: visualThemeSchema.default("default"),
-  pipedBaseUrl: z.string().max(512).optional(),
-  invidiousBaseUrl: z.string().max(512).optional(),
-  pipedBaseUrls: z.array(z.string().max(512)).max(8).default([]),
-  invidiousBaseUrls: z.array(z.string().max(512)).max(8).default([]),
-  preferredPipedBaseUrl: z.string().max(512).optional(),
-  preferredInvidiousBaseUrl: z.string().max(512).optional(),
   /** ISO 3166-1 alpha-2 trending region (Piped / Invidious). */
   trendingRegion: z.string().length(2).default("US"),
   /** Topics / phrases used to bias the recommendation title similarity corpus. */
@@ -221,8 +210,6 @@ export function normalizeTrendingRegionStored(
 const defaultSettings: AppSettings = {
   theme: "system",
   visualTheme: "default",
-  pipedBaseUrls: [],
-  invidiousBaseUrls: [],
   trendingRegion: "US",
   tasteKeywords: [],
   hideRestrictedVideos: true,
@@ -257,40 +244,6 @@ const defaultSettings: AppSettings = {
 
 function nowUnix(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-function normalizeUrlLike(input: string | undefined): string | undefined {
-  if (!input) return undefined;
-  const value = input.trim();
-  return value.length > 0 ? value.replace(/\/+$/, "") : undefined;
-}
-
-function settingsWithNormalizedInstances(settings: AppSettings): AppSettings {
-  const pipedBaseUrls = normalizeUpstreamInstanceList([
-    ...(settings.pipedBaseUrls ?? []),
-    ...(settings.pipedBaseUrl ? [settings.pipedBaseUrl] : []),
-  ]);
-  const invidiousBaseUrls = normalizeUpstreamInstanceList([
-    ...(settings.invidiousBaseUrls ?? []),
-    ...(settings.invidiousBaseUrl ? [settings.invidiousBaseUrl] : []),
-  ]);
-  const preferredPipedBaseUrl = normalizePreferredUpstreamInstance(
-    settings.preferredPipedBaseUrl ?? settings.pipedBaseUrl,
-    pipedBaseUrls,
-  );
-  const preferredInvidiousBaseUrl = normalizePreferredUpstreamInstance(
-    settings.preferredInvidiousBaseUrl ?? settings.invidiousBaseUrl,
-    invidiousBaseUrls,
-  );
-  return {
-    ...settings,
-    pipedBaseUrl: pipedBaseUrls[0],
-    invidiousBaseUrl: invidiousBaseUrls[0],
-    pipedBaseUrls,
-    invidiousBaseUrls,
-    preferredPipedBaseUrl,
-    preferredInvidiousBaseUrl,
-  };
 }
 
 function normalizeBlockedRecommendationChannels(
@@ -337,9 +290,7 @@ export function getUserSettings(db: AppDb, userId: number): AppSettings {
   if (!row) return defaultSettings;
   try {
     const parsed = appSettingsSchema.safeParse(JSON.parse(row.profileJson));
-    return parsed.success
-      ? settingsWithNormalizedInstances(parsed.data)
-      : defaultSettings;
+    return parsed.success ? parsed.data : defaultSettings;
   } catch {
     return defaultSettings;
   }
@@ -365,45 +316,17 @@ export function upsertUserSettings(
     patch.sponsorBlockCategories !== undefined
       ? normalizeSponsorBlockCategories(patch.sponsorBlockCategories)
       : previous.sponsorBlockCategories;
-  const pipedBaseUrls =
-    patch.pipedBaseUrls !== undefined
-      ? normalizeUpstreamInstanceList(patch.pipedBaseUrls)
-      : normalizeUpstreamInstanceList([
-          ...(previous.pipedBaseUrls ?? []),
-          ...(patch.pipedBaseUrl !== undefined ? [patch.pipedBaseUrl] : []),
-        ]);
-  const invidiousBaseUrls =
-    patch.invidiousBaseUrls !== undefined
-      ? normalizeUpstreamInstanceList(patch.invidiousBaseUrls)
-      : normalizeUpstreamInstanceList([
-          ...(previous.invidiousBaseUrls ?? []),
-          ...(patch.invidiousBaseUrl !== undefined
-            ? [patch.invidiousBaseUrl]
-            : []),
-        ]);
   const merged: AppSettings = {
     ...previous,
     ...patch,
     tasteKeywords: nextKeywords,
     blockedRecommendationChannels: nextBlockedChannels,
     sponsorBlockCategories: nextSponsorBlockCategories,
-    pipedBaseUrl: normalizeUrlLike(pipedBaseUrls[0]),
-    invidiousBaseUrl: normalizeUrlLike(invidiousBaseUrls[0]),
-    pipedBaseUrls,
-    invidiousBaseUrls,
-    preferredPipedBaseUrl: normalizePreferredUpstreamInstance(
-      patch.preferredPipedBaseUrl ?? previous.preferredPipedBaseUrl,
-      pipedBaseUrls,
-    ),
-    preferredInvidiousBaseUrl: normalizePreferredUpstreamInstance(
-      patch.preferredInvidiousBaseUrl ?? previous.preferredInvidiousBaseUrl,
-      invidiousBaseUrls,
-    ),
     trendingRegion: normalizeTrendingRegionStored(
       patch.trendingRegion ?? previous.trendingRegion,
     ),
   };
-  const safe = appSettingsSchema.parse(settingsWithNormalizedInstances(merged));
+  const safe = appSettingsSchema.parse(merged);
   const ts = nowUnix();
   db.insert(userProfile)
     .values({
@@ -420,18 +343,4 @@ export function upsertUserSettings(
     })
     .run();
   return safe;
-}
-
-export function getUserProxyOverrides(
-  db: AppDb,
-  userId: number | null,
-): ProxySourceOverrides | undefined {
-  if (!userId) return undefined;
-  const settings = getUserSettings(db, userId);
-  if (settings.invidiousBaseUrls.length === 0) return undefined;
-  return {
-    invidiousBaseUrl: settings.invidiousBaseUrl,
-    invidiousBaseUrls: settings.invidiousBaseUrls,
-    preferredInvidiousBaseUrl: settings.preferredInvidiousBaseUrl,
-  };
 }

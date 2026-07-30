@@ -4,7 +4,6 @@ import { CHANNEL_TAG_MAX_LEN, normalizeChannelTag } from "@/lib/channel-tag";
 import type { AppDb } from "@/server/db/client";
 import { playlistItems, playlists, playlistTags } from "@/server/db/schema";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
 function nowUnix(): number {
@@ -279,15 +278,12 @@ export const playlistsRouter = router({
         .where(eq(playlistItems.playlistId, input.playlistId))
         .orderBy(asc(playlistItems.position), asc(playlistItems.addedAt))
         .all();
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       return Promise.all(
         rows.map(async (row) => {
           try {
-            const detail = await fetchVideoDetail(
-              ctx.db,
-              { videoId: row.videoId },
-              overrides,
-            );
+            const detail = await fetchVideoDetail(ctx.db, {
+              videoId: row.videoId,
+            });
             return {
               videoId: row.videoId,
               videoTitle: detail.title ?? row.videoId,

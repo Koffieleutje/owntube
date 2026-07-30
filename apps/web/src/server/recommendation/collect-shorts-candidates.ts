@@ -5,11 +5,7 @@ import type { AppDb } from "@/server/db/client";
 import { subscriptions } from "@/server/db/schema";
 import { useColdStartBlend } from "@/server/recommendation/coldstart";
 import type { UserSignals } from "@/server/recommendation/signals";
-import {
-  fetchChannelPage,
-  fetchShortsFeed,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchChannelPage, fetchShortsFeed } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 const MIN_UNIQUE_SHORTS_FOR_HISTORY_POOL = 8;
@@ -89,7 +85,6 @@ export async function collectShortsCandidates(
   userId: number,
   args: {
     region: string;
-    overrides?: ProxySourceOverrides;
     signals: UserSignals;
     tasteDiscoveryQueries?: string[];
     blockedChannelIds?: ReadonlySet<string>;
@@ -104,7 +99,6 @@ export async function collectShortsCandidates(
 }> {
   const {
     region,
-    overrides,
     signals,
     tasteDiscoveryQueries,
     blockedChannelIds,
@@ -134,11 +128,7 @@ export async function collectShortsCandidates(
             shorts: [] as UnifiedVideo[],
           };
         }
-        const ch = await fetchChannelPage(
-          db,
-          { channelId, tab: "shorts" },
-          overrides,
-        );
+        const ch = await fetchChannelPage(db, { channelId, tab: "shorts" });
         const shorts = filterShortsFeedVideos(
           takeNewestVideos(ch.videos, SHORTS_PER_CHANNEL, nowSec),
         );
@@ -176,15 +166,11 @@ export async function collectShortsCandidates(
 
   if (needDiscoveryBlend) {
     try {
-      const discovery = await fetchShortsFeed(
-        db,
-        {
-          region,
-          limit: 40,
-          discoveryQueries: tasteDiscoveryQueries,
-        },
-        overrides,
-      );
+      const discovery = await fetchShortsFeed(db, {
+        region,
+        limit: 40,
+        discoveryQueries: tasteDiscoveryQueries,
+      });
       for (const v of filterShortsFeedVideos(discovery.videos)) {
         if (unique.has(v.videoId)) continue;
         if (v.channelId && blockedChannelIds?.has(v.channelId)) continue;

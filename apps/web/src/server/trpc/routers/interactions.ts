@@ -4,11 +4,7 @@ import { z } from "zod";
 import { interactions } from "@/server/db/schema";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import {
-  getUserProxyOverrides,
-  getUserSettings,
-  upsertUserSettings,
-} from "@/server/settings/profile";
+import { getUserSettings, upsertUserSettings } from "@/server/settings/profile";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
 const interactionTypeSchema = z.enum(["like", "dislike", "save", "ignore"]);
@@ -102,15 +98,10 @@ export const interactionsRouter = router({
       )
       .orderBy(desc(interactions.createdAt))
       .all();
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     return Promise.all(
       rows.map(async (r) => {
         try {
-          const detail = await fetchVideoDetail(
-            ctx.db,
-            { videoId: r.videoId },
-            overrides,
-          );
+          const detail = await fetchVideoDetail(ctx.db, { videoId: r.videoId });
           return {
             videoId: r.videoId,
             videoTitle: detail.title ?? r.title ?? r.videoId,

@@ -6,7 +6,6 @@ import { removeWatchedFromQueue } from "@/server/queue/remove-watched";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
 import { fetchVideoDetail } from "@/server/services/proxy";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
 const historyEventInputSchema = z.object({
@@ -207,7 +206,6 @@ export const historyRouter = router({
         .limit(input.pageSize)
         .offset(offset)
         .all();
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       // Channel avatars come from the local channel_meta cache in one read.
       const metaById = readChannelMetaByIds(ctx.db, [
         ...new Set(rows.map((r) => r.channelId)),
@@ -228,11 +226,9 @@ export const historyRouter = router({
             };
           }
           try {
-            const detail = await fetchVideoDetail(
-              ctx.db,
-              { videoId: row.videoId },
-              overrides,
-            );
+            const detail = await fetchVideoDetail(ctx.db, {
+              videoId: row.videoId,
+            });
             return {
               ...row,
               videoTitle: detail.title,

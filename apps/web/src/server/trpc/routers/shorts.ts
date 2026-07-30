@@ -12,7 +12,6 @@ import {
 import { describeUpstreamAvailability } from "@/server/services/proxy";
 import { shortsFeedInputSchema } from "@/server/services/proxy.types";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
@@ -51,21 +50,15 @@ export const shortsRouter = router({
               getUserSettings(ctx.db, ctx.userId).trendingRegion,
             )
           : normalizeTrendingRegionStored(input.region);
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-      const upstream = describeUpstreamAvailability(overrides);
+      const upstream = describeUpstreamAvailability();
       try {
         const requestedLimit = input.limit ?? 24;
-        const result = await fetchShortsFeedForViewer(
-          ctx.db,
-          ctx.userId,
-          {
-            region,
-            limit: requestedLimit,
-            continuation: input.continuation ?? input.cursor ?? undefined,
-            excludeVideoIds: input.excludeVideoIds,
-          },
-          overrides,
-        );
+        const result = await fetchShortsFeedForViewer(ctx.db, ctx.userId, {
+          region,
+          limit: requestedLimit,
+          continuation: input.continuation ?? input.cursor ?? undefined,
+          excludeVideoIds: input.excludeVideoIds,
+        });
         return {
           videos: prepareShortsFeedVideos(result.videos, requestedLimit),
           nextCursor: result.continuation ?? undefined,

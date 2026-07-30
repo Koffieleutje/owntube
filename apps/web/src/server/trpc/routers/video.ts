@@ -12,7 +12,6 @@ import {
   videoCommentsInputSchema,
   videoDetailInputSchema,
 } from "@/server/services/proxy.types";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { publicProcedure, router } from "@/server/trpc/init";
 
 const videoCommentsQuerySchema = videoCommentsInputSchema.extend({
@@ -24,9 +23,8 @@ export const videoRouter = router({
   detail: publicProcedure
     .input(videoDetailInputSchema)
     .query(async ({ ctx, input }) => {
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       try {
-        return await fetchVideoDetail(ctx.db, input, overrides);
+        return await fetchVideoDetail(ctx.db, input);
       } catch (e) {
         if (e instanceof UpstreamAgeRestrictedError) {
           throw new TRPCError({
@@ -49,15 +47,13 @@ export const videoRouter = router({
   related: publicProcedure
     .input(videoDetailInputSchema)
     .query(async ({ ctx, input }) => {
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-      return fetchRelatedVideos(ctx.db, input, 20, overrides);
+      return fetchRelatedVideos(ctx.db, input, 20);
     }),
   comments: publicProcedure
     .input(videoCommentsQuerySchema)
     .query(async ({ ctx, input }) => {
       const { cursor, continuation, videoId, sortBy } = input;
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
         return await fetchVideoComments(
           ctx.db,
           {
@@ -65,7 +61,6 @@ export const videoRouter = router({
             sortBy,
             continuation: continuation ?? cursor ?? undefined,
           },
-          overrides,
           { cacheOnly: ctx.prefetchCacheOnly },
         );
       } catch (e) {

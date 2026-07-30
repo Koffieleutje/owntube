@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { channelHref, watchHref } from "@/lib/yt-routes";
 import { ChannelSubscribeButton } from "@/components/channel/channel-subscribe-button";
 import { ChannelAvatarCircle } from "@/components/videos/channel-avatar-circle";
 import { VideoCard } from "@/components/videos/video-card";
+import { channelHref, watchHref } from "@/lib/yt-routes";
 import { auth } from "@/server/auth";
 import { getDb } from "@/server/db/client";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
@@ -11,7 +11,6 @@ import {
   type SearchVideosResult,
   searchVideosInputSchema,
 } from "@/server/services/proxy.types";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 
 type SearchResultsProps = {
   query: string;
@@ -78,16 +77,11 @@ export async function SearchResults({ query, sort }: SearchResultsProps) {
   });
   const db = getDb();
   const session = await auth();
-  const userId = session?.user?.id ? Number.parseInt(session.user.id, 10) : NaN;
   const isAuthed = Boolean(session?.user?.id);
-  const overrides = getUserProxyOverrides(
-    db,
-    Number.isFinite(userId) ? userId : null,
-  );
 
   let result: SearchVideosResult;
   try {
-    result = await searchVideos(db, input, overrides);
+    result = await searchVideos(db, input);
   } catch (error) {
     if (error instanceof UpstreamUnavailableError) {
       return (

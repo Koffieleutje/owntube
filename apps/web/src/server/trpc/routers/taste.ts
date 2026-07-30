@@ -2,7 +2,6 @@ import { z } from "zod";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { buildTasteDeckVideos } from "@/server/recommendation/taste-deck-pool";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
   upsertUserSettings,
@@ -23,8 +22,7 @@ export const tasteRouter = router({
   deck: protectedProcedure.query(async ({ ctx }) => {
     const settings = getUserSettings(ctx.db, ctx.userId);
     const region = normalizeTrendingRegionStored(settings.trendingRegion);
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-    return buildTasteDeckVideos(ctx.db, ctx.userId, { region, overrides });
+    return buildTasteDeckVideos(ctx.db, ctx.userId, { region });
   }),
 
   saveKeywords: protectedProcedure

@@ -8,48 +8,47 @@ describe("getInstanceSourceInfo", () => {
     process.env = env;
   });
 
-  it("reports the env Invidious URL when there is no profile override", () => {
+  it("reports the env Invidious URL", () => {
     process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.example" };
-    const info = getInstanceSourceInfo({});
+    const info = getInstanceSourceInfo();
     expect(info.invidious.envUrl).toBe("https://inv.example");
     expect(info.invidious.effectiveUrl).toBe("https://inv.example");
     expect(info.invidious.urls).toEqual(["https://inv.example"]);
-    expect(info.invidious.profileOverride).toBeNull();
+    expect(info.invidious.envDisabled).toBe(false);
   });
 
   it("reports a disabled env value instead of treating it as a URL", () => {
     process.env = { ...env, INVIDIOUS_BASE_URL: "disabled" };
-    const info = getInstanceSourceInfo({});
+    const info = getInstanceSourceInfo();
     expect(info.invidious.envDisabled).toBe(true);
     expect(info.invidious.envUrl).toBeNull();
     expect(info.invidious.effectiveUrl).toBeNull();
     expect(info.invidious.urls).toEqual([]);
   });
 
-  it("prefers profile override over env", () => {
-    process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.env" };
-    const info = getInstanceSourceInfo({
-      invidiousBaseUrl: "https://inv.profile",
-    });
-    expect(info.invidious.envUrl).toBe("https://inv.env");
-    expect(info.invidious.profileOverride).toBe("https://inv.profile");
-    expect(info.invidious.effectiveUrl).toBe("https://inv.profile");
-    expect(info.invidious.urls).toEqual(["https://inv.profile"]);
+  it("reports nothing configured when the env var is unset", () => {
+    const { INVIDIOUS_BASE_URL: _drop, ...rest } = env;
+    process.env = rest;
+    const info = getInstanceSourceInfo();
+    expect(info.invidious.envRaw).toBeNull();
+    expect(info.invidious.effectiveUrl).toBeNull();
+    expect(info.invidious.urls).toEqual([]);
   });
 
-  it("reports multiple profile overrides and orders the preferred URL first", () => {
-    process.env = { ...env, INVIDIOUS_BASE_URL: "https://inv.env" };
-    const info = getInstanceSourceInfo({
-      invidiousBaseUrls: ["https://one.profile", "https://two.profile"],
-      preferredInvidiousBaseUrl: "https://two.profile",
-    });
-    expect(info.invidious.profileOverride).toBe(
-      "https://one.profile, https://two.profile",
-    );
+  it("accepts several instances to fail over between, dropping duplicates", () => {
+    process.env = {
+      ...env,
+      // Whitespace- or comma-separated, and normalised (trailing slash, dupes).
+      INVIDIOUS_BASE_URL:
+        "https://one.example/, https://one.example https://two.example",
+    };
+    const info = getInstanceSourceInfo();
     expect(info.invidious.urls).toEqual([
-      "https://two.profile",
-      "https://one.profile",
+      "https://one.example",
+      "https://two.example",
     ]);
-    expect(info.invidious.preferredUrl).toBe("https://two.profile");
+    expect(info.invidious.effectiveUrl).toBe("https://one.example");
+    // One health row per configured instance, for the Settings display.
+    expect(info.invidious.health).toHaveLength(2);
   });
 });

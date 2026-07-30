@@ -32,10 +32,7 @@ import {
   refreshChannelRss,
   refreshLongFormWindow,
 } from "@/server/rss/cache";
-import {
-  fetchChannelPage,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchChannelPage } from "@/server/services/proxy";
 import {
   channelCacheKey,
   readLatestCacheRow,
@@ -44,10 +41,7 @@ import type {
   ChannelPageResult,
   UnifiedVideo,
 } from "@/server/services/proxy.types";
-import {
-  getUserProxyOverrides,
-  getUserSettings,
-} from "@/server/settings/profile";
+import { getUserSettings } from "@/server/settings/profile";
 import { reconcileSubscriptionChannelIdsForUser } from "@/server/subscriptions/reconcile-channel-ids";
 import {
   protectedProcedure,
@@ -145,9 +139,8 @@ async function fetchSubscriptionChannelDetail(
   db: AppDb,
   channelId: string,
   subscribedAt: number,
-  overrides: ProxySourceOverrides | undefined,
 ): Promise<SubscriptionChannelDetail> {
-  const meta = await refreshChannelMetaIfStale(db, channelId, overrides);
+  const meta = await refreshChannelMetaIfStale(db, channelId);
   return {
     channelId,
     subscribedAt,
@@ -162,7 +155,6 @@ async function fetchSubscriptionChannelDetail(
 async function listDetailedChannelRows(
   db: AppDb,
   subs: { channelId: string; subscribedAt: number }[],
-  overrides: ProxySourceOverrides | undefined,
 ): Promise<SubscriptionChannelDetail[]> {
   const out: SubscriptionChannelDetail[] = [];
   for (let i = 0; i < subs.length; i += LIST_DETAILED_BATCH) {
@@ -170,12 +162,7 @@ async function listDetailedChannelRows(
     const chunk = subs.slice(i, i + LIST_DETAILED_BATCH);
     const part = await Promise.all(
       chunk.map((s) =>
-        fetchSubscriptionChannelDetail(
-          db,
-          s.channelId,
-          s.subscribedAt,
-          overrides,
-        ),
+        fetchSubscriptionChannelDetail(db, s.channelId, s.subscribedAt),
       ),
     );
     out.push(...part);
@@ -246,7 +233,6 @@ function markWatchedRows(
 async function fetchChannelVideosUpToPages(
   db: Parameters<typeof fetchChannelPage>[0],
   channelId: string,
-  overrides: Parameters<typeof fetchChannelPage>[2],
   maxPages: number,
 ): Promise<UnifiedVideo[]> {
   const out: UnifiedVideo[] = [];
@@ -257,7 +243,7 @@ async function fetchChannelVideosUpToPages(
       // Serve from the warm channel-page cache when fresh; the merge feed already
       // gets each channel's newest upload from the RSS seed, so a slightly stale
       // page (older videos) is fine and avoids a live ~1s Invidious call per channel.
-      res = await fetchChannelPage(db, { channelId, continuation }, overrides);
+      res = await fetchChannelPage(db, { channelId, continuation });
     } catch (e) {
       if (
         e instanceof UpstreamUnavailableError ||
@@ -482,7 +468,6 @@ function decodeMergedFeedCursor(cursor: string | null | undefined): number {
 async function appendNextPageIfNeeded(
   db: AppDb,
   buf: ChannelBuffer,
-  overrides: ProxySourceOverrides | undefined,
   rssPublishedByVideoId?: ReadonlyMap<string, number>,
 ): Promise<void> {
   while (buf.readIdx >= buf.videos.length) {
@@ -495,7 +480,7 @@ async function appendNextPageIfNeeded(
       // Cache-only: the feed never blocks on a live upstream call. Fresh/stale
       // cached pages plus the RSS seed cover normal loads; an explicit refresh
       // repopulates the cache in bounded parallel. See `refreshFeed`.
-      const res = await fetchChannelPage(db, input, overrides, {
+      const res = await fetchChannelPage(db, input, {
         cacheOnly: true,
       });
       buf.nextContinuation = res.continuation ?? null;
@@ -529,7 +514,6 @@ async function appendNextPageIfNeeded(
 async function collectSortedFeedPage(
   db: AppDb,
   channelIds: string[],
-  overrides: ProxySourceOverrides | undefined,
   offset: number,
   limit: number,
 ): Promise<{ videos: UnifiedVideo[]; exhausted: boolean }> {
@@ -586,12 +570,7 @@ async function collectSortedFeedPage(
     iter++;
     await Promise.all(
       buffers.map((b) =>
-        appendNextPageIfNeeded(
-          db,
-          b,
-          overrides,
-          rssPublishedByChannel.get(b.channelId),
-        ),
+        appendNextPageIfNeeded(db, b, rssPublishedByChannel.get(b.channelId)),
       ),
     );
     for (const b of buffers) {
@@ -669,7 +648,6 @@ const REFRESH_PER_CHANNEL_TIMEOUT_MS = 6000;
 async function refreshChannelPageCache(
   db: AppDb,
   channelIds: string[],
-  overrides: ProxySourceOverrides | undefined,
 ): Promise<{ refreshed: number }> {
   let cursor = 0;
   let refreshed = 0;
@@ -677,9 +655,13 @@ async function refreshChannelPageCache(
     while (cursor < channelIds.length) {
       const channelId = channelIds[cursor++];
       if (!channelId) continue;
-      const fetchDone = fetchChannelPage(db, { channelId }, overrides, {
-        bypassChannelCache: true,
-      })
+      const fetchDone = fetchChannelPage(
+        db,
+        { channelId },
+        {
+          bypassChannelCache: true,
+        },
+      )
         .then(() => {
           refreshed++;
         })
@@ -767,7 +749,6 @@ export const subscriptionsRouter = router({
     .query(async ({ ctx, input }) => {
       const limit = input?.limit;
       reconcileSubscriptionChannelIdsForUser(ctx.db, ctx.userId);
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       const base = ctx.db
         .select({
           channelId: subscriptions.channelId,
@@ -779,7 +760,7 @@ export const subscriptionsRouter = router({
       const subs =
         typeof limit === "number" ? base.limit(limit).all() : base.all();
 
-      return listDetailedChannelRows(ctx.db, subs, overrides);
+      return listDetailedChannelRows(ctx.db, subs);
     }),
 
   /** OPML export (NewPipe/FreeTube-compatible) — SQLite + `channel_meta` only, no upstream. */
@@ -890,7 +871,6 @@ export const subscriptionsRouter = router({
       .where(eq(subscriptions.userId, ctx.userId))
       .limit(2000)
       .all();
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     const metaById = readChannelMetaByIds(
       ctx.db,
       subs.map((s) => s.channelId),
@@ -904,7 +884,7 @@ export const subscriptionsRouter = router({
     for (let i = 0; i < missingMeta.length; i += LIST_DETAILED_BATCH) {
       await Promise.all(
         missingMeta.slice(i, i + LIST_DETAILED_BATCH).map((s) =>
-          refreshChannelMetaIfStale(ctx.db, s.channelId, overrides)
+          refreshChannelMetaIfStale(ctx.db, s.channelId)
             .then(() => {
               updated++;
             })
@@ -967,17 +947,14 @@ export const subscriptionsRouter = router({
         .run();
       // Populate name + avatar now so the sidebar shows them immediately instead
       // of the raw channel id (usually cached already from viewing the channel).
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-      await refreshChannelMetaIfStale(ctx.db, channelId, overrides).catch(
-        () => {},
-      );
+      await refreshChannelMetaIfStale(ctx.db, channelId).catch(() => {});
       // Warm the new channel's feed inputs immediately (fire-and-forget) so it
       // shows up in the merged feed and sorts correctly without waiting for
       // the next cache-warmer cycle.
       void Promise.allSettled([
         refreshChannelRss(ctx.db, channelId),
         refreshLongFormWindow(ctx.db, channelId),
-        fetchChannelPage(ctx.db, { channelId }, overrides),
+        fetchChannelPage(ctx.db, { channelId }),
       ]).then(() =>
         refreshChannelsLatestVideoAt(ctx.db, [channelId]).catch(() => {}),
       );
@@ -1068,7 +1045,6 @@ export const subscriptionsRouter = router({
    */
   refreshFeed: protectedProcedure.mutation(async ({ ctx }) => {
     reconcileSubscriptionChannelIdsForUser(ctx.db, ctx.userId);
-    const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
     const subs = ctx.db
       .select({ channelId: subscriptions.channelId })
       .from(subscriptions)
@@ -1078,7 +1054,6 @@ export const subscriptionsRouter = router({
     const { refreshed } = await refreshChannelPageCache(
       ctx.db,
       subs.map((s) => s.channelId),
-      overrides,
     );
     return { ok: true as const, refreshed, refreshedAt: nowUnix() };
   }),
@@ -1098,7 +1073,6 @@ export const subscriptionsRouter = router({
     .query(async ({ ctx, input }) => {
       const pagesPerChannel = input?.pagesPerChannel ?? 3;
       reconcileSubscriptionChannelIdsForUser(ctx.db, ctx.userId);
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       const subs = ctx.db
         .select({ channelId: subscriptions.channelId })
         .from(subscriptions)
@@ -1113,7 +1087,6 @@ export const subscriptionsRouter = router({
           const videos = await fetchChannelVideosUpToPages(
             ctx.db,
             s.channelId,
-            overrides,
             pagesPerChannel,
           );
           return { channelId: s.channelId, videos };
@@ -1170,7 +1143,6 @@ export const subscriptionsRouter = router({
       const limit = input.limit;
       const offset = decodeMergedFeedCursor(input.cursor);
       reconcileSubscriptionChannelIdsForUser(ctx.db, ctx.userId);
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
       const subs = ctx.db
         .select({ channelId: subscriptions.channelId })
         .from(subscriptions)
@@ -1196,7 +1168,6 @@ export const subscriptionsRouter = router({
       const { videos, exhausted } = await collectSortedFeedPage(
         ctx.db,
         channelIds,
-        overrides,
         offset,
         limit,
       );

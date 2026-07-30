@@ -30,10 +30,7 @@ import {
   readCachedDislikeTitlesOrdered,
 } from "@/server/recommendation/taste-corpus";
 import { buildTfidfModel } from "@/server/recommendation/tfidf";
-import {
-  fetchTrendingVideos,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchTrendingVideos } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 import { getUserSettings } from "@/server/settings/profile";
 
@@ -96,10 +93,9 @@ function applyTasteDeckFilters(
 export async function buildTasteDeckVideos(
   db: AppDb,
   userId: number,
-  opts: { region: string; overrides?: ProxySourceOverrides },
+  opts: { region: string },
 ): Promise<{ videos: UnifiedVideo[]; region: string; warning?: string }> {
   const region = opts.region;
-  const overrides = opts.overrides;
   const signals = collectUserSignals(db, userId);
 
   const interactedRows = db
@@ -154,7 +150,6 @@ export async function buildTasteDeckVideos(
   try {
     collected = await collectTaggedVideoCandidates(db, userId, {
       region,
-      overrides,
       signals,
       tasteKeywords: settings.tasteKeywords,
     });
@@ -204,11 +199,7 @@ export async function buildTasteDeckVideos(
   if (fresh.length === 0) {
     let trending: Awaited<ReturnType<typeof fetchTrendingVideos>>;
     try {
-      trending = await fetchTrendingVideos(
-        db,
-        { region, limit: 120 },
-        overrides,
-      );
+      trending = await fetchTrendingVideos(db, { region, limit: 120 });
     } catch (e) {
       if (e instanceof UpstreamUnavailableError) {
         throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });

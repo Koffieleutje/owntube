@@ -7,7 +7,6 @@ import type { UserSignals } from "@/server/recommendation/signals";
 import {
   fetchChannelPage,
   fetchTrendingVideos,
-  type ProxySourceOverrides,
   searchVideos,
 } from "@/server/services/proxy";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
@@ -53,7 +52,6 @@ export async function collectTaggedVideoCandidates(
   userId: number,
   args: {
     region: string;
-    overrides?: ProxySourceOverrides;
     signals: UserSignals;
     /** "Refine recommendations" topics — each seeds an upstream search so the pool can include videos absent from the user's history. */
     tasteKeywords: string[];
@@ -67,7 +65,7 @@ export async function collectTaggedVideoCandidates(
   historyOnlyUnique: number;
   trendingWarning?: string;
 }> {
-  const { region, overrides, signals, tasteKeywords } = args;
+  const { region, signals, tasteKeywords } = args;
   const nowSec = Math.floor(Date.now() / 1000);
   const coldStart = useColdStartBlend(signals.totalWatches);
   const taggedCandidates: TaggedVideoCandidate[] = [];
@@ -91,7 +89,7 @@ export async function collectTaggedVideoCandidates(
       const batch = historyChannels.slice(i, i + CHANNEL_FETCH_CONCURRENCY);
       const settled = await Promise.allSettled(
         batch.map(async (channelId) => {
-          const ch = await fetchChannelPage(db, { channelId }, overrides);
+          const ch = await fetchChannelPage(db, { channelId });
           return {
             channelId,
             channelAvatarUrl: ch.avatarUrl ?? undefined,
@@ -140,11 +138,7 @@ export async function collectTaggedVideoCandidates(
 
   let trendingWarning: string | undefined;
   if (needTrendingBlend) {
-    const trending = await fetchTrendingVideos(
-      db,
-      { region, limit: 45 },
-      overrides,
-    );
+    const trending = await fetchTrendingVideos(db, { region, limit: 45 });
     trendingWarning = trending.warning;
     for (const v of trending.videos) {
       taggedCandidates.push({ video: v, source: "trending" });
@@ -182,11 +176,7 @@ export async function collectTaggedVideoCandidates(
       const batch = channels.slice(i, i + CHANNEL_FETCH_CONCURRENCY);
       const settled = await Promise.allSettled(
         batch.map(async (s) => {
-          const ch = await fetchChannelPage(
-            db,
-            { channelId: s.channelId },
-            overrides,
-          );
+          const ch = await fetchChannelPage(db, { channelId: s.channelId });
           return {
             channelId: s.channelId,
             channelAvatarUrl: ch.avatarUrl ?? undefined,
@@ -233,7 +223,7 @@ export async function collectTaggedVideoCandidates(
       const batch = toFetch.slice(i, i + CHANNEL_FETCH_CONCURRENCY);
       const settled = await Promise.allSettled(
         batch.map(async (channelId) => {
-          const ch = await fetchChannelPage(db, { channelId }, overrides);
+          const ch = await fetchChannelPage(db, { channelId });
           return {
             channelId,
             channelAvatarUrl: ch.avatarUrl ?? undefined,
@@ -279,11 +269,11 @@ export async function collectTaggedVideoCandidates(
     const batch = keywords.slice(i, i + KEYWORD_SEARCH_CONCURRENCY);
     const settled = await Promise.allSettled(
       batch.map(async (keyword) => {
-        const result = await searchVideos(
-          db,
-          { q: keyword, limit: VIDEOS_PER_KEYWORD, region },
-          overrides,
-        );
+        const result = await searchVideos(db, {
+          q: keyword,
+          limit: VIDEOS_PER_KEYWORD,
+          region,
+        });
         return { keyword, videos: result.videos };
       }),
     );

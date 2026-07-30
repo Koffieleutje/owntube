@@ -17,10 +17,7 @@ import {
   registerInFlight,
   writeCache,
 } from "@/server/services/proxy/cache";
-import {
-  type ProxySourceOverrides,
-  resolveProxyBaseCandidates,
-} from "@/server/services/proxy/config";
+import { resolveProxyBaseCandidates } from "@/server/services/proxy/config";
 import {
   recordUpstreamFailure,
   throwIfUpstreamFailed,
@@ -578,7 +575,6 @@ function writeChannelAlias(db: AppDb, alias: string, channelId: string): void {
 async function resolveChannelUcid(
   db: AppDb,
   channelId: string,
-  overrides?: ProxySourceOverrides,
 ): Promise<string> {
   if (UCID_RE.test(channelId)) return channelId;
   const cached = resolvedChannelUcids.get(channelId);
@@ -601,7 +597,7 @@ async function resolveChannelUcid(
         `https://www.youtube.com/user/${bare}`,
         `https://www.youtube.com/${bare}`,
       ];
-  const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+  const { invidiousBases } = resolveProxyBaseCandidates();
   for (const base of invidiousBases) {
     for (const ytUrl of ytUrls) {
       try {
@@ -632,7 +628,6 @@ async function resolveChannelUcid(
 export async function fetchChannelPage(
   db: AppDb,
   rawInput: ChannelPageInput,
-  overrides?: ProxySourceOverrides,
   opts?: FetchChannelPageOptions,
 ): Promise<ChannelPageResult> {
   // Single normalization boundary: a channel token can reach us percent-encoded
@@ -645,11 +640,7 @@ export async function fetchChannelPage(
   };
   // Accept YouTube handle / custom / user tokens (@name, c/x, user/x): resolve
   // to a UC id so the whole pipeline (and the cache key) is keyed canonically.
-  const canonicalId = await resolveChannelUcid(
-    db,
-    decodedInput.channelId,
-    overrides,
-  );
+  const canonicalId = await resolveChannelUcid(db, decodedInput.channelId);
   const input: ChannelPageInput =
     canonicalId === decodedInput.channelId
       ? decodedInput
@@ -676,7 +667,7 @@ export async function fetchChannelPage(
   if (inFlight) return inFlight;
 
   const task = (async (): Promise<ChannelPageResult> => {
-    const { invidiousBases } = resolveProxyBaseCandidates(overrides);
+    const { invidiousBases } = resolveProxyBaseCandidates();
     const errors: string[] = [];
     const tab = input.tab ?? "videos";
 

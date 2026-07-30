@@ -7,22 +7,19 @@ import {
   fetchSearchQuerySuggestions,
   searchSuggestionsInputSchema,
 } from "@/server/services/search-suggestions";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { publicProcedure, router } from "@/server/trpc/init";
 
 export const searchRouter = router({
   suggestions: publicProcedure
     .input(searchSuggestionsInputSchema)
-    .query(async ({ ctx, input }) => {
-      const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-      return fetchSearchQuerySuggestions(input, overrides);
+    .query(async ({ input }) => {
+      return fetchSearchQuerySuggestions(input);
     }),
   videos: publicProcedure
     .input(searchVideosInputSchema)
     .query(async ({ ctx, input }) => {
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-        return await searchVideos(ctx.db, input, overrides);
+        return await searchVideos(ctx.db, input);
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({

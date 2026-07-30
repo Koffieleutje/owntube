@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { InstanceSourceHint } from "@/components/settings/instance-source-hint";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   DEFAULT_PLAYBACK_QUALITY_SELECT_OPTIONS,
   type DefaultPlaybackQuality,
@@ -27,10 +26,7 @@ import {
 } from "@/lib/sponsorblock-prefs";
 import { TRENDING_REGION_OPTIONS } from "@/lib/trending-regions";
 import { writeWatchMiniEnabled } from "@/lib/watch-mini-player-state";
-import type {
-  InstanceSourceInfo,
-  InstanceSourceRow,
-} from "@/server/services/proxy";
+import type { InstanceSourceInfo } from "@/server/services/proxy";
 import type { AppSettings } from "@/server/settings/profile";
 import {
   type ThemeMode,
@@ -43,96 +39,6 @@ type SettingsPanelProps = {
   initial: AppSettings;
   initialInstanceSources: InstanceSourceInfo;
 };
-
-function nonEmptyUrls(urls: string[]): string[] {
-  return urls.map((url) => url.trim()).filter(Boolean);
-}
-
-type UpstreamInstanceListEditorProps = {
-  label: string;
-  source: InstanceSourceRow;
-  urls: string[];
-  preferredUrl: string;
-  onUrlsChange: (urls: string[]) => void;
-  onPreferredChange: (url: string) => void;
-};
-
-function UpstreamInstanceListEditor({
-  label,
-  source,
-  urls,
-  preferredUrl,
-  onUrlsChange,
-  onPreferredChange,
-}: UpstreamInstanceListEditorProps) {
-  const rows = urls.length > 0 ? urls : [""];
-
-  function updateUrl(index: number, value: string) {
-    const next = [...rows];
-    next[index] = value;
-    onUrlsChange(next);
-  }
-
-  function removeUrl(index: number) {
-    const next = rows.filter((_, i) => i !== index);
-    onUrlsChange(next);
-    if (preferredUrl === rows[index]) onPreferredChange(next[0] ?? "");
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium">{label}</p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={urls.some((url) => !url.trim())}
-          onClick={() => onUrlsChange([...urls, ""])}
-        >
-          Add instance
-        </Button>
-      </div>
-      <div className="space-y-2">
-        {rows.map((url, index) => {
-          const trimmed = url.trim();
-          const preferred = trimmed.length > 0 && preferredUrl === trimmed;
-          return (
-            <div key={`${label}-${trimmed || "empty"}`} className="flex gap-2">
-              <Input
-                value={url}
-                placeholder={
-                  source.envUrl ??
-                  source.envRaw ??
-                  "Leave empty to use server defaults"
-                }
-                onChange={(e) => updateUrl(index, e.currentTarget.value)}
-              />
-              <Button
-                type="button"
-                variant={preferred ? "default" : "outline"}
-                size="sm"
-                disabled={!trimmed}
-                onClick={() => onPreferredChange(trimmed)}
-              >
-                Preferred
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => removeUrl(index)}
-              >
-                Remove
-              </Button>
-            </div>
-          );
-        })}
-      </div>
-      <InstanceSourceHint row={source} />
-    </div>
-  );
-}
 
 export function SettingsPanel({
   initial,
@@ -151,16 +57,6 @@ export function SettingsPanel({
   const [theme, setThemeLocal] = useState<ThemeMode>(initial.theme);
   const [visualTheme, setVisualThemeLocal] = useState<VisualTheme>(
     initial.visualTheme,
-  );
-  const [invidiousBaseUrls, setInvidiousBaseUrls] = useState<string[]>(
-    initial.invidiousBaseUrls.length > 0
-      ? initial.invidiousBaseUrls
-      : initial.invidiousBaseUrl
-        ? [initial.invidiousBaseUrl]
-        : [],
-  );
-  const [preferredInvidiousBaseUrl, setPreferredInvidiousBaseUrl] = useState(
-    initial.preferredInvidiousBaseUrl ?? initial.invidiousBaseUrls[0] ?? "",
   );
   const [trendingRegion, setTrendingRegion] = useState(
     initial.trendingRegion ?? "US",
@@ -327,14 +223,7 @@ export function SettingsPanel({
   const saving = updateMutation.isPending;
   const importing = importMutation.isPending;
   const clearingCaches = clearCachesMutation.isPending;
-  const healthCheckInput = useMemo(
-    () => ({
-      invidiousBaseUrls: nonEmptyUrls(invidiousBaseUrls),
-      preferredInvidiousBaseUrl: preferredInvidiousBaseUrl.trim() || undefined,
-    }),
-    [invidiousBaseUrls, preferredInvidiousBaseUrl],
-  );
-  const healthQuery = trpc.settings.checkInstances.useQuery(healthCheckInput, {
+  const healthQuery = trpc.settings.checkInstances.useQuery(undefined, {
     enabled: false,
   });
 
@@ -378,16 +267,9 @@ export function SettingsPanel({
 
   async function onSave() {
     setMessage(null);
-    const nextInvidiousBaseUrls = nonEmptyUrls(invidiousBaseUrls);
     await updateMutation.mutateAsync({
       theme,
       visualTheme,
-      invidiousBaseUrls: nextInvidiousBaseUrls,
-      preferredInvidiousBaseUrl: nextInvidiousBaseUrls.includes(
-        preferredInvidiousBaseUrl.trim(),
-      )
-        ? preferredInvidiousBaseUrl.trim()
-        : nextInvidiousBaseUrls[0],
       trendingRegion,
       hideRestrictedVideos,
       hideShortsInSubscriptions,
@@ -516,21 +398,15 @@ export function SettingsPanel({
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Video source instances</h2>
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          Optional per-account override. Leave blank to use the server{" "}
+          Configured on the server via{" "}
           <code className="rounded bg-[hsl(var(--muted))] px-1 font-mono text-xs">
-            .env
-          </code>{" "}
-          values shown below.
+            INVIDIOUS_BASE_URL
+          </code>
+          . List several instances (comma or space separated) to fail over
+          between them.
         </p>
         <div className="space-y-4 max-w-2xl">
-          <UpstreamInstanceListEditor
-            label="Invidious instances"
-            source={displayedInstanceSources.invidious}
-            urls={invidiousBaseUrls}
-            preferredUrl={preferredInvidiousBaseUrl}
-            onUrlsChange={setInvidiousBaseUrls}
-            onPreferredChange={setPreferredInvidiousBaseUrl}
-          />
+          <InstanceSourceHint row={displayedInstanceSources.invidious} />
           <Button type="button" onClick={onSave} disabled={saving}>
             Save settings
           </Button>

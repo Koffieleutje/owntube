@@ -11,7 +11,6 @@ import {
   fetchYtPlaylist,
 } from "@/server/services/proxy/channel-playlists";
 import { channelPageInputSchema } from "@/server/services/proxy.types";
-import { getUserProxyOverrides } from "@/server/settings/profile";
 import { publicProcedure, router } from "@/server/trpc/init";
 
 const channelPageQuerySchema = channelPageInputSchema.extend({
@@ -33,7 +32,6 @@ export const channelRouter = router({
     .query(async ({ ctx, input }) => {
       const { cursor, continuation, channelId, tab, cacheOnly } = input;
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
         return await fetchChannelPage(
           ctx.db,
           {
@@ -41,7 +39,6 @@ export const channelRouter = router({
             tab,
             continuation: continuation ?? cursor ?? undefined,
           },
-          overrides,
           cacheOnly ? { cacheOnly: true } : undefined,
         );
       } catch (e) {
@@ -63,8 +60,7 @@ export const channelRouter = router({
     .input(z.object({ channelId: z.string().min(3).max(128) }))
     .query(async ({ ctx, input }) => {
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-        return await fetchRelatedChannels(ctx.db, input.channelId, overrides);
+        return await fetchRelatedChannels(ctx.db, input.channelId);
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });
@@ -82,13 +78,9 @@ export const channelRouter = router({
   /** The channel's public YouTube playlists (Playlists tab). */
   playlists: publicProcedure
     .input(z.object({ channelId: z.string().min(3).max(128) }))
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-        return await fetchChannelPlaylists(
-          { channelId: input.channelId },
-          overrides,
-        );
+        return await fetchChannelPlaylists({ channelId: input.channelId });
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });
@@ -106,13 +98,9 @@ export const channelRouter = router({
   /** A public YouTube playlist (metadata + first page of videos). */
   ytPlaylist: publicProcedure
     .input(z.object({ playlistId: z.string().min(5).max(128) }))
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       try {
-        const overrides = getUserProxyOverrides(ctx.db, ctx.userId);
-        return await fetchYtPlaylist(
-          { playlistId: input.playlistId },
-          overrides,
-        );
+        return await fetchYtPlaylist({ playlistId: input.playlistId });
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });

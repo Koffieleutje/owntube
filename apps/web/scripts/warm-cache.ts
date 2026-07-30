@@ -6,21 +6,20 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { pruneAssetCache } from "../src/server/assets/cache";
 import { refreshChannelsLatestVideoAt } from "../src/server/channel-meta/recency";
 import { refreshChannelMetaIfStale } from "../src/server/channel-meta/store";
 import type { AppDb } from "../src/server/db/client";
 import { runSqlMigrations } from "../src/server/db/run-migrations";
 import * as schema from "../src/server/db/schema";
+import { watchQueue } from "../src/server/db/schema";
 import { RateLimitExceededError } from "../src/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "../src/server/errors/upstream-unavailable";
-import { pruneAssetCache } from "../src/server/assets/cache";
-import { watchQueue } from "../src/server/db/schema";
 import {
-  getUserProxyOverrides,
-  getUserSettings,
-  normalizeTrendingRegionStored,
-} from "../src/server/settings/profile";
-import { materializeHomeFeed } from "../src/server/trpc/routers/feed";
+  getChannelRssEntries,
+  refreshChannelRss,
+  refreshLongFormWindow,
+} from "../src/server/rss/cache";
 import {
   fetchChannelPage,
   fetchShortsFeed,
@@ -29,14 +28,14 @@ import {
   fetchVideoDetail,
 } from "../src/server/services/proxy";
 import {
+  getUserSettings,
+  normalizeTrendingRegionStored,
+} from "../src/server/settings/profile";
+import {
   DEFAULT_SPONSORBLOCK_CATEGORIES,
   getSponsorBlockSegments,
 } from "../src/server/sponsorblock/service";
-import {
-  getChannelRssEntries,
-  refreshChannelRss,
-  refreshLongFormWindow,
-} from "../src/server/rss/cache";
+import { materializeHomeFeed } from "../src/server/trpc/routers/feed";
 import {
   collectWarmChannelIds,
   DEFAULT_WARM_HISTORY_CHANNELS,
@@ -151,7 +150,6 @@ async function warmHomeFeeds(db: AppDb): Promise<boolean> {
       await materializeHomeFeed(db, userId, {
         pageSize: 24,
         region: userRegion,
-        overrides: getUserProxyOverrides(db, userId),
       });
     },
   );
@@ -181,11 +179,11 @@ async function warmTrending(db: AppDb): Promise<boolean> {
 
 async function warmShortsShelf(db: AppDb): Promise<boolean> {
   try {
-    const result = await fetchShortsFeed(
-      db,
-      { region, limit: 14, purpose: "shelf" },
-      undefined,
-    );
+    const result = await fetchShortsFeed(db, {
+      region,
+      limit: 14,
+      purpose: "shelf",
+    });
     logLine(
       `warm-cache: shorts shelf — ${result.videos.length} videos (${result.sourceUsed}, region=${region})`,
     );
@@ -219,11 +217,15 @@ async function warmChannelMeta(
  * interactive path SQLite-only.
  */
 async function warmRssFeeds(db: AppDb, channelIds: string[]): Promise<boolean> {
-  const stats = await runInBatches("rss feeds", channelIds, async (channelId) => {
-    await refreshChannelRss(db, channelId);
-    await refreshLongFormWindow(db, channelId);
-    return {};
-  });
+  const stats = await runInBatches(
+    "rss feeds",
+    channelIds,
+    async (channelId) => {
+      await refreshChannelRss(db, channelId);
+      await refreshLongFormWindow(db, channelId);
+      return {};
+    },
+  );
   return stats.failed === 0;
 }
 
@@ -306,22 +308,29 @@ async function collectWarmVideoIds(
  * SponsorBlock segments — so clicking a video from the home feed is served
  * entirely from SQLite.
  */
-async function warmVideoDetails(db: AppDb, videoIds: string[]): Promise<boolean> {
-  const stats = await runInBatches("video details", videoIds, async (videoId) => {
-    let ok = false;
-    try {
-      await fetchVideoDetail(db, { videoId });
-      ok = true;
-    } catch {
-      /* age-restricted/unavailable: skip */
-    }
-    await fetchVideoComments(db, { videoId, sortBy: "top" }).catch(() => {});
-    await getSponsorBlockSegments(db, {
-      videoId,
-      categories: [...DEFAULT_SPONSORBLOCK_CATEGORIES],
-    }).catch(() => {});
-    return { skipped: !ok };
-  });
+async function warmVideoDetails(
+  db: AppDb,
+  videoIds: string[],
+): Promise<boolean> {
+  const stats = await runInBatches(
+    "video details",
+    videoIds,
+    async (videoId) => {
+      let ok = false;
+      try {
+        await fetchVideoDetail(db, { videoId });
+        ok = true;
+      } catch {
+        /* age-restricted/unavailable: skip */
+      }
+      await fetchVideoComments(db, { videoId, sortBy: "top" }).catch(() => {});
+      await getSponsorBlockSegments(db, {
+        videoId,
+        categories: [...DEFAULT_SPONSORBLOCK_CATEGORIES],
+      }).catch(() => {});
+      return { skipped: !ok };
+    },
+  );
   return stats.failed === 0;
 }
 

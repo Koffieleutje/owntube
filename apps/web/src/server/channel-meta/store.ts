@@ -3,10 +3,7 @@ import type { AppDb } from "@/server/db/client";
 import { channelMeta } from "@/server/db/schema";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
-import {
-  fetchChannelPage,
-  type ProxySourceOverrides,
-} from "@/server/services/proxy";
+import { fetchChannelPage } from "@/server/services/proxy";
 
 export const CHANNEL_META_TTL_SEC = 7 * 24 * 60 * 60;
 
@@ -209,7 +206,6 @@ export type RefreshedChannelMeta = {
 export async function refreshChannelMetaIfStale(
   db: AppDb,
   channelId: string,
-  overrides?: ProxySourceOverrides,
 ): Promise<RefreshedChannelMeta> {
   const cachedMeta = readChannelMetaRow(db, channelId);
   if (cachedMeta && isFreshChannelMeta(cachedMeta.updatedAt)) {
@@ -230,7 +226,7 @@ export async function refreshChannelMetaIfStale(
 
   for (let attempt = 0; attempt < LIST_DETAILED_RETRIES; attempt++) {
     try {
-      const page = await fetchChannelPage(db, { channelId }, overrides);
+      const page = await fetchChannelPage(db, { channelId });
       const resolvedName =
         page.name?.trim() || cachedMeta?.channelName || channelId;
       const resolvedAvatar = page.avatarUrl ?? cachedMeta?.avatarUrl ?? null;

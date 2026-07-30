@@ -6,7 +6,6 @@ import { describeUpstreamAvailability } from "@/server/services/proxy";
 import { peekFreshVideoDetail } from "@/server/services/proxy/video";
 import type { VideoDetail } from "@/server/services/proxy.types";
 import {
-  getUserProxyOverrides,
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
@@ -32,11 +31,7 @@ export default async function ShortsPage({ searchParams }: ShortsPageProps) {
         )
       : "US";
 
-  const overrides =
-    Number.isFinite(userId) && userId > 0
-      ? getUserProxyOverrides(db, userId)
-      : undefined;
-  const initialUpstream = describeUpstreamAvailability(overrides);
+  const initialUpstream = describeUpstreamAvailability();
 
   const viewerId = Number.isFinite(userId) && userId > 0 ? userId : null;
   const exclusionSet =

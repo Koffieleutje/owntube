@@ -45,10 +45,7 @@ import {
 import type { ScoredVideo } from "../src/server/recommendation/types";
 import { fetchVideoDetail } from "../src/server/services/proxy";
 import type { UnifiedVideo } from "../src/server/services/proxy.types";
-import {
-  getUserProxyOverrides,
-  getUserSettings,
-} from "../src/server/settings/profile";
+import { getUserSettings } from "../src/server/settings/profile";
 
 async function main() {
   const videoId = process.argv[2]?.trim();
@@ -79,7 +76,6 @@ async function main() {
 
   const userSettings = getUserSettings(db, userId);
   const region = userSettings.trendingRegion ?? "US";
-  const overrides = getUserProxyOverrides(db, userId);
   const nowSec = Math.floor(Date.now() / 1000);
 
   // 1. Collect the tagged candidate pool (history channels, subs, trending,
@@ -88,7 +84,6 @@ async function main() {
   const { tagged, recentCoverageByChannel, coldStart } =
     await collectTaggedVideoCandidates(db, userId, {
       region,
-      overrides,
       signals,
       tasteKeywords: userSettings.tasteKeywords,
     });
@@ -189,7 +184,6 @@ async function main() {
       scored,
       coldStart,
       limits: HOME_RELATED_LIMITS,
-      overrides,
       excludeVideoIds: watchedEver,
       signals,
       tasteModel,
@@ -218,7 +212,7 @@ async function main() {
     }
     candidateSource = sourceByVideoId.get(videoId);
     try {
-      const detail = await fetchVideoDetail(db, { videoId }, overrides);
+      const detail = await fetchVideoDetail(db, { videoId });
       target = {
         videoId: detail.videoId,
         title: detail.title,
