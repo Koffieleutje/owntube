@@ -112,10 +112,25 @@ export const streamSourceSchema = z.object({
   fps: z.number().positive().optional(),
   /** Video height in pixels when upstream provides it (0 = no video plane). */
   height: z.number().finite().nonnegative().optional(),
-  /** BCP-47 / YouTube audio track id prefix when provided by upstream. */
+  /**
+   * BCP-47 language tag of this audio track, read from Invidious
+   * `adaptiveFormats[].audioTrack.id` with YouTube's track discriminator
+   * stripped ("en-US.4" → "en-US"). Read from upstream, not inferred. Absent on
+   * single-audio videos, which never carry an `audioTrack`.
+   */
   language: z.string().optional(),
-  /** Invidious `audioTrack.displayName` when present. */
+  /**
+   * Invidious `audioTrack.displayName`, e.g. "English (US) original". Always
+   * English, so it is a fallback for labelling rather than the label itself —
+   * `language` drives the localised name.
+   */
   audioTrackDisplayName: z.string().optional(),
+  /**
+   * Invidious `audioTrack.audioIsDefault`: true for the video's original
+   * (undubbed) audio. Replaces guessing at `acont=original` inside the stream
+   * URL's `xtags` parameter.
+   */
+  audioIsOriginal: z.boolean().optional(),
   /**
    * True when this URL is video-only (YouTube/Invidious adaptive) and must not
    * be used alone in a single &lt;video src&gt; — no muxed audio.

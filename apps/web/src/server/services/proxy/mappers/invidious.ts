@@ -130,58 +130,40 @@ function invidiousAdaptiveMimeIsAudio(mime: string | undefined): boolean {
   return mime.toLowerCase().trim().startsWith("audio/");
 }
 
+/**
+ * Read a stream's audio-track metadata from Invidious' `audioTrack` object.
+ *
+ * Absent on single-audio videos, which is correct rather than a gap — there is
+ * no second track to tell it apart from. Only videos with multi-language audio
+ * carry it.
+ *
+ * This used to try six further shapes when `audioTrack` was missing
+ * (`audioTrackId`, `language`/`lang`/`audioLanguage`, `audioTrackDisplayName`/
+ * `name`, and finally guessing a track *name* out of `qualityLabel`), because
+ * Invidious parsed `audioTrack` but never serialised it. It does now, so the
+ * guesses are gone; the `qualityLabel` one was actively wrong, labelling a track
+ * with a video quality string.
+ */
 function readInvidiousAdaptiveAudioMeta(st: Record<string, unknown>): {
   language?: string;
   displayName?: string;
+  isOriginal?: boolean;
 } {
   const at = st.audioTrack;
-  if (at && typeof at === "object") {
-    const t = at as Record<string, unknown>;
-    const displayName =
-      typeof t.displayName === "string" ? t.displayName : undefined;
-    let language: string | undefined;
-    if (typeof t.id === "string" && t.id.length > 0) {
-      language = t.id.replace(/^\./, "").split(".")[0];
-    } else if (typeof t.languageCode === "string") {
-      language = t.languageCode;
-    } else if (typeof t.language === "string") {
-      language = t.language;
-    }
-    return { displayName, language };
-  }
-  if (typeof st.audioTrackId === "string" && st.audioTrackId.length > 0) {
-    return {
-      language: st.audioTrackId.replace(/^\./, "").split(/[.]/)[0],
-    };
-  }
+  if (!at || typeof at !== "object") return {};
+  const t = at as Record<string, unknown>;
 
-  const lang =
-    typeof st.language === "string"
-      ? st.language
-      : typeof st.lang === "string"
-        ? st.lang
-        : typeof st.audioLanguage === "string"
-          ? st.audioLanguage
-          : undefined;
-  const displayName =
-    typeof st.audioTrackDisplayName === "string"
-      ? st.audioTrackDisplayName
-      : typeof st.name === "string"
-        ? st.name
-        : undefined;
-  if (lang || displayName) return { language: lang, displayName };
-
-  const ql = typeof st.qualityLabel === "string" ? st.qualityLabel.trim() : "";
-  if (
-    ql &&
-    !/^(tiny|low|light|medium|high|small|144p|240p|360p|480p|720p|1080p)/i.test(
-      ql,
-    )
-  ) {
-    return { displayName: ql };
-  }
-
-  return {};
+  return {
+    // `id` is a language tag plus a track discriminator, e.g. "en-US.4".
+    // Keep the tag, drop the discriminator.
+    language:
+      typeof t.id === "string" && t.id.length > 0
+        ? t.id.replace(/^\./, "").split(".")[0]
+        : undefined,
+    displayName: typeof t.displayName === "string" ? t.displayName : undefined,
+    isOriginal:
+      typeof t.audioIsDefault === "boolean" ? t.audioIsDefault : undefined,
+  };
 }
 
 type InvidiousStream = {
@@ -291,6 +273,7 @@ export function mapInvidiousVideo(
     fps?: number;
     language?: string;
     audioTrackDisplayName?: string;
+    audioIsOriginal?: boolean;
     indexed?: boolean;
   }[] = [];
   for (const item of adaptiveFormats) {
@@ -309,6 +292,7 @@ export function mapInvidiousVideo(
           fps: m.fps,
           language: meta.language,
           audioTrackDisplayName: meta.displayName,
+          audioIsOriginal: meta.isOriginal,
           indexed: m.indexed,
         });
       }

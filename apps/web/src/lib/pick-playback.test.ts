@@ -166,7 +166,7 @@ describe("buildWatchPlayback", () => {
     });
   });
 
-  it("infers ≥2 audio languages from xtags and keeps the split picker", () => {
+  it("keeps the split picker when upstream reports two audio languages", () => {
     const w = buildWatchPlayback(
       noIndexBase({
         // Multi-language keeps the split (language picker) even with an
@@ -184,14 +184,20 @@ describe("buildWatchPlayback", () => {
         ],
         audioSources: [
           {
-            url: "https://g.example/playback?xtags=acont%3Doriginal%3Alang%3Den-US&itag=140",
+            url: "https://g.example/audio-en.mp4",
             quality: "medium",
             mimeType: "audio/mp4",
+            language: "en-US",
+            audioTrackDisplayName: "English (US) original",
+            audioIsOriginal: true,
           },
           {
-            url: "https://g.example/playback?xtags=acont%3Ddubbed%3Alang%3Des-419&itag=140",
+            url: "https://g.example/audio-es.mp4",
             quality: "medium",
             mimeType: "audio/mp4",
+            language: "es-419",
+            audioTrackDisplayName: "Spanish (Latin America)",
+            audioIsOriginal: false,
           },
         ],
       }),
@@ -200,7 +206,7 @@ describe("buildWatchPlayback", () => {
     if (w.kind === "progressive" && w.variants[0]?.t === "split") {
       expect(w.variants[0].audioOptions).toHaveLength(2);
       const enOpt = w.variants[0].audioOptions.find((o) =>
-        o.url.includes("lang%3Den"),
+        o.url.includes("audio-en"),
       );
       expect(enOpt?.label.toLowerCase()).toMatch(/original/);
       expect(w.variants[0].defaultAudioIndex).toBe(0);
@@ -224,21 +230,27 @@ describe("buildWatchPlayback", () => {
         ],
         audioSources: [
           {
-            url: "https://g.example/playback?xtags=lang%3Dfr&itag=140",
+            url: "https://g.example/audio-fr.mp4",
             quality: "medium",
             mimeType: "audio/mp4",
+            language: "fr",
+            audioTrackDisplayName: "French",
+            audioIsOriginal: false,
           },
           {
-            url: "https://g.example/playback?xtags=acont%3Doriginal%3Alang%3Den&itag=140",
+            url: "https://g.example/audio-en.mp4",
             quality: "medium",
             mimeType: "audio/mp4",
+            language: "en",
+            audioTrackDisplayName: "English original",
+            audioIsOriginal: true,
           },
         ],
       }),
     );
     expect(w.kind).toBe("progressive");
     if (w.kind === "progressive" && w.variants[0]?.t === "split") {
-      expect(w.variants[0].audioUrl).toContain("lang%3Den");
+      expect(w.variants[0].audioUrl).toContain("audio-en");
       expect(w.variants[0].defaultAudioIndex).toBe(1);
     }
   });

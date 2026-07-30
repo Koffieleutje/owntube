@@ -23,7 +23,6 @@ import {
 } from "@/components/player/player-quality";
 import type { SponsorBlockChromeProps } from "@/components/player/player-types";
 import type { ScrubPreviewConfig } from "@/hooks/use-scrub-frame-preview";
-import { languageFirstAudioMenuLabel } from "@/lib/audio-track-label";
 import {
   applyCompanionAudioSync,
   companionAudioSyncThresholds,
@@ -446,15 +445,9 @@ export function SplitBlock({
         index: splitAudioIdx,
         setIndex: setSplitAudioIdx,
         items: audioTracks.map((t, idx) => ({
-          label:
-            t.label?.trim() ||
-            languageFirstAudioMenuLabel({
-              displayName: null,
-              language: null,
-              qualityFallback: null,
-              streamUrl: t.src,
-              index: idx,
-            }),
+          // `pick-playback` always labels these; the index is a last resort
+          // for a payload that somehow arrives without one.
+          label: t.label?.trim() || `Track ${idx + 1}`,
         })),
       }
     : { kind: "none" };

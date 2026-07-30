@@ -1,123 +1,197 @@
-function primaryLanguageSubtag(raw: string): string {
-  const cleaned = raw.trim().replace(/^\./, "");
-  if (!cleaned || cleaned.toLowerCase() === "und") return "";
-  return (cleaned.split(/[-_.]/)[0] ?? cleaned).toLowerCase();
+/**
+ * Labelling and grouping for audio tracks.
+ *
+ * The language data itself comes from upstream: Invidious emits
+ * `adaptiveFormats[].audioTrack.{id,displayName,audioIsDefault}` (see
+ * `mappers/invidious.ts`), and HLS/DASH manifests carry their own per-track
+ * language and label. This module only turns that into something a picker can
+ * show, which is a presentation concern and belongs here rather than upstream —
+ * not least because upstream `displayName` is always English while these labels
+ * are localised.
+ *
+ * Nothing here parses stream URLs. It used to: before Invidious exposed
+ * `audioTrack`, language had to be scraped out of googlevideo query strings
+ * (`lang=`, `xtags=acont%3Ddubbed%3Alang%3Dfr`, `audioTrackId=.fr.4`), which was
+ * undocumented and failed silently whenever YouTube changed it.
+ */
+
+/**
+ * Reduce an upstream language id to a BCP-47 tag `Intl` will accept.
+ *
+ * Upstream ids are *not* plain tags: Invidious passes YouTube's
+ * `audioTrack.id`, which appends a track discriminator (`en-US.4`, `.fr.3`).
+ * Left in place that suffix makes `Intl.DisplayNames` throw `RangeError`, so it
+ * has to go, along with a leading dot and any underscore separator.
+ *
+ * Returns "" for anything unusable — empty, `und`, or not subtag-shaped — so
+ * callers get one "no language" answer instead of several.
+ */
+function normalizeLanguageTag(raw: string | undefined | null): string {
+  const cleaned = (raw ?? "").trim().replace(/^\./, "").replace(/_/g, "-");
+  const tag = cleaned.split(".")[0] ?? "";
+  if (!tag || tag.toLowerCase() === "und") return "";
+  // Guard Intl against non-tags like "4" or "".
+  if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(tag)) return "";
+  return tag;
 }
 
+/**
+ * Localised language name, or undefined when the platform cannot resolve the
+ * tag. `Intl.DisplayNames` reports failure two ways — it throws on a malformed
+ * tag and echoes the input back for a well-formed but unknown one — and returns
+ * the useless "root" for `und`. All three mean "no name".
+ */
 function intlLanguageName(
-  subtag: string,
+  tag: string,
   locales?: Intl.LocalesArgument,
 ): string | undefined {
+  if (!tag) return undefined;
   try {
-    const name = new Intl.DisplayNames(locales, {
-      type: "language",
-    }).of(subtag);
-    return name ?? undefined;
+    const name = new Intl.DisplayNames(locales, { type: "language" }).of(tag);
+    if (!name || name === tag || name === "root") return undefined;
+    return name;
   } catch {
     return undefined;
   }
 }
 
-function normalizeLangTag(primary: string, region: string | undefined): string {
-  const p = primary.trim().toLowerCase();
-  if (!p) return "";
-  const r = region?.trim();
-  return r ? `${p}${r}` : p;
+/**
+ * Most specific name available for a tag: `zh-Hans` should read "Simplified
+ * Chinese", not "Chinese", because a multi-language upload commonly offers both
+ * `zh-Hans` and `zh-Hant` and collapsing them to "Chinese" makes two different
+ * dubs indistinguishable. Falls back to the primary subtag when the platform
+ * has no name for the full tag.
+ */
+function languageDisplayName(
+  tag: string,
+  locales?: Intl.LocalesArgument,
+): string | undefined {
+  const full = intlLanguageName(tag, locales);
+  if (full) return full;
+  const primary = tag.split("-")[0] ?? "";
+  if (primary && primary !== tag) return intlLanguageName(primary, locales);
+  return undefined;
 }
 
 /**
- * googlevideo URLs encode language hints in two distinct places:
- *   1. A bare `lang=XX` (or `lang=XX-YY`) query parameter (older style).
- *   2. An `xtags` parameter — URL-encoded — that bundles colon-separated
- *      key=value pairs, e.g.
- *        `xtags=acont%3Doriginal%3Alang%3Den-US%3Avariant%3Dmain`
- *      which decodes to `acont=original:lang=en-US:variant=main`.
+ * Words of a label, ignoring anything numeric. Tokens are split on
+ * non-alphanumerics and then any token containing a digit is dropped, so the
+ * "131k" of a "French [131k]" bitrate suffix contributes nothing — matching on
+ * letters alone would have left a stray "k" behind.
+ */
+function letterWords(value: string): Set<string> {
+  const tokens = value.toLowerCase().match(/[\p{Letter}\p{Number}]+/gu) ?? [];
+  return new Set(tokens.filter((t) => !/\p{Number}/u.test(t)));
+}
+
+/**
+ * Whether an upstream `displayName` says anything the resolved language name
+ * does not already say.
  *
- * Some Invidious builds also expose `audioTrackId=<lang>.<n>` (e.g. `.fr.4`).
- * All three are checked here; the first hit wins.
+ * Most upstream labels are pure restatements of the language, in a handful of
+ * shapes: Invidious' API gives "English (US) original" and "Chinese
+ * (Simplified)"; its DASH manifest gives "French [131k]". Appending those
+ * produces "Simplified Chinese (Chinese (Simplified))". But some labels are
+ * genuinely extra — "Commentary", "Descriptions", a director's track — and
+ * dropping those would lose the only thing distinguishing two tracks of the
+ * same language.
+ *
+ * So compare at word level: if every word of the display name is already
+ * implied by the language, the script/region subtags, or a boilerplate marker,
+ * it adds nothing. Bitrates and other non-letter noise are ignored.
  */
-function languageFromGoogleVideoUrl(url: string | undefined | null): string {
-  if (!url) return "";
+function displayNameAddsInformation(
+  display: string,
+  tag: string,
+  localized: string,
+): boolean {
+  const words = letterWords(display);
+  if (words.size === 0) return false;
 
-  const bare = url.match(/[?&]lang=([a-z]{2,3})(-[A-Za-z0-9]{2,4})?/i);
-  if (bare?.[1]) {
-    return normalizeLangTag(bare[1], bare[2]);
+  const implied = new Set<string>(["original", "default", "audio", "track"]);
+  const add = (value: string | undefined) => {
+    if (!value) return;
+    for (const word of letterWords(value)) implied.add(word);
+  };
+
+  add(localized);
+  const primary = tag.split("-")[0] ?? "";
+  // Both locales: the label may restate the language in the viewer's language
+  // or, as upstream always does, in English.
+  for (const locales of [undefined, "en"] as const) {
+    add(languageDisplayName(tag, locales));
+    add(intlLanguageName(primary, locales));
   }
 
-  const xtagsMatch = url.match(/[?&]xtags=([^&#]+)/i);
-  if (xtagsMatch?.[1]) {
-    let decoded = xtagsMatch[1];
-    try {
-      decoded = decodeURIComponent(decoded);
-    } catch {
-      // Keep raw value if decoding fails; regex below tolerates either form.
+  // Script and region subtags, e.g. the "Simplified" in "Chinese (Simplified)"
+  // or the "US" in "English (US)" — already carried by the tag we resolved.
+  for (const subtag of tag.split("-").slice(1)) {
+    implied.add(subtag.toLowerCase());
+    for (const type of ["script", "region"] as const) {
+      try {
+        add(new Intl.DisplayNames(undefined, { type }).of(subtag));
+      } catch {
+        // Not a subtag of this type; the next one may match.
+      }
     }
-    const xtagLang = decoded.match(
-      /(?:^|[:;,])lang=([a-z]{2,3})(-[A-Za-z0-9]{2,4})?/i,
-    );
-    if (xtagLang?.[1]) {
-      return normalizeLangTag(xtagLang[1], xtagLang[2]);
-    }
   }
 
-  const trackIdMatch = url.match(
-    /[?&](?:audio[_-]?track[_-]?id|audiotrackid)=\.?([a-z]{2,3})(-[A-Za-z0-9]{2,4})?/i,
-  );
-  if (trackIdMatch?.[1]) {
-    return normalizeLangTag(trackIdMatch[1], trackIdMatch[2]);
-  }
-
-  return "";
-}
-
-/**
- * Whether this stream is YouTube / Invidious' **original** audio (as opposed to
- * a translated dub). Used to label the picker and pick the default track.
- */
-export function streamLooksLikeOriginalAudio(opts: {
-  displayName?: string | null;
-  streamUrl?: string | null;
-}): boolean {
-  const rawName = opts.displayName?.trim() ?? "";
-  if (rawName && /\boriginal\b/i.test(rawName)) return true;
-
-  const u = opts.streamUrl ?? "";
-  const xtagsMatch = u.match(/[?&]xtags=([^&#]+)/i);
-  if (xtagsMatch?.[1]) {
-    let decoded = xtagsMatch[1];
-    try {
-      decoded = decodeURIComponent(decoded);
-    } catch {
-      // tolerate raw
-    }
-    if (/acont=original/i.test(decoded)) return true;
-  }
-
+  for (const word of words) if (!implied.has(word)) return true;
   return false;
 }
 
 /**
- * Best-effort BCP-ish code from HLS / internal track ids. Handles common
- * shapes:
- *   - `audio-fr`, `track_en`, `audio/de` (suffix delimited)
- *   - `track-en-4`, `audio_track_pt-BR_5` (lang sandwiched between delimiters)
- *   - `.fr.4`, `.en` (Invidious adaptive `audioTrack.id` / `audioTrackId`)
+ * Whether a track's own label marks it as the original (undubbed) audio.
+ *
+ * Prefer upstream's explicit flag (`audioTrack.audioIsDefault`, surfaced as
+ * `audioIsOriginal`) where it exists; this is the fallback for HLS/DASH
+ * manifests, which only ever give a human label.
  */
-function inferLanguageFromTrackId(id: string | undefined | null): string {
-  if (!id?.trim()) return "";
-  const low = id.toLowerCase().replace(/^\./, "");
+export function displayNameMarksOriginalAudio(
+  displayName: string | null | undefined,
+): boolean {
+  return /\boriginal\b/i.test(displayName?.trim() ?? "");
+}
 
-  const dotted = low.match(/^([a-z]{2,3})(-[a-z0-9]{2,4})?(?:\.|$)/);
-  if (dotted?.[1]) {
-    return normalizeLangTag(dotted[1], dotted[2]);
-  }
+/**
+ * Human-readable label for an audio stream (display name first, then language
+ * tag). Used when the language-first label has no language to work with.
+ */
+export function audioMenuLabel(opts: {
+  displayName?: string | null;
+  language?: string | null;
+  qualityFallback?: string | null;
+  index: number;
+}): string {
+  const display = opts.displayName?.trim();
+  if (display) return display;
 
-  const matches = [
-    ...low.matchAll(/[-_/]([a-z]{2,3})(-[a-z0-9]{2,4})?(?=[-_/.]|$)/g),
-  ];
-  const last = matches.at(-1);
-  if (!last?.[1]) return "";
-  return normalizeLangTag(last[1], last[2]);
+  const tag = normalizeLanguageTag(opts.language);
+  if (tag) return languageDisplayName(tag) ?? tag.toUpperCase();
+
+  const quality = opts.qualityFallback?.trim();
+  if (quality) return quality;
+  return `Track ${opts.index + 1}`;
+}
+
+/**
+ * Resolve a (key, localized name) pair for an audio track.
+ *
+ * `key` is the normalised full language tag, suitable for grouping the several
+ * bitrates of one track into a single picker row. It is deliberately the *full*
+ * tag rather than the primary subtag: `zh-Hans` and `zh-Hant` are different
+ * dubs, and keying on `zh` merged them, leaving one of the two unreachable.
+ */
+export function audioTrackLanguageInfo(opts: {
+  displayName?: string | null;
+  language?: string | null;
+}): { key: string | null; name: string | null } {
+  const tag = normalizeLanguageTag(opts.language);
+  if (!tag) return { key: null, name: null };
+  return {
+    key: tag.toLowerCase(),
+    name: languageDisplayName(tag) ?? tag.toUpperCase(),
+  };
 }
 
 function humanizeAudioKind(
@@ -136,110 +210,23 @@ function humanizeAudioKind(
   return map[k] ?? `(${k})`;
 }
 
-function coalesceLanguageHints(
-  ...parts: (string | undefined | null)[]
-): string {
-  for (const p of parts) {
-    const t = typeof p === "string" ? p.trim().replace(/^\./, "") : "";
-    if (t && t.toLowerCase() !== "und") return t;
-  }
-  return "";
-}
-
 /**
- * Human-readable label for an audio stream (display name first, then language tag).
- */
-export function audioMenuLabel(opts: {
-  displayName?: string | null;
-  language?: string | null;
-  qualityFallback?: string | null;
-  index: number;
-}): string {
-  const display = opts.displayName?.trim();
-  if (display) return display;
-
-  const raw = coalesceLanguageHints(opts.language);
-  const primary = primaryLanguageSubtag(raw);
-  if (primary) {
-    const name = intlLanguageName(primary);
-    if (name) return name;
-    return raw.split(/[.]/)[0]?.toUpperCase() ?? primary.toUpperCase();
-  }
-
-  const q = opts.qualityFallback?.trim();
-  if (q) return q;
-  return `Track ${opts.index + 1}`;
-}
-
-/**
- * Resolve a (key, localized name) pair from the same hints used to label an
- * audio track. The `key` is the BCP-47 primary subtag (lowercase) when found,
- * which is suitable for grouping/deduping multi-bitrate tracks of the same
- * language into a single language picker row.
- */
-export function audioTrackLanguageInfo(opts: {
-  displayName?: string | null;
-  language?: string | null;
-  trackId?: string | null;
-  streamUrl?: string | null;
-}): { key: string | null; name: string | null } {
-  const raw = coalesceLanguageHints(
-    opts.language,
-    inferLanguageFromTrackId(opts.trackId),
-    languageFromGoogleVideoUrl(opts.streamUrl),
-  );
-  const primary = primaryLanguageSubtag(raw);
-  if (!primary) return { key: null, name: null };
-  const localized =
-    intlLanguageName(primary) ??
-    raw.split(/[.]/)[0]?.toUpperCase() ??
-    primary.toUpperCase();
-  return { key: primary, name: localized };
-}
-
-/**
- * Audio menu row: show the **language** (from BCP-47 / Invidious `language`) via
- * {@link Intl.DisplayNames}; add upstream `displayName` in parentheses only when
- * it is not redundant (e.g. "English (Original)").
+ * Audio menu row: lead with the **language**, localised via
+ * {@link Intl.DisplayNames}, and append upstream's own `displayName` only when
+ * it carries information the language name does not.
  */
 export function languageFirstAudioMenuLabel(opts: {
   displayName?: string | null;
   language?: string | null;
   qualityFallback?: string | null;
-  /** HLS / internal id; may contain a language suffix. */
-  trackId?: string | null;
   kind?: string | null;
-  /** Progressive URL (e.g. `lang=` on googlevideo). */
-  streamUrl?: string | null;
   index: number;
 }): string {
-  const raw = coalesceLanguageHints(
-    opts.language,
-    inferLanguageFromTrackId(opts.trackId),
-    languageFromGoogleVideoUrl(opts.streamUrl),
-  );
-  const primary = primaryLanguageSubtag(raw);
-  if (primary) {
-    const localized =
-      intlLanguageName(primary) ??
-      raw.split(/[.]/)[0]?.toUpperCase() ??
-      primary.toUpperCase();
+  const tag = normalizeLanguageTag(opts.language);
+  if (tag) {
+    const localized = languageDisplayName(tag) ?? tag.toUpperCase();
     const display = opts.displayName?.trim();
-    if (display) {
-      if (
-        display.localeCompare(localized, undefined, {
-          sensitivity: "base",
-        }) === 0
-      ) {
-        return localized;
-      }
-      const enLabel = intlLanguageName(primary, "en");
-      if (
-        enLabel &&
-        display.localeCompare(enLabel, undefined, { sensitivity: "base" }) === 0
-      ) {
-        return localized;
-      }
+    if (display && displayNameAddsInformation(display, tag, localized)) {
       return `${localized} (${display})`;
     }
     return localized;

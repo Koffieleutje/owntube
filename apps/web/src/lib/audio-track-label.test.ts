@@ -1,46 +1,99 @@
 import { describe, expect, it } from "vitest";
 import {
   audioTrackLanguageInfo,
+  displayNameMarksOriginalAudio,
   languageFirstAudioMenuLabel,
-  streamLooksLikeOriginalAudio,
 } from "@/lib/audio-track-label";
 
+/**
+ * Real `adaptiveFormats[].audioTrack` values from Invidious for `0e3GPea1Tyg`,
+ * a 24-language upload. `language` is what `mappers/invidious.ts` derives from
+ * `audioTrack.id` (tag with the `.N` discriminator stripped).
+ */
+const UPSTREAM = {
+  englishOriginal: { language: "en-US", displayName: "English (US) original" },
+  french: { language: "fr", displayName: "French" },
+  simplified: { language: "zh-Hans", displayName: "Chinese (Simplified)" },
+  traditional: { language: "zh-Hant", displayName: "Chinese (Traditional)" },
+};
+
+describe("audioTrackLanguageInfo", () => {
+  it("keys on the full tag so zh-Hans and zh-Hant stay distinct", () => {
+    const simplified = audioTrackLanguageInfo(UPSTREAM.simplified);
+    const traditional = audioTrackLanguageInfo(UPSTREAM.traditional);
+    expect(simplified.key).toBe("zh-hans");
+    expect(traditional.key).toBe("zh-hant");
+    expect(simplified.key).not.toBe(traditional.key);
+    // …and names them apart, rather than calling both "Chinese".
+    expect(simplified.name).not.toBe(traditional.name);
+  });
+
+  it("groups the several bitrates of one track under one key", () => {
+    const a = audioTrackLanguageInfo(UPSTREAM.french);
+    const b = audioTrackLanguageInfo(UPSTREAM.french);
+    expect(a.key).toBe(b.key);
+    expect(a.key).toBe("fr");
+  });
+
+  it("tolerates an unstripped track discriminator", () => {
+    expect(audioTrackLanguageInfo({ language: "en-US.4" }).key).toBe("en-us");
+    expect(audioTrackLanguageInfo({ language: ".fr.3" }).key).toBe("fr");
+  });
+
+  it("returns nulls when there is no usable language", () => {
+    for (const language of [null, undefined, "", "und", "4"]) {
+      const info = audioTrackLanguageInfo({ language });
+      expect(info.key, `language=${String(language)}`).toBeNull();
+      expect(info.name).toBeNull();
+    }
+  });
+});
+
 describe("languageFirstAudioMenuLabel", () => {
-  it("adds displayName in parentheses when it differs from resolved language", () => {
+  it("does not restate the language that the tag already carries", () => {
+    // Upstream "English (US) original" and "Chinese (Simplified)" used to
+    // produce "English (English (US) original)" / "Chinese (Chinese
+    // (Simplified))" once these fields started arriving.
+    for (const track of [UPSTREAM.englishOriginal, UPSTREAM.simplified]) {
+      const label = languageFirstAudioMenuLabel({ ...track, index: 0 });
+      expect(label, JSON.stringify(track)).not.toContain("(");
+    }
+  });
+
+  it("ignores a bitrate suffix on a DASH manifest label", () => {
+    // Invidious' own DASH manifest labels tracks "<displayName> [<bitrate>k]".
     expect(
       languageFirstAudioMenuLabel({
-        language: "en",
-        displayName: "Original",
-        qualityFallback: null,
+        language: "fr",
+        displayName: "French [131k]",
         index: 0,
       }),
-    ).toMatch(/Original/);
+    ).toBe(audioTrackLanguageInfo({ language: "fr" }).name);
   });
 
-  it("does not parenthesize English display when it matches the en autonym", () => {
-    const s = languageFirstAudioMenuLabel({
+  it("keeps a display name that says something the language does not", () => {
+    const label = languageFirstAudioMenuLabel({
       language: "en",
-      displayName: "English",
-      qualityFallback: null,
+      displayName: "Commentary",
       index: 0,
     });
-    expect(s).not.toContain("(");
+    expect(label).toMatch(/Commentary/);
+    expect(label).toMatch(/\(/);
   });
 
-  it("reads lang= from googlevideo-style stream URL when metadata is missing", () => {
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: "medium",
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?expire=1&lang=fr&itag=140",
+  it("names the script, not just the language", () => {
+    const simplified = languageFirstAudioMenuLabel({
+      ...UPSTREAM.simplified,
       index: 0,
     });
-    expect(s).not.toBe("medium");
-    expect(s).not.toMatch(/^Track \d+$/);
+    const traditional = languageFirstAudioMenuLabel({
+      ...UPSTREAM.traditional,
+      index: 1,
+    });
+    expect(simplified).not.toBe(traditional);
   });
 
-  it("falls back to displayName or quality when no language tag", () => {
+  it("falls back to display name, then kind, then quality, then index", () => {
     expect(
       languageFirstAudioMenuLabel({
         language: null,
@@ -51,161 +104,46 @@ describe("languageFirstAudioMenuLabel", () => {
     ).toBe("Stereo");
     expect(
       languageFirstAudioMenuLabel({
+        language: null,
+        displayName: null,
+        kind: "commentary",
+        qualityFallback: "medium",
+        index: 0,
+      }),
+    ).toBe("Commentary");
+    expect(
+      languageFirstAudioMenuLabel({
         language: undefined,
         displayName: null,
         qualityFallback: "high",
         index: 0,
       }),
     ).toBe("high");
-  });
-
-  it("decodes language from URL-encoded xtags (acont/lang/variant)", () => {
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: "medium",
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?expire=1&xtags=acont%3Doriginal%3Alang%3Den-US%3Avariant%3Dmain&itag=140",
-      index: 0,
-    });
-    expect(s).not.toBe("medium");
-    expect(s).not.toMatch(/^Track \d+$/);
-    // Localised name from Intl.DisplayNames; assert against the en label we
-    // resolve via audioTrackLanguageInfo too (avoids hard-coding system locale).
-    const info = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?expire=1&xtags=acont%3Doriginal%3Alang%3Den-US%3Avariant%3Dmain&itag=140",
-    });
-    expect(info.key).toBe("en");
-    expect(s).toBe(info.name);
-  });
-
-  it("decodes language from already-decoded xtags", () => {
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?xtags=acont=original:lang=fr-FR:variant=main&itag=140",
-      index: 0,
-    });
-    expect(s).not.toMatch(/^Track \d+$/);
-    const info = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?xtags=acont=original:lang=fr-FR:variant=main&itag=140",
-    });
-    expect(info.key).toBe("fr");
-  });
-
-  it("decodes language from xtags survived on /invidious/... rewrite", () => {
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: null,
-      streamUrl:
-        "https://owntube.example.org/invidious/videoplayback?expire=1&xtags=acont%3Doriginal%3Alang%3Dde%3Avariant%3Dmain&itag=140",
-      index: 1,
-    });
-    expect(s).not.toMatch(/^Track \d+$/);
-    const info = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://owntube.example.org/invidious/videoplayback?expire=1&xtags=acont%3Doriginal%3Alang%3Dde%3Avariant%3Dmain&itag=140",
-    });
-    expect(info.key).toBe("de");
-  });
-
-  it("reads audioTrackId style language hints from URL", () => {
-    const info = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://owntube.example.org/invidious/videoplayback?audioTrackId=.pt-BR.4&itag=251",
-    });
-    expect(info.key).toBe("pt");
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: null,
-      streamUrl:
-        "https://owntube.example.org/invidious/videoplayback?audioTrackId=.pt-BR.4&itag=251",
-      index: 0,
-    });
-    expect(s).not.toMatch(/^Track \d+$/);
-  });
-
-  it("infers language from a dotted Invidious trackId", () => {
-    const info = audioTrackLanguageInfo({
-      language: null,
-      trackId: ".es.5",
-    });
-    expect(info.key).toBe("es");
-    const s = languageFirstAudioMenuLabel({
-      language: null,
-      displayName: null,
-      qualityFallback: null,
-      trackId: ".es.5",
-      index: 0,
-    });
-    expect(s).not.toMatch(/^Track \d+$/);
-  });
-});
-
-describe("audioTrackLanguageInfo", () => {
-  it("returns a key when language is encoded only inside xtags", () => {
-    const info = audioTrackLanguageInfo({
-      language: null,
-      displayName: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?xtags=acont%3Doriginal%3Alang%3Den-US%3Avariant%3Dmain",
-    });
-    expect(info.key).toBe("en");
-    expect(info.name).toBeTruthy();
-    expect(info.name).not.toMatch(/^Track \d+$/);
-  });
-
-  it("returns null for URLs without any language hint", () => {
-    const info = audioTrackLanguageInfo({
-      language: null,
-      displayName: null,
-      streamUrl: "https://rr1---sn.example.com/videoplayback?itag=140",
-    });
-    expect(info.key).toBeNull();
-  });
-
-  it("groups two languages by distinct keys via xtags", () => {
-    const en = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?xtags=lang%3Den&itag=140",
-    });
-    const fr = audioTrackLanguageInfo({
-      language: null,
-      streamUrl:
-        "https://rr1---sn.example.com/videoplayback?xtags=lang%3Dfr&itag=140",
-    });
-    expect(en.key).toBe("en");
-    expect(fr.key).toBe("fr");
-    expect(en.key).not.toBe(fr.key);
-  });
-});
-
-describe("streamLooksLikeOriginalAudio", () => {
-  it("detects Original from Invidious displayName", () => {
-    expect(streamLooksLikeOriginalAudio({ displayName: "Original" })).toBe(
-      true,
-    );
-    expect(streamLooksLikeOriginalAudio({ displayName: "French" })).toBe(false);
-  });
-
-  it("detects acont=original inside URL-encoded xtags", () => {
     expect(
-      streamLooksLikeOriginalAudio({
+      languageFirstAudioMenuLabel({
+        language: null,
         displayName: null,
-        streamUrl:
-          "https://g.example/videoplayback?xtags=acont%3Doriginal%3Alang%3Den-US",
+        qualityFallback: null,
+        index: 2,
       }),
-    ).toBe(true);
+    ).toBe("Track 3");
+  });
+
+  it("never emits a raw tag when the platform can name it", () => {
+    for (const language of ["fr", "pt-BR", "zh-Hant", "en-US"]) {
+      const label = languageFirstAudioMenuLabel({ language, index: 0 });
+      expect(label, language).not.toBe(language);
+      expect(label).toMatch(/\p{Letter}/u);
+    }
+  });
+});
+
+describe("displayNameMarksOriginalAudio", () => {
+  it("reads an explicit original marker out of a manifest label", () => {
+    expect(displayNameMarksOriginalAudio("English original")).toBe(true);
+    expect(displayNameMarksOriginalAudio("Original")).toBe(true);
+    expect(displayNameMarksOriginalAudio("French")).toBe(false);
+    expect(displayNameMarksOriginalAudio(null)).toBe(false);
+    expect(displayNameMarksOriginalAudio(undefined)).toBe(false);
   });
 });

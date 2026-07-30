@@ -1,7 +1,7 @@
 import {
   audioTrackLanguageInfo,
+  displayNameMarksOriginalAudio,
   languageFirstAudioMenuLabel,
-  streamLooksLikeOriginalAudio,
 } from "@/lib/audio-track-label";
 import { reorderVariantsForDefaultQuality } from "@/lib/default-playback-quality";
 import type { VideoDetail } from "@/server/services/proxy.types";
@@ -233,19 +233,18 @@ function dedupeAudioOptionsByLanguage(
     const info = audioTrackLanguageInfo({
       displayName: src.audioTrackDisplayName,
       language: src.language,
-      streamUrl: src.url,
     });
     const fallbackLabel = languageFirstAudioMenuLabel({
       displayName: src.audioTrackDisplayName,
       language: src.language,
       qualityFallback: labelForStream(src.quality, src.mimeType, idx),
-      streamUrl: src.url,
       index: idx,
     });
-    const isOriginal = streamLooksLikeOriginalAudio({
-      displayName: src.audioTrackDisplayName,
-      streamUrl: src.url,
-    });
+    // Upstream states this outright; the label is only consulted for HLS/DASH
+    // manifest tracks, which carry no such flag.
+    const isOriginal =
+      src.audioIsOriginal ??
+      displayNameMarksOriginalAudio(src.audioTrackDisplayName);
     let label = info.name ?? fallbackLabel;
     if (
       isOriginal &&
@@ -462,7 +461,6 @@ function countDistinctAudioLanguages(detail: VideoDetail): number {
     const info = audioTrackLanguageInfo({
       displayName: src.audioTrackDisplayName,
       language: src.language,
-      streamUrl: src.url,
     });
     if (info.key) keys.add(info.key);
   }
