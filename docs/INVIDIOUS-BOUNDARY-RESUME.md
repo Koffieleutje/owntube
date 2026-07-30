@@ -7,24 +7,25 @@ in git, so it does not depend on any prior conversation.
 
 Continue the OwnTube ↔ Invidious boundary work. Read `docs/INVIDIOUS-BOUNDARY-PLAN.md`
 first — it has the full analysis, the phase-by-phase plan, a status table, and an
-"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1** are shipped;
-**start at Phase 3.2**.
+"Open items and honest gaps" section. Phases 0, 1, 2, **3.1 and 3.2** are shipped;
+**start at Phase 3.3**.
 
-## Phase 3.2 — the task
+## Phase 3.3 — the task
 
-The trending/list serialiser is wrong, not merely sparse. Measured: trending items
-report `lengthSeconds: 0` **and** `liveNow: false`, while `/api/v1/videos` reports
-`liveNow: true` for the same ids. Because durations are missing, `short-video.ts`
-falls back to detecting Shorts from a `#shorts` title heuristic (Phase 3.3).
+`short-video.ts` detects Shorts by looking for `#shorts` in the title. Find a
+reliable upstream signal and delete the heuristic.
 
-This is the canary's one remaining acknowledged failure. Fix it upstream on
-`nedworks/integration`, then **remove `listDuration` from
-`UPSTREAM_CHECK_KNOWN_FAILING`** — that is what locks the fix in. The canary
-prints a `NOTE:` when a known-failing check starts passing, so it will tell you.
+**Do not assume 3.2 unblocked this.** The original plan claimed Shorts detection
+was collateral damage from trending dropping `lengthSeconds`. That was a
+misdiagnosis — durations were never dropped (see 3.2 in the plan), so this needs
+its own answer rather than a re-measurement of the same thing.
 
-Start by finding which serialiser trending actually uses: the detail endpoint
-(`jsonify/api_v1/video_json.cr`) is not the same code path as list items, and the
-list path is where `lengthSeconds` is being dropped.
+Worth knowing before you start: `videoRenderer` already encodes Shorts in the
+thumbnail overlay — `thumbnailOverlayTimeStatusRenderer.text == "SHORTS"`, which
+Invidious' extractor special-cases by approximating the length to 60s
+(`extractors.cr`, the `length_seconds` branch). That is a signal being *read and
+then thrown away*, which is the same shape as 3.1 and 3.2 and the most likely
+place to start.
 
 ## What Phase 3.1 established that is worth reusing
 
@@ -45,6 +46,18 @@ list path is where `lengthSeconds` is being dropped.
   10x: predicted ~300 lines deleted, actual net −23 production lines, because
   most of the module was presentation rather than inference. The plan records the
   correction.
+- **Re-measure the premise before fixing it, across more than one endpoint.**
+  3.2's stated bug ("the trending list serialiser drops `lengthSeconds`") was
+  wrong on both counts — durations were fine, and the real defect was `liveNow`
+  in the extractor. One endpoint could not tell "serialiser broken" from "this
+  feed is legitimately all livestreams". A permanently-red canary check made the
+  wrong diagnosis look confirmed.
+- **Fetch the raw InnerTube payload before changing a parser.** 3.2's fix hinged
+  on the live marker having moved from `videoRenderer.badges` to
+  `thumbnailOverlays[].thumbnailOverlayTimeStatusRenderer.style`. Guessing field
+  names here compiles and silently does nothing. `POST
+  https://www.youtube.com/youtubei/v1/browse` with a WEB client context works
+  from the owntube container; the companion only proxies `/youtubei/v1/player`.
 
 ## Non-negotiables (learned the hard way this session)
 
@@ -99,9 +112,11 @@ when one step went wrong. Split by concern; each commit independently green.
   asking** — it was restored once that day on the assumption it had lapsed by
   accident, and that was wrong. Run it by hand instead when you need it:
   `docker exec owntube node_modules/.bin/tsx /path/to/check-upstream.ts`, or
-  `pnpm check:upstream` in `apps/web`. It should report **5 PASS + 1 KNOWN**
-  (`listDuration`). Worth running after any Invidious rebuild, since nothing is
-  watching provenance continuously any more.
+  `pnpm check:upstream` in `apps/web`. It should report **6 PASS + 1 SKIP**
+  (`listDuration` skips when every sampled trending item is live) and **no KNOWN
+  failures** — `UPSTREAM_CHECK_KNOWN_FAILING` is empty since 3.2. Worth running
+  after any Invidious rebuild, since nothing is watching provenance continuously
+  any more.
 - `docker-compose.yml` files under `/var/data/config/*` are **not** in git; the
   convention is timestamped `.bak-*` copies before editing.
 

@@ -1,6 +1,6 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: **Phases 0-2 and 3.1 shipped; 3.2-3.7, 4 and 5 outstanding.** Last
+Status: **Phases 0-2, 3.1 and 3.2 shipped; 3.3-3.7, 4 and 5 outstanding.** Last
 updated 2026-07-30.
 
 | phase | state | commits |
@@ -11,7 +11,8 @@ updated 2026-07-30.
 | 1b(b) — remove per-account overrides | **done** | `fd9ac84` (+293 / −945, 47 files) |
 | 2 — companion direct + internal | **done** | `ad8504f`, `6c2c9e3` |
 | 3.1 — `audioTrack` upstream | **done** | `71fa2f4`, `8181c80` + Invidious `94911a03` |
-| 3.2-3.7 — remaining data gaps | **not started** | — |
+| 3.2 — trending `liveNow` | **done** | `5ec55a1` + Invidious `02099ffe` |
+| 3.3-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
 | 5 — restructure media routes | **not started** | — |
 
@@ -350,13 +351,75 @@ for a pure deletion.
 
 </details>
 
-### 3.2-3.7 — remaining gaps
+### 3.2 — Trending `liveNow` — **DONE** (`5ec55a1`; Invidious `02099ffe`)
+
+**The item as written below was misdiagnosed. Both halves of it were wrong.**
+
+It claimed the trending *list serialiser* drops `lengthSeconds`. It does not.
+Measured across list endpoints on the running fork:
+
+| endpoint | items with a duration | `liveNow` correct |
+|---|---|---|
+| channel videos | 60/60 | yes |
+| search | 18/20 | yes (2 live, both flagged) |
+| popular | 29/40 | yes |
+| **trending** | 1/15 | **no — 14/15 wrong** |
+
+Durations are emitted fine everywhere, and the single non-live trending item
+reported the same `1260` in the list as in the detail endpoint. The serialiser
+was never dropping them.
+
+Two separate things had been conflated:
+
+1. **Trending *is* the livestreams feed now.** `fetch_trending` browses
+   `UC4R8DWoMoI7CAwX8_LjQHig` with a livestreams param, because "Youtube removed
+   the aggregated trending page" (iv-org/invidious#5397). So trending is almost
+   entirely live streams, for which `lengthSeconds: 0` is **correct**. The
+   canary's `listDuration` check demanded a duration from a majority of *all*
+   items, so it failed permanently for something that was never a bug — and that
+   permanent red is what made the duration claim look confirmed.
+2. **The real defect is `liveNow`,** and it is in the *extractor*, not the
+   serialiser. `VideoRendererParser` set the LiveNow badge only from
+   `videoRenderer.badges`. Pulling the raw InnerTube payload shows `badges` is
+   `null` on these items and the live marker has moved to
+   `thumbnailOverlays[].thumbnailOverlayTimeStatusRenderer.style == "LIVE"`,
+   which Invidious never read. Every item therefore serialised
+   `liveNow: false` while `/api/v1/videos` said `true` for the same id.
+
+The fix reads that overlay as a second source for the badge. `length_seconds`
+deliberately gets no equivalent change: the overlay text is `"LIVE"`, which
+`decode_length_seconds` already reduces to 0 — correct for a stream.
+
+Verified against a captured pre-fix baseline: **8/8 sampled trending items
+mismatched before, 0/15 after**. No false positives or negatives introduced
+elsewhere — channel videos, search and popular all unchanged, durations intact.
+
+`5ec55a1` rewrites the canary check accordingly: `listLiveFlag` (list vs detail
+agreement on a sample) and `listDuration` (non-live items only, SKIPping when
+every sampled item is live). `UPSTREAM_CHECK_KNOWN_FAILING` now defaults to
+**empty** — there is no acknowledged upstream failure left.
+
+**Method note worth carrying into 3.3-3.7.** This was found by refusing to take
+the plan's own measurement on trust and re-measuring across *several* endpoints
+instead of one. A single endpoint could not distinguish "the serialiser is
+broken" from "this feed is legitimately all live". And the JSON path for the fix
+came from fetching the raw InnerTube payload rather than guessing at field names
+— worth doing whenever a parser change is involved, since a wrong guess here
+compiles and silently does nothing.
+
+<details><summary>Original item (kept because it was wrong)</summary>
 
 2. **Trending/list serialiser is wrong, not just sparse.** Measured: 15/15 trending
    items report `lengthSeconds: 0` **and** `liveNow: false`, while
    `/api/v1/videos` reports `liveNow: true` for the same ids. Fix upstream.
-3. **Shorts flag.** Because of (2), `short-video.ts` falls back to `#shorts` in the
-   title. A reliable upstream flag removes the heuristic.
+</details>
+
+### 3.3-3.7 — remaining gaps
+
+3. **Shorts flag.** `short-video.ts` falls back to `#shorts` in the title. A
+   reliable upstream flag removes the heuristic. Note 3.2 does **not** unblock
+   this the way the original plan assumed — durations were never the problem, so
+   the Shorts heuristic needs its own answer.
 4. **Members-only / paid.** Currently guessed from the title
    (`mapper:47`, `titleSuggestsMembersOnlyOrSubscriberOnly`).
 5. **`publishedAt`.** Four candidate fields plus
@@ -459,9 +522,9 @@ Phases 0, 1 and 2 are done. Remaining, in order:
 
 1. ~~Phase 3.1 — `audioTrack` upstream.~~ **Done** — see Phase 3.1 above,
    including a correction to this item's line-count forecast.
-2. **Phase 3.2 — the trending list serialiser** (`lengthSeconds` / `liveNow`).
-   This is the canary's one acknowledged `KNOWN` failure; fixing it upstream lets
-   the entry be removed from `UPSTREAM_CHECK_KNOWN_FAILING`, which locks it in.
+2. ~~Phase 3.2 — the trending list serialiser.~~ **Done** — it turned out to be
+   `liveNow` in the *extractor*, not `lengthSeconds` in the serialiser; see 3.2
+   above. `UPSTREAM_CHECK_KNOWN_FAILING` is now empty.
 3. **Phase 3.3-3.7** — shorts flag, members-only flag, `publishedAt`, channel
    parse-error placeholders, multi-shape pickers.
 4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
