@@ -34,6 +34,9 @@ export class FeedStore {
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
+    // Deliberately still `companion.db`: this file lives in a mounted volume on
+    // the deployed server and holds the published snapshots and per-user feed
+    // credentials. Renaming it would quietly start from an empty database.
     this.db = new Database(path.join(dataDir, "companion.db"));
     this.db.pragma("journal_mode = WAL");
     this.db.exec(

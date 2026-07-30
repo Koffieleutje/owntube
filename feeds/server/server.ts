@@ -1,5 +1,5 @@
 /**
- * OwnTube companion — public RSS mirror.
+ * OwnTube feeds server — the public RSS mirror.
  *
  *   POST /publish                          push feed snapshots + user credentials (Bearer PUBLISH_SECRET)
  *   GET  /rss/<kind>/<slug>.audio.xml      podcast RSS, audio enclosures (Basic Auth)
@@ -50,7 +50,7 @@ const IP_ALLOWLIST_ON =
   PUBLISH_ALLOW_HOSTS.length > 0 || PUBLISH_ALLOW_IPS.length > 0;
 
 if (!PUBLISH_SECRET) {
-  process.stderr.write("companion: PUBLISH_SECRET must be set\n");
+  process.stderr.write("feeds-server: PUBLISH_SECRET must be set\n");
   process.exit(1);
 }
 
@@ -129,11 +129,11 @@ function checkBearer(req: http.IncomingMessage): boolean {
 }
 
 const DUMMY_SHA256 = createHash("sha256")
-  .update("companion-dummy")
+  .update("feeds-server-dummy")
   .digest("hex");
 
 /** The authenticated username, or null. Credentials come from the store
- * (pushed by the publisher); unknown usernames are compared against a dummy
+ * (pushed by the feeds pusher); unknown usernames are compared against a dummy
  * digest so timing doesn't reveal which accounts exist. */
 function checkBasicAuth(req: http.IncomingMessage): string | null {
   const header = req.headers.authorization ?? "";
@@ -452,19 +452,19 @@ const server = http.createServer((req, res) => {
     res.end("not found\n");
   })().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`companion request failed: ${message}\n`);
+    process.stderr.write(`feeds-server request failed: ${message}\n`);
     if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
     res.end("internal error\n");
   });
 });
 
 server.listen(PORT, () => {
-  logLine(`companion listening on :${PORT} (data: ${DATA_DIR})`);
+  logLine(`feeds-server listening on :${PORT} (data: ${DATA_DIR})`);
   if (IP_ALLOWLIST_ON) {
     logLine(
-      `companion: /publish IP allow-list ON — hosts=[${PUBLISH_ALLOW_HOSTS.join(", ")}] ips=[${PUBLISH_ALLOW_IPS.join(", ")}]`,
+      `feeds-server: /publish IP allow-list ON — hosts=[${PUBLISH_ALLOW_HOSTS.join(", ")}] ips=[${PUBLISH_ALLOW_IPS.join(", ")}]`,
     );
   } else {
-    logLine("companion: /publish IP allow-list off (Bearer only)");
+    logLine("feeds-server: /publish IP allow-list off (Bearer only)");
   }
 });

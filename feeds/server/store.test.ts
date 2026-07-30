@@ -19,7 +19,7 @@ function snap(owner: string, kind: string, slug: string): FeedSnapshot {
 }
 
 function freshStore(): { store: FeedStore; dir: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "companion-store-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
   return { store: new FeedStore(dir), dir };
 }
 
@@ -57,7 +57,7 @@ test("replaceAll prunes feeds and users absent from the payload", () => {
 });
 
 test("legacy ownerless table is migrated and orphans pruned on publish", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "companion-store-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
   {
     // Simulate a pre-per-user database.
     const db = new Database(path.join(dir, "companion.db"));

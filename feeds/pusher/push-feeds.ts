@@ -1,18 +1,23 @@
 /**
- * Remote-control publisher entrypoint. Builds every user's feed snapshots
- * (playlists, queue, saved, subscription/tag/channel uploads) and POSTs them to
- * the public companion. Run one-shot via `pnpm publish:feeds`; the deploy
- * container loops it on an interval (see docker-compose `owntube-publisher`).
+ * The feeds pusher. Builds every user's feed snapshots (playlists, queue,
+ * saved, subscription/tag/channel uploads) and POSTs them to the public feeds
+ * server. Run one-shot via `pnpm push:feeds`; the deploy container loops it on
+ * an interval (see docker-compose `owntube-feeds-pusher`).
  *
- * DB bootstrap mirrors `scripts/warm-cache.ts`.
+ * It lives here as the pusher's entrypoint, but deliberately still imports the
+ * web app's server modules: building a snapshot means reading the app's SQLite
+ * database through its own schema and reusing its feed/RSS logic. Reimplementing
+ * that here would be a second source of truth for what a feed contains.
+ *
+ * DB bootstrap mirrors `apps/web/scripts/warm-cache.ts`.
  */
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { runSqlMigrations } from "../src/server/db/run-migrations";
-import * as schema from "../src/server/db/schema";
-import { publishFeeds } from "../src/server/remote/publish";
+import { runSqlMigrations } from "@/server/db/run-migrations";
+import * as schema from "@/server/db/schema";
+import { publishFeeds } from "@/server/remote/publish";
 
 const defaultPath = path.join(process.cwd(), "data", "owntube.db");
 const dbPath = process.env.DATABASE_PATH ?? defaultPath;
@@ -34,7 +39,7 @@ function logLine(message: string): void {
 async function main(): Promise<void> {
   if (!target || !secret) {
     process.stderr.write(
-      "publish-feeds: OWNTUBE_PUBLISH_TARGET and OWNTUBE_PUBLISH_SECRET are required\n",
+      "push-feeds: OWNTUBE_PUBLISH_TARGET and OWNTUBE_PUBLISH_SECRET are required\n",
     );
     process.exitCode = 1;
     return;

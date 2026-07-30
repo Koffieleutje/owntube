@@ -1,4 +1,4 @@
-# OwnTube companion
+# OwnTube feeds server
 
 A tiny public RSS mirror for a LAN-only OwnTube. The home OwnTube **pushes**
 self-contained feed snapshots here; this service stores them and renders podcast
@@ -7,7 +7,7 @@ RSS. Every `<enclosure>` URL points back at the LAN media origin
 Auth) while the media only streams on the LAN.
 
 ```
-LAN owntube ──POST /publish (Bearer)──▶ companion (spiff, owntube.nedworks.org)
+feeds pusher ──POST /publish (Bearer)──▶ feeds server (spiff, owntube.nedworks.org)
                                           └ GET /rss/<kind>/<slug>.{audio,video}.xml  (Basic Auth)
 podcast app ──(LAN/VPN)──▶ owntube /media/<id>   ◀── enclosure URLs
 ```
@@ -73,17 +73,18 @@ npm test    # render unit tests
 
 ## Deploy on spiff
 
-Lives at `/var/docker/owntube-companion/` on spiff, fronted by its
+Lives at `/var/docker/owntube-companion/` on spiff (the deploy directory keeps its
+original name — the named volume and SQLite file inside it are live), fronted by its
 caddy-docker-proxy (`caddy` external network, `caddy` label prefix — see
 `docker-compose.yml`). Public TLS is provisioned automatically by Caddy. The
-companion does its own HTTP Basic Auth, so it deliberately does **not** import
+feeds server does its own HTTP Basic Auth, so it deliberately does **not** import
 spiff's `auth` (authelia) snippet — a login portal would break podcast-client
 credentials.
 
 ```sh
 # from the owntube repo on naggon:
 rsync -az --delete --exclude node_modules --exclude data --exclude '*.db*' \
-  companion/ root@spiff.nedworks.org:/var/docker/owntube-companion/
+  feeds/server/ root@spiff.nedworks.org:/var/docker/owntube-companion/
 # create /var/docker/owntube-companion/.env on spiff (PUBLISH_SECRET must match
 # the home side's OWNTUBE_PUBLISH_SECRET; feed credentials come with each publish)
 ssh root@spiff.nedworks.org 'cd /var/docker/owntube-companion && docker compose up -d --build'

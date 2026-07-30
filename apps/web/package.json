@@ -38,13 +38,13 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "warm:cache": "tsx scripts/warm-cache.ts",
     "warm:feed": "tsx scripts/warm-cache.ts",
-    "publish:feeds": "tsx scripts/publish-feeds.ts",
     "check:upstream": "tsx scripts/check-upstream.ts",
     "export:icons": "tsx scripts/export-brand-icons.ts",
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "push:feeds": "tsx --tsconfig ../../feeds/pusher/tsconfig.json ../../feeds/pusher/push-feeds.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

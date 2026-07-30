@@ -5,9 +5,9 @@
 # actual Caddy setup — on a public host the cert is public (Let's Encrypt), so
 # there's no `import tls_home`; Caddy provisions it automatically.
 services:
-  owntube-companion:
-    container_name: owntube-companion
-    hostname: owntube-companion
+  owntube-feeds-server:
+    container_name: owntube-feeds-server
+    hostname: owntube-feeds-server
     build:
       context: .
     restart: unless-stopped
@@ -27,13 +27,17 @@ services:
       retries: 5
       start_period: 10s
     volumes:
+      # Deliberately still `companion-data`: this is a live named volume holding
+      # the published snapshots and per-user feed credentials. Renaming it would
+      # silently start from an empty one. `docker volume` can migrate it if the
+      # old name ever becomes confusing enough to be worth the downtime.
       - companion-data:/data
     networks:
       - caddy
     labels:
       # caddy-docker-proxy (spiff): join the external `caddy` network, no authelia
-      # import — the companion does its own HTTP Basic Auth (an auth portal would
-      # break podcast-client credentials).
+      # import — the feeds server does its own HTTP Basic Auth (an auth portal
+      # would break podcast-client credentials).
       caddy: "owntube.nedworks.org"
       caddy.reverse_proxy: "* {{upstreams 8080}}"
 

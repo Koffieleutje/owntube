@@ -1,7 +1,7 @@
 /**
  * Snapshot → podcast RSS. Pure functions, no I/O. A feed snapshot is whatever
  * the LAN OwnTube publisher pushed (see owntube `server/remote/publish.ts`);
- * the companion only stores and renders it. Every `<enclosure>` URL already
+ * the feeds server only stores and renders it. Every `<enclosure>` URL already
  * points at the LAN media origin and is embedded verbatim.
  */
 
