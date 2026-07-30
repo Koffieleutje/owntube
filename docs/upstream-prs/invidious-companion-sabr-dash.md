@@ -88,12 +88,12 @@ tested against `brainicism/bgutil-ytdlp-pot-provider`.
 | env | default | meaning |
 |---|---|---|
 | `SABR_POT_URL` | *(unset)* | po_token provider; unset ⇒ ANDROID_VR fallback |
-| `SABR_SEED_HEIGHT` | 360 | height pulled up front |
+| `SABR_SEED_HEIGHT` | 360 | height indexed up front |
 | `SABR_MAX_HEIGHT` | 1080 | ceiling on advertised renditions |
-| `SABR_CACHE_MB` | 512 | byte budget for prepared media |
 | `SABR_SEGMENT_WAIT_MS` | 30000 | how long a segment request waits |
-| `SABR_DISK_CACHE_DIR` | *(unset)* | persistent cache; unset ⇒ memory only |
-| `SABR_DISK_CACHE_MB` | 4096 | disk budget, LRU-evicted |
+| `SABR_RETAIN_SEGMENTS` | 12 | segments kept behind the playhead |
+| `SABR_READER_IDLE_MS` | 45000 | idle reader abort |
+| `SABR_SESSION_TTL_MS` | 4h | player-response reuse |
 
 ## Test evidence
 
@@ -114,89 +114,78 @@ tested against `brainicism/bgutil-ytdlp-pot-provider`.
   400; valid `check` → 200 and embedded in every segment URL.
 - ffmpeg decodes served bytes cleanly (h264, full 1541.2s duration).
 
-## Manifests come from the segment index, not from a pull
+## Nothing is cached
 
-The init segment carries a `sidx` box listing every segment's duration, so the
-timeline is built from the first few kilobytes of a track rather than from
-`tfdt` values observed across a completed pull. Tracks are awaited only as far
-as their index, and the seed video and all requested audio tracks are indexed
-concurrently.
+Manifests are built from the `sidx` index carried in each track's init segment,
+and segments come from short-lived readers positioned in a live SABR stream,
+retaining a small window behind the playhead. Idle readers are aborted — so
+abandoning playback stops the download rather than quietly fetching the rest of
+the video.
 
-| | before | after |
+The earlier design cached whole videos. Random access turned out to cost
+**39–88ms**, so storing ~83MB per watched video to avoid it was never a good
+trade, and it made the cache directory a watch history with the content
+attached.
+
+| | cached design | on demand |
 |---|---|---|
-| 25-min video, 2 dubs, cold | 36.6s | **5.1s** |
-| same, after a restart (disk cache) | n/a | **1.1s** (126ms to index) |
-| segment from warm cache | n/a | **10ms** |
+| manifest, 25-min video | 36.6s (5.1s after sidx) | **0.25s** |
+| seek | ~10ms (if cached) | **46–187ms** |
+| sequential read | ~10ms | **11–47ms** |
+| mid-playback bitrate switch | whole second track pulled | **523ms** |
+| stored per watched video | up to ~83MB | **nothing** |
 
-`sidx` also makes the last segment's duration exact; it used to be estimated
-from the container duration.
+## Session choice is measured, not assumed
 
-## Persistence
+ANDROID_VR is preferred; WEB+pot is used only when a dubbed track is requested.
+On the same video: indexing **69ms vs 4.1s**, seeks **27–115ms vs ~4s**. Paying
+60× latency for dubs nobody asked for was the wrong default.
 
-Opt-in via `SABR_DISK_CACHE_DIR`. Completed tracks are written atomically (temp
-directory + rename, so a crash cannot leave a half-written track that later
-looks complete) and loaded on the next start. Least-recently-used videos are
-evicted past `SABR_DISK_CACHE_MB`.
+## Live and post-live DVR
 
-Track metadata (codecs, bandwidth, dimensions) is persisted alongside the
-segments rather than reconstructed — reconstruction works for video but not for
-audio, and produced `codecs=""` / `bandwidth="0"` on cached dubs before this was
-fixed. The manifest is now byte-identical cold vs warm.
+Delegated to the companion's existing `/api/manifest/dash/id`.
 
-**Review note — this needs a permission change.** The cache directory must be in
-the compiled binary's `--allow-write` list; `deno.json` is updated for
-`/var/tmp/sabr-cache`. Writes fail loudly but non-fatally if it is not.
+This is pragmatic, not a protocol limit — worth stating plainly because it is
+easy to conclude otherwise. **SABR does carry live**, and yt-dlp implements it:
+~180 references to broadcast handling, with head tracking, end detection, deep
+rewind, seekable-range and target-duration logic. `SabrStream`, the headless
+downloader used here, has none of that and simply stalls (verified against a
+live stream). Meanwhile YouTube publishes a native *dynamic* DASH manifest for
+live (verified: 894KB, `type="dynamic"`, 8 representations) and the companion
+route already serves it, including the fresh-token handling post-live DVR
+needs. Reimplementing the subsystem would be substantial work to arrive back
+where we already are.
 
-## Captions
+Delegation triggers on the live flag **or** a missing `sidx`, so a post-live
+recording that does carry an index is served here as ordinary VOD rather than
+being excluded by its label.
 
-The manifest advertises one text `AdaptationSet` per language pointing at the
-companion's existing `/api/v1/captions` route. That route already works around
-Google's IP block on the `timedtext` base_url (HTTP 200, zero bytes), so
-reimplementing caption fetching here would only reproduce the bug it exists to
-avoid. Languages are deduped — videos routinely list the same language twice
-(authored and auto-generated). Verified: 5 languages advertised, advertised URL
-returns real WebVTT.
+## Whole-file download
 
-## Partial tracks resume
+`GET /sabr/:videoId/download?itag=` delegates to `/latest_version`, which
+serves a progressive file through the videoplayback proxy with Range support —
+the shape a podcast app fetching an RSS enclosure wants.
 
-Segments are written through as they are published, so a pull interrupted by a
-restart leaves usable segments behind. On the next start a partially cached
-track resumes at its first gap rather than being abandoned.
+- `itag=140` (audio) **works**: HTTP 206, range honoured. This is the podcast
+  case.
+- `itag=18` (muxed video) redirects, but googlevideo answers **403**. Not yet
+  diagnosed — the companion's player response comes from a TV client, which may
+  not carry a usable muxed format. Open.
 
-Incoming segments are numbered by matching their `tfdt` against the `sidx`
-index, not by counting arrivals: a resumed pull begins at the segment
-*containing* the requested time, so counting would misnumber everything after
-it. The overlap SABR re-delivers is dropped.
-
-Verified by killing the server mid-pull — 64/609 segments on disk, resumed at
-segment 65, filled to 609/609, **all 609 verified against the index with zero
-mismatches**, and ffmpeg decoding cleanly across the resume boundary.
-
-This exposed a real bug worth noting for review: googlevideo's end-of-stream
-validation *rejects* a resumed pull, because it never delivered the segments
-already on disk. The index is the authority on completeness, not the library's
-accounting, so `fill()` treats a satisfied index as success.
-
-## The cache directory is shareable
-
-Every write is atomic (temp name + rename), so companion instances on a common
-mount cannot corrupt each other; concurrent pulls of the same track are
-redundant but harmless. Verified with a second instance serving a video it
-never pulled, entirely from the first instance's cache, in 1.3s.
+Muxing the separate SABR video and audio tracks here would need a real muxer,
+which is why this delegates rather than assembling anything.
 
 ## Remaining limitations
 
-- **One video quality is pulled per rendition requested.** Renditions are lazy,
-  but a player that switches bitrate mid-playback pulls a whole second track.
-  Segment-granular fetching would need a session per seek.
-- **No live/DVR support.** VOD only.
+- **Muxed video download 403s** (above). Audio-only downloads work.
+- **No live via SABR** — delegated, see above.
+- A **cold seek** costs 46–187ms versus ~10ms from a warm cache. Deliberate.
 
 ## Files
 
 ```
 src/lib/sabr/session.ts      WEB+pot / ANDROID_VR sessions + track pulling
-src/lib/sabr/segmenter.ts    fMP4 -> init + segments, sidx parsing, progressive
-src/lib/sabr/diskStore.ts    optional persistent cache
+src/lib/sabr/reader.ts       sidx parsing, positioned readers, reader pool
 src/routes/sabrRoutes.ts     manifest + segment routes, verifyRequest-gated
 vendor/googlevideo/          patched MIT library, mapped via gv/ in deno.json
 src/routes/index.ts          + app.route("/sabr", sabrRoutes)
