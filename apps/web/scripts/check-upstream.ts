@@ -16,10 +16,16 @@
  *  - `byteRanges`  `adaptiveFormats[].init`/`.index` are what the synthesized
  *                  HLS/DASH manifests are built from; without them /hls and
  *                  /dash 502 and playback silently falls back.
- *  - `listDuration` the trending serializer reported `lengthSeconds: 0` and
- *                  `liveNow: false` for every item while the detail endpoint
- *                  disagreed, which is why Shorts detection still leans on a
- *                  `#shorts` title heuristic.
+ *  - `listLiveFlag` the trending serializer reported `liveNow: false` for every
+ *                  item while the detail endpoint said `liveNow: true` for the
+ *                  same ids. Root cause: YouTube stopped putting a "LIVE" entry
+ *                  in `videoRenderer.badges`, moving it to the thumbnail's
+ *                  time-status overlay, which Invidious did not read. Fixed on
+ *                  the fork; this check keeps it fixed.
+ *  - `listDuration` that *non-live* list items carry a real duration. It only
+ *                  covers non-live items on purpose — trending is the
+ *                  livestreams feed now, and `lengthSeconds: 0` is correct for
+ *                  a stream.
  *  - `videoStreams` the blunt "is extraction working at all" check; YouTube
  *                  breakage (hotfixes #5818/#5819) killed this outright.
  *  - `audioTracks` `adaptiveFormats[].audioTrack` is a fork patch (Phase 3.1).
@@ -58,6 +64,9 @@ const MULTI_AUDIO_VIDEO_ID =
 
 const TREND_REGION = process.env.UPSTREAM_CHECK_REGION ?? "NL";
 
+/** How many trending items to cross-check against the detail endpoint. */
+const SAMPLE_SIZE = Number(process.env.UPSTREAM_CHECK_SAMPLE_SIZE ?? "6");
+
 const TIMEOUT_MS = 20_000;
 
 /**
@@ -66,13 +75,14 @@ const TIMEOUT_MS = 20_000;
  * stays meaningful for *new* regressions — an alarm that is red from day one is
  * an alarm nobody reads. Removing an entry here is how a fix gets locked in.
  *
- * Currently acknowledged:
- *   listDuration — the trending list serializer drops `lengthSeconds` (and
- *   reports `liveNow: false` for live items, contradicting the detail endpoint).
- *   Tracked as Phase 3.2 in docs/INVIDIOUS-BOUNDARY-PLAN.md.
+ * Currently acknowledged: none. `listDuration` used to be listed here on the
+ * belief that the list serializer dropped `lengthSeconds`. That was a
+ * misdiagnosis — see Phase 3.2 in docs/INVIDIOUS-BOUNDARY-PLAN.md. Durations
+ * were fine; the real defect was `liveNow`, and the old check failed only
+ * because trending is now a livestreams feed where a zero duration is correct.
  */
 const KNOWN_FAILING = new Set(
-  (process.env.UPSTREAM_CHECK_KNOWN_FAILING ?? "listDuration")
+  (process.env.UPSTREAM_CHECK_KNOWN_FAILING ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
@@ -255,31 +265,82 @@ async function checkAudioTracks(): Promise<Result> {
   };
 }
 
-async function checkListDurations(): Promise<Result> {
+/**
+ * Trending list items, checked against the detail endpoint for the same ids.
+ *
+ * Two distinct assertions, deliberately separated because they used to be
+ * conflated into one that measured the wrong thing:
+ *
+ *  - `listLiveFlag` — a list item's `liveNow` must agree with `/api/v1/videos`
+ *    for the same id. Disagreement is the real, previously-missed defect.
+ *  - `listDuration` — only *non-live* items must carry a duration. Trending is
+ *    the livestreams feed since YouTube removed the aggregated trending page, so
+ *    `lengthSeconds: 0` on a live item is correct, not a regression. The old
+ *    check required a majority of *all* items to have a duration and so failed
+ *    permanently for a reason that was never a bug.
+ */
+async function checkTrendingListItems(): Promise<Result[]> {
   const list = (await getJson(`/api/v1/trending?region=${TREND_REGION}`)) as {
     videoId?: string;
     lengthSeconds?: number;
+    liveNow?: boolean;
   }[];
   if (!Array.isArray(list) || list.length === 0) {
-    return {
-      name: "listDuration",
-      ok: false,
-      detail: `trending returned no items for region ${TREND_REGION}`,
-    };
+    const detail = `trending returned no items for region ${TREND_REGION}`;
+    return [
+      { name: "listLiveFlag", ok: false, detail },
+      { name: "listDuration", ok: false, detail },
+    ];
   }
-  const withDuration = list.filter(
-    (v) => typeof v.lengthSeconds === "number" && v.lengthSeconds > 0,
-  ).length;
-  // Live items legitimately have no duration, so require a majority rather than
-  // all — the observed failure was 0 of 15.
-  const ok = withDuration > list.length / 2;
-  return {
-    name: "listDuration",
-    ok,
-    detail: ok
-      ? `${withDuration}/${list.length} trending items have a real duration`
-      : `only ${withDuration}/${list.length} trending items have a duration — list serializer is dropping lengthSeconds, so Shorts detection falls back to the '#shorts' title heuristic`,
+
+  // Sampled rather than exhaustive: one detail fetch per item is slow, and a
+  // systematic flag bug shows up in any sample.
+  const sample = list.filter((v) => v.videoId).slice(0, SAMPLE_SIZE);
+  const compared: { live: boolean; listLive: boolean; len: number }[] = [];
+  for (const item of sample) {
+    const detail = (await getJson(
+      `/api/v1/videos/${encodeURIComponent(item.videoId as string)}`,
+    ).catch(() => null)) as { liveNow?: boolean } | null;
+    if (!detail) continue;
+    compared.push({
+      live: detail.liveNow === true,
+      listLive: item.liveNow === true,
+      len: typeof item.lengthSeconds === "number" ? item.lengthSeconds : 0,
+    });
+  }
+
+  const disagree = compared.filter((c) => c.live !== c.listLive).length;
+  const liveFlag: Result = {
+    name: "listLiveFlag",
+    ok: compared.length > 0 && disagree === 0,
+    detail:
+      compared.length === 0
+        ? "no trending item could be cross-checked against the detail endpoint"
+        : disagree === 0
+          ? `${compared.length} sampled items agree with the detail endpoint on liveNow`
+          : `${disagree}/${compared.length} sampled items disagree with the detail endpoint on liveNow — the list serializer is losing the live flag`,
   };
+
+  const nonLive = compared.filter((c) => !c.live);
+  const withDuration = nonLive.filter((c) => c.len > 0).length;
+  const duration: Result =
+    nonLive.length === 0
+      ? {
+          name: "listDuration",
+          ok: true,
+          skipped: true,
+          detail: `all ${compared.length} sampled trending items are live, so there is no non-live duration to check`,
+        }
+      : {
+          name: "listDuration",
+          ok: withDuration === nonLive.length,
+          detail:
+            withDuration === nonLive.length
+              ? `${withDuration}/${nonLive.length} non-live trending items carry a duration`
+              : `only ${withDuration}/${nonLive.length} non-live trending items have a duration — the list serializer is dropping lengthSeconds`,
+        };
+
+  return [liveFlag, duration];
 }
 
 async function run(): Promise<void> {
@@ -300,7 +361,10 @@ async function run(): Promise<void> {
       run: checkVideoStreamsAndByteRanges,
     },
     { names: ["audioTracks"], run: checkAudioTracks },
-    { names: ["listDuration"], run: checkListDurations },
+    {
+      names: ["listLiveFlag", "listDuration"],
+      run: checkTrendingListItems,
+    },
   ];
 
   const results: Result[] = [];
