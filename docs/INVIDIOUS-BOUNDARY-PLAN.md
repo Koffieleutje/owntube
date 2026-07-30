@@ -501,16 +501,24 @@ Not covered by the above: the po_token-expiry recovery path
 (`invalidateDvrManifest` + retry) needs an actually-expired URL to exercise, so it
 remains unexercised live.
 
-**Never verified, still outstanding from the DVR work:**
-- **iPad Safari playback of a post-live-DVR video.** The original goal, and the
-  one thing here that needs a physical device. Everything server-side beneath it
-  is now confirmed (above), so what is untested is narrowed to Safari's own DASH
-  handling. `IWqNAUTGK58` was post-live-DVR as of 2026-07-30 — **re-check the flag
-  before drawing any conclusion**, these convert to VOD without warning:
-  `docker exec owntube node -e "fetch('http://invidious:3000/api/v1/videos/IWqNAUTGK58').then(r=>r.json()).then(j=>console.log(j.isPostLiveDvr))"`
-- **The Settings "Video source instances" read-only display.** That route is
-  auth-gated, so anonymous curl only reaches the sign-in view. Wants an eyeball
-  while signed in.
+**Nothing from the DVR work is outstanding any more — as of 2026-07-30 the whole
+chain is verified.**
+
+- **Post-live-DVR playback works on macOS *and* iOS** (user-confirmed against
+  `IWqNAUTGK58`, `isPostLiveDvr: true` at the time). This was **the original goal
+  of the DVR work** and had been unverified since it started, purely because no
+  post-live-DVR video could be found — the previous attempt scanned 110
+  candidates and the test video converted to VOD mid-session. Two sweeps on
+  2026-07-30 turned up exactly **1 in 272 candidates**, which is the real
+  difficulty here: the code was never the blocker, finding a subject was.
+- **The Settings "Video source instances" health check works** (user-confirmed).
+  The read-only display and health check were the last piece of Phase 1b(b).
+
+Practical note for anyone re-testing this: budget for the *search*, not the test.
+The scan that works is many upload-date-sorted searches for stream-flavoured
+queries, then `isPostLiveDvr` on each result — trending is nearly useless for it.
+And re-check the flag immediately before concluding anything, because a video that
+converts to VOD mid-test silently turns the exercise into a VOD test.
 
 **Also worth knowing:**
 - **Each OwnTube service builds its own image**, despite sharing a build context:
@@ -530,9 +538,6 @@ remains unexercised live.
   canary exists to catch.
 
 
-- **The iOS/DVR path is unverified on iPad.** The test video (`7S6aQm1ZxkQ`)
-  converted to VOD mid-session; a scan of 110 candidates found no fresh
-  post-live-DVR video. `/dash`+`/dvr` are verified server-side only.
 - **Not audited:** `server/recommendation/*` (`engine.ts` 715,
   `shorts-feed.ts` 692), `apps/ios`, and the full reach of the per-account
   override system. These could add Phase 3 items; they do not affect the

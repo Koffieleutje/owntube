@@ -102,20 +102,23 @@ when one step went wrong. Split by concern; each commit independently green.
 - `docker-compose.yml` files under `/var/data/config/*` are **not** in git; the
   convention is timestamped `.bak-*` copies before editing.
 
-## Still unverified — please pick these up when possible
+## Previously unverified — all now closed (2026-07-30)
 
-- **iPad Safari on a post-live-DVR video** — the original goal of the DVR work,
-  never confirmed. The test video converted to VOD and no replacement was found
-  (110 candidates scanned). macOS Safari was confirmed working. Find a video with
-  `isPostLiveDvr: true` via
-  `docker exec owntube node -e "fetch('http://invidious:3000/api/v1/videos/<id>').then(r=>r.json()).then(j=>console.log(j.isPostLiveDvr))"`
-  and always re-check the flag before concluding anything — these convert to VOD
-  without warning.
-- The `/dvr` segment route is **no longer** on this list — verified end to end on
-  2026-07-30 (real fMP4, 206 on Range, CORS, public origin). `IWqNAUTGK58` was a
-  post-live-DVR video that day. Only Safari's own DASH handling is untested.
-- **Settings → "Video source instances"** should now be read-only (no editable
-  fields) with a working health check. Auth-gated, so it needs a signed-in eyeball.
+Nothing from the DVR work is outstanding. Don't re-open these:
+
+- **Post-live-DVR playback works on macOS and iOS** — the original goal, confirmed
+  against `IWqNAUTGK58`. The `/dvr` segment route is verified end to end too (real
+  fMP4, 206 on Range, CORS, public origin).
+- **Settings → "Video source instances"** — read-only display and health check
+  both confirmed working.
+
+If you ever need to re-test DVR: the hard part is finding a subject, not the test.
+Two sweeps on 2026-07-30 found **1 post-live-DVR video in 272 candidates**. What
+works is many upload-date-sorted searches for stream-flavoured queries, then
+`isPostLiveDvr` on each hit; trending is nearly useless. Re-check the flag right
+before concluding — these convert to VOD without warning, which silently turns a
+DVR test into a VOD test:
+`docker exec owntube node -e "fetch('http://invidious:3000/api/v1/videos/<id>').then(r=>r.json()).then(j=>console.log(j.isPostLiveDvr))"`
 
 ## Ground rules
 
