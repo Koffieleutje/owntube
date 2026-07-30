@@ -1,3 +1,5 @@
+import { createCipheriv } from "node:crypto";
+
 /**
  * Where to reach invidious-companion.
  *
@@ -55,4 +57,47 @@ export function toInternalCompanionUrl(url: string): string {
   if (!publicBase || !internalBase || publicBase === internalBase) return url;
   if (!url.startsWith(`${publicBase}/`)) return url;
   return internalBase + url.slice(publicBase.length);
+}
+
+/**
+ * `check=` request signature, matching Invidious's `invidious_companion_encrypt`
+ * exactly (`src/invidious/helpers/utils.cr`):
+ *
+ *   Base64.urlsafe_encode(AES-128-ECB(secret_key, "<unixSeconds>|<videoId>"))
+ *
+ * The companion validates it in `verifyRequest` when `SERVER_VERIFY_REQUESTS` is
+ * on, which guards `/api/manifest/dash/id`, `/api/v1/captions`, `/latest_version`
+ * and `/download` (`/videoplayback` is not gated — those URLs carry YouTube's own
+ * signature). Previously Invidious minted this for us and redirected; now that
+ * OwnTube talks to the companion directly, it has to sign for itself.
+ *
+ * Returns null when no key is configured, so the parameter is simply omitted and
+ * an unverified companion keeps working. Padding is kept and the alphabet
+ * translated by hand rather than using Node's "base64url" (which strips `=`),
+ * so the bytes match Crystal's output.
+ */
+export function companionCheckParam(videoId: string): string | null {
+  const key = process.env.INVIDIOUS_COMPANION_SECRET_KEY ?? "";
+  if (!key) return null;
+  if (key.length !== 16) {
+    // aes-128-ecb needs exactly 16 bytes; a wrong length would throw per
+    // request. Fail loudly once instead of intermittently at fetch time.
+    throw new Error(
+      `INVIDIOUS_COMPANION_SECRET_KEY must be 16 characters (got ${key.length})`,
+    );
+  }
+  const plaintext = `${Math.floor(Date.now() / 1000)}|${videoId}`;
+  const cipher = createCipheriv("aes-128-ecb", key, null);
+  const encrypted = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+  return encrypted.toString("base64").replaceAll("+", "-").replaceAll("/", "_");
+}
+
+/** Append `check=` to a companion URL when a secret key is configured. */
+export function withCompanionCheck(url: string, videoId: string): string {
+  const check = companionCheckParam(videoId);
+  if (!check) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}check=${encodeURIComponent(check)}`;
 }

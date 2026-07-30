@@ -19,6 +19,7 @@
 import {
   companionInternalBase,
   toInternalCompanionUrl,
+  withCompanionCheck,
 } from "@/server/services/companion";
 
 const COMPANION_MANIFEST_TTL_MS = 60_000;
@@ -41,7 +42,10 @@ async function fetchFreshCompanionManifest(
   // segment URLs go through the companion proxy rather than googlevideo.
   const base = companionInternalBase();
   if (!base) return null;
-  const url = `${base}/companion/api/manifest/dash/id/${encodeURIComponent(videoId)}?local=true`;
+  const url = withCompanionCheck(
+    `${base}/companion/api/manifest/dash/id/${encodeURIComponent(videoId)}?local=true`,
+    videoId,
+  );
   for (let i = 0; i < MANIFEST_ATTEMPTS; i++) {
     try {
       const r = await fetch(url, {

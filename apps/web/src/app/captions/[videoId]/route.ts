@@ -1,7 +1,10 @@
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import { mediaCorsPreflight, withMediaCors } from "@/lib/media-cors";
 import { normalizeUpstreamBaseUrl } from "@/lib/upstream-base-url";
-import { companionInternalBase } from "@/server/services/companion";
+import {
+  companionInternalBase,
+  withCompanionCheck,
+} from "@/server/services/companion";
 
 function invidiousUpstreamBase(): string {
   return normalizeUpstreamBaseUrl(process.env.INVIDIOUS_BASE_URL);
@@ -110,9 +113,12 @@ async function fetchCaptionsVttFromCompanion(
   const base = companionInternalBase();
   if (!base) return null;
   try {
-    const listUrl = new URL(
-      `companion/api/v1/captions/${encodeURIComponent(videoId)}`,
-      `${base}/`,
+    const listUrl = withCompanionCheck(
+      new URL(
+        `companion/api/v1/captions/${encodeURIComponent(videoId)}`,
+        `${base}/`,
+      ).toString(),
+      videoId,
     );
     const listRes = await fetchWithTimeout(listUrl, {
       headers: { "user-agent": "OwnTube/0.1", accept: "application/json" },
@@ -128,7 +134,13 @@ async function fetchCaptionsVttFromCompanion(
     const track = pickCompanionTrack(listed.captions ?? [], label, lang);
     if (!track?.url) return null;
     // The listed URL is a path that already carries the companion's base_path.
-    const vttRes = await fetchWithTimeout(new URL(track.url, `${base}/`), {
+    // The listed URL already carries the companion's base_path; sign it too —
+    // it hits the same guarded /api/v1/captions route.
+    const vttUrl = withCompanionCheck(
+      new URL(track.url, `${base}/`).toString(),
+      videoId,
+    );
+    const vttRes = await fetchWithTimeout(vttUrl, {
       headers: { "user-agent": "OwnTube/0.1", accept: "text/vtt, */*" },
       cache: "no-store",
     });
