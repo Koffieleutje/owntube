@@ -478,19 +478,48 @@ a dead-man's check (last-success timestamp somewhere observable), not more
 assertions inside the canary. Left undone deliberately; noting it so the gap is
 on the record rather than rediscovered.
 
+**The `/dvr` segment route is now verified end to end** (2026-07-30). A
+post-live-DVR video was found by scanning 113 candidates across trending and five
+live-flavoured searches: `IWqNAUTGK58` ("Just Chatting Stream!", 5258s,
+`isPostLiveDvr: true`). Confirmed, both on `localhost:3000` and through the public
+media origin:
+
+- `/dash/<id>/manifest.mpd` → 200, 7 representations, every segment URL rewritten
+  to a stable `/dvr/<id>/<rep>/<sq>` path, no `<BaseURL>`, and an explicit
+  `initialization="/dvr/<id>/140/0"`.
+- `/dvr/<id>/140/{0,1,5}` → 200 `audio/mp4`, `/dvr/<id>/133/3` → 200 `video/mp4`.
+  Box order `ftyp moov emsg moof mdat` on **every** segment, which is the direct
+  evidence for the self-initializing-segment claim: each segment carries its own
+  `ftyp`+`moov`, so pointing `initialization` at segment 0 is sound.
+- `/dvr/<id>/999/0` → 404 (`no-representation`), i.e. the not-in-manifest case is
+  distinguished from a fetch failure as designed.
+- Public origin: `Access-Control-Allow-Origin: *`, `Allow-Headers: Range`,
+  `Expose-Headers: Content-Range…`, and a `Range: bytes=0-1023` request returns
+  **206** with exactly 1024 bytes.
+
+Not covered by the above: the po_token-expiry recovery path
+(`invalidateDvrManifest` + retry) needs an actually-expired URL to exercise, so it
+remains unexercised live.
+
 **Never verified, still outstanding from the DVR work:**
-- **iPad Safari playback of a post-live-DVR video.** The original goal. The test
-  video (`7S6aQm1ZxkQ`) converted to VOD mid-session and no replacement could be
-  found (110 candidates scanned across trending and several live searches).
-  macOS Safari was confirmed working.
-- **The `/dvr` segment route end to end**, for the same reason. The internal
-  manifest fetch is confirmed against the companion; `toInternalCompanionUrl` is
-  unit-tested but unexercised live.
+- **iPad Safari playback of a post-live-DVR video.** The original goal, and the
+  one thing here that needs a physical device. Everything server-side beneath it
+  is now confirmed (above), so what is untested is narrowed to Safari's own DASH
+  handling. `IWqNAUTGK58` was post-live-DVR as of 2026-07-30 — **re-check the flag
+  before drawing any conclusion**, these convert to VOD without warning:
+  `docker exec owntube node -e "fetch('http://invidious:3000/api/v1/videos/IWqNAUTGK58').then(r=>r.json()).then(j=>console.log(j.isPostLiveDvr))"`
 - **The Settings "Video source instances" read-only display.** That route is
   auth-gated, so anonymous curl only reaches the sign-in view. Wants an eyeball
   while signed in.
 
 **Also worth knowing:**
+- **Each OwnTube service builds its own image**, despite sharing a build context:
+  `owntube-owntube`, `owntube-owntube-cache-warmer`, `owntube-owntube-publisher`,
+  `owntube-owntube-upstream-canary`. They do *not* share one image, so
+  `docker compose build owntube` leaves the sidecars on stale code — they need
+  `docker compose up -d --build <service>` each. Found on 2026-07-30 with the
+  warmer and publisher still running a pre-change build after `owntube` had been
+  redeployed.
 - `docker-compose.yml` in `/var/data/config/owntube` and
   `/var/data/config/invidious` are **not** committed anywhere — the convention
   there is timestamped `.bak-*` files. The Invidious one now carries
