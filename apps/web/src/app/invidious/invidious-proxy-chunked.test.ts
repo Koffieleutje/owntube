@@ -10,11 +10,11 @@ vi.mock("undici", () => ({
     (globalThis.fetch as (...a: unknown[]) => unknown)(...args),
 }));
 
+import { GET } from "@/app/invidious/[[...path]]/route";
 import {
-  GET,
   MEDIA_CHUNK_BYTES,
   parseByteRange,
-} from "@/app/invidious/[[...path]]/route";
+} from "@/server/media/upstream-proxy";
 
 describe("parseByteRange", () => {
   it("parses bounded ranges", () => {
