@@ -52,7 +52,10 @@ hostile, fast-moving target (two YouTube breakage hotfixes, #5818/#5819, this
 month alone). Reimplementing search/channel/comment/trending parsing is a bad
 trade for a single-user deployment.
 
-**Do not carry local patches as fork-only commits.** See Phase 4.
+**Running a patched fork indefinitely is an accepted, deliberate choice** (decided
+2026-07-30). Upstreaming is opportunistic, not a prerequisite — see Phase 4. What
+is *not* optional is verifiable provenance: the running image must be provably
+built from the integration branch (Phase 0).
 
 ---
 
@@ -69,12 +72,27 @@ phases will be debugging blind.
 - [x] **Document the build recipe** in `/var/data/config/invidious/docker-compose.yml`,
       including why never to build from `/usr/local/src/invidious-build`.
 - [x] **Guard the stale tree** with `DO-NOT-BUILD-FROM-HERE.md`.
-- [ ] **Boundary canary.** A scheduled job asserting, against the live upstream:
+- [ ] **Provenance canary — the single highest-value guard.** Assert that
+      `/api/v1/stats` reports `software.branch === "nedworks/integration"`, and
+      optionally that `software.version` matches the branch tip. Invidious embeds
+      the git branch and commit at build time, so this catches *any* image built
+      from the wrong tree — every lost patch at once, not one symptom at a time.
+      Against the July 23 regression it would have fired the same day:
+
+      | | branch | version |
+      |---|---|---|
+      | patches lost (2026-07-23) | `master` | `2026.07.23-adfec76` |
+      | patches present (2026-07-30) | `nedworks/integration` | `2026.07.30-ccb82dce` |
+
+      Because a long-lived patched fork is the accepted strategy, this assertion
+      *is* the strategy's safety net. Add it before anything else.
+- [ ] **Behaviour canary.** A scheduled job asserting, against the live upstream:
       - `/api/v1/captions/<id>?label=…` returns a redirect (or usable VTT)
       - `adaptiveFormats` entries carry `init` + `index` byte ranges
       - trending items have non-zero `lengthSeconds`
       - a known video id still resolves with streams
-      Each of these was broken at some point and found only by accident.
+      Each of these was broken at some point and found only by accident. This
+      catches upstream *behaviour* drift, which the provenance check cannot see.
 - [ ] **Record the contract.** `proxy.types.ts` is already the schema; add a short
       note per field that OwnTube *infers* rather than reads, so the inference
       surface is visible and shrinks measurably in Phase 3.
@@ -188,10 +206,34 @@ delete the inference behind it.
 
 Measure success as lines of inference deleted, not lines added.
 
-## Phase 4 — Upstream the bug fixes as real PRs
+## Phase 4 — Maintain the fork deliberately; upstream opportunistically
 
-Fork-only patches are how the caption fix vanished. Un-forked upstream code is the
-only kind a rebuild cannot lose, and each of these is generic.
+Running a patched fork for as long as needed is the accepted strategy. Note the
+July 23 incident was **not** caused by forking — it was caused by two build trees
+and an untracked Dockerfile, so the image was built from plain upstream `master`
+and the fork's commits were simply absent. Both causes are fixed (Phase 0), and
+the provenance canary is what keeps them fixed.
+
+The real recurring cost of a long-lived fork is **rebase drift**:
+`nedworks/integration` is based on `adfec764` while upstream is already at
+`9d1291a0`, so every hotfix pickup means rebasing the patches. Keep that cheap:
+
+- **Keep patches small, independent and single-purpose.** The current three are
+  clean cherry-picks touching 3 files / 105 insertions; that is why they rebased
+  without conflict. Resist bundling.
+- **Rebase onto the specific upstream commit you need, not onto `master`'s tip.**
+  Basing on the exact commit being adopted keeps the delta auditable — the
+  2026-07-30 build differs from the previously running image by *only* the three
+  patches, nothing else.
+- **Documented rebase procedure** (in the Invidious compose file): rebase, rebuild
+  with `Dockerfile.nedworks --build-arg release=1`, deploy, confirm
+  `/api/v1/stats` reports the new branch and commit, push the branch.
+- **Never build from `/usr/local/src/invidious-build`** — guarded by
+  `DO-NOT-BUILD-FROM-HERE.md`.
+
+Upstreaming is then a *cost reduction*, not a safety requirement: each merged PR is
+one fewer patch to rebase forever. Worth doing for the generic ones when
+convenient, in rough order of value:
 
 - The four invidious-companion DVR fixes (absolute url_transformer, `X-Head-*`
   forwarding, `*.c.youtube.com` hosts, and the `noclen=1` empty-body bug). The
@@ -211,7 +253,8 @@ only kind a rebuild cannot lose, and each of these is generic.
   `video/webm` so upstream DASH is not capped at 1080p (`manifest.cr:63,104`
   hardcode `audio/mp4` / `video/mp4`).
 
-Every merged PR is one fewer patch to rebase and one fewer thing to lose.
+None of these are blockers. They shrink the permanent rebase burden; the fork is
+safe without them as long as the provenance canary is in place.
 
 ## Phase 5 — Restructure OwnTube's media routes
 
@@ -241,12 +284,18 @@ clients — needs a compatibility alias during rollout.
 
 ## Suggested order
 
-1. Phase 0 canary — cheap, and every later phase depends on being able to see drift.
+1. **Phase 0 provenance canary** — cheapest item in the plan and the safety net for
+   the fork strategy. Do it first.
 2. Phase 1 Piped removal — largest simplification, zero shared-service risk.
 3. Phase 2 internal-direct + caption inversion — removes the known-fragile hop.
-4. Phase 3 item 1 (audioTrack) — small upstream change, ~300 lines deleted.
-5. Phase 4 PRs — ongoing, in parallel.
-6. Phase 3 items 2–7, then Phase 5.
+4. Phase 3 item 1 (audioTrack) — lands on the fork, deletes ~300 lines here.
+5. Phase 0 behaviour canary, once there is a place to run scheduled checks.
+6. Phase 3 items 2–7, then Phase 5. Phase 4 PRs opportunistically throughout.
+
+Because the fork is a long-term choice, Phase 3's upstream changes land on
+`nedworks/integration` and stay there indefinitely — that is fine. Each one adds
+to the rebase set, so keep them as separate, minimal commits, and prefer
+upstreaming the generic ones eventually to shrink that set.
 
 ## Open items and honest gaps
 
