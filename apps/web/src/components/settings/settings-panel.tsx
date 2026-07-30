@@ -61,9 +61,6 @@ export function SettingsPanel({
   const [trendingRegion, setTrendingRegion] = useState(
     initial.trendingRegion ?? "US",
   );
-  const [hideRestrictedVideos, setHideRestrictedVideos] = useState(
-    initial.hideRestrictedVideos ?? true,
-  );
   const [hideShortsInSubscriptions, setHideShortsInSubscriptions] = useState(
     initial.hideShortsInSubscriptions ?? true,
   );
@@ -126,10 +123,6 @@ export function SettingsPanel({
   useEffect(() => {
     setTrendingRegion(initial.trendingRegion ?? "US");
   }, [initial.trendingRegion]);
-
-  useEffect(() => {
-    setHideRestrictedVideos(initial.hideRestrictedVideos ?? true);
-  }, [initial.hideRestrictedVideos]);
 
   useEffect(() => {
     setHideShortsInSubscriptions(initial.hideShortsInSubscriptions ?? true);
@@ -271,7 +264,6 @@ export function SettingsPanel({
       theme,
       visualTheme,
       trendingRegion,
-      hideRestrictedVideos,
       hideShortsInSubscriptions,
       defaultCinemaMode,
       enableMiniPlayer,
@@ -424,14 +416,6 @@ export function SettingsPanel({
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Watch and feed behavior</h2>
         <div className="space-y-2">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={hideRestrictedVideos}
-              onChange={(e) => setHideRestrictedVideos(e.currentTarget.checked)}
-            />
-            Hide members-only / subscribers-only videos in feeds
-          </label>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

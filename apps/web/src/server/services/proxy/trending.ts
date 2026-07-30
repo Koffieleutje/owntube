@@ -1,4 +1,3 @@
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
 import { invidiousPortCollidesWithNextApp } from "@/lib/invidious-port-collision";
 import { logger } from "@/lib/logger";
 import type { AppDb } from "@/server/db/client";
@@ -46,7 +45,7 @@ function readFreshTrendingCache(
   if (!parsed.success) return null;
   logger.info("video_cache.hit", { cacheKey: key, kind: row.kind });
   return {
-    videos: stripRestrictedListVideos(parsed.data.videos),
+    videos: parsed.data.videos,
     sourceUsed: "cache",
     stale: false,
   };
@@ -63,7 +62,7 @@ function readStaleTrendingCache(
   if (!parsed.success) return null;
   logger.warn("video_cache.stale_hit", { cacheKey: key, kind: row.kind });
   return {
-    videos: stripRestrictedListVideos(parsed.data.videos),
+    videos: parsed.data.videos,
     sourceUsed: "cache",
     stale: true,
     warning: "Upstream unavailable, serving stale cache.",
@@ -145,7 +144,7 @@ export async function fetchTrendingVideos(
       throwIfUpstreamFailed(errors, "trending unavailable");
     }
 
-    const cleaned = stripRestrictedListVideos(resolved.videos);
+    const cleaned = resolved.videos;
     const out: TrendingVideosResult = {
       ...resolved,
       videos: cleaned,

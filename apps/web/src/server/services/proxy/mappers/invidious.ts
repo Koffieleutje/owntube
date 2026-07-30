@@ -1,5 +1,4 @@
 import { pickChannelSubscriberCount } from "@/lib/channel-subscriber-count";
-import { titleSuggestsMembersOnlyOrSubscriberOnly } from "@/lib/feed-exclude-restricted";
 import {
   normalizeDurationForLive,
   pickLiveFlagsFromUpstream,
@@ -7,7 +6,6 @@ import {
 import { coercePublishedSecondsFromUpstream } from "@/lib/published-sort-key";
 import { preferHighResVideoThumbnailUrl } from "@/lib/video-thumbnail-url";
 import {
-  isUpstreamMembersOrPaidOnly,
   pickInvidiousStoryboard,
   pickViewCount,
   readPositiveNumberField,
@@ -43,8 +41,6 @@ export function mapInvidiousItem(
   const videoId = typeof o.videoId === "string" ? o.videoId : "";
   const title = typeof o.title === "string" ? o.title : "";
   if (!videoId || !title) return null;
-  if (isUpstreamMembersOrPaidOnly(o)) return null;
-  if (titleSuggestsMembersOnlyOrSubscriberOnly(title)) return null;
   const isShortItem = itemType === "shortVideo";
   const thumbnailUrl = preferHighResVideoThumbnailUrl(
     resolveInvidiousThumbnail(o.videoThumbnails, baseUrl, {

@@ -55,7 +55,7 @@ describe("searchVideos", () => {
     sqlite.close();
   });
 
-  it("drops Invidious videos marked premium or paid from unified lists", async () => {
+  it("keeps videos marked premium or paid in unified lists", async () => {
     const { db, sqlite } = createTestDb();
     process.env.INVIDIOUS_BASE_URL = "https://inv.test";
 
@@ -85,9 +85,14 @@ describe("searchVideos", () => {
       ),
     );
 
+    // These used to be dropped. Filtering them out was measurably worse than
+    // leaving them in: the same code path also matched ordinary public videos,
+    // and a dropped row is invisible, so there was no way to tell. A paywalled
+    // video now surfaces and the watch page shows YouTube's own reason for
+    // refusing it (see upstream-video-unavailable).
     const r = await searchVideos(db, { q: "test", limit: 10 });
-    expect(r.videos).toHaveLength(1);
-    expect(r.videos[0]?.videoId).toBe("abc12345678");
+    expect(r.videos).toHaveLength(2);
+    expect(r.videos.map((v) => v.videoId)).toContain("paidONLY00001");
     sqlite.close();
   });
 

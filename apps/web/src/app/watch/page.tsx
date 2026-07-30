@@ -13,7 +13,6 @@ import { WatchTracker } from "@/components/player/watch-tracker";
 import { ChannelAvatarCircle } from "@/components/videos/channel-avatar-circle";
 import { VideoCardCompact } from "@/components/videos/video-card";
 import { WatchAgeRestricted } from "@/components/watch/watch-age-restricted";
-import { WatchVideoUnavailable } from "@/components/watch/watch-video-unavailable";
 import { WatchChaptersSection } from "@/components/watch/watch-chapters-section";
 import { WatchCinemaProvider } from "@/components/watch/watch-cinema-context";
 import { WatchCommentsSection } from "@/components/watch/watch-comments-section";
@@ -22,7 +21,7 @@ import { WatchDescription } from "@/components/watch/watch-description";
 import { WatchPageGrid } from "@/components/watch/watch-page-grid";
 import { WatchPlayerMount } from "@/components/watch/watch-player-mount";
 import { WatchUpcomingLive } from "@/components/watch/watch-upcoming-live";
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
+import { WatchVideoUnavailable } from "@/components/watch/watch-video-unavailable";
 import {
   getAppOriginFromRequestHeaders,
   toProxiedOrDirectPlayback,
@@ -43,8 +42,8 @@ import { watchHref } from "@/lib/yt-routes";
 import { auth } from "@/server/auth";
 import { getDb } from "@/server/db/client";
 import { UpstreamAgeRestrictedError } from "@/server/errors/upstream-age-restricted";
-import { UpstreamVideoUnavailableError } from "@/server/errors/upstream-video-unavailable";
 import { UpstreamLiveUpcomingError } from "@/server/errors/upstream-live-upcoming";
+import { UpstreamVideoUnavailableError } from "@/server/errors/upstream-video-unavailable";
 import {
   getWatchResumeSeconds,
   isVideoWatched,
@@ -194,11 +193,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
       ? await fetchRelatedVideos(db, input, 24).catch(() => null)
       : null;
 
-  const applyRestrictedFilter = (videos: UnifiedVideo[]) =>
-    userSettings?.hideRestrictedVideos === false
-      ? videos
-      : stripRestrictedListVideos(videos);
-
   const relatedMerged = new Map<string, UnifiedVideo>();
   for (const v of [
     ...(detail?.relatedVideos ?? []),
@@ -206,10 +200,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   ]) {
     if (v.videoId !== videoId) relatedMerged.set(v.videoId, v);
   }
-  let sidebarVideos = applyRestrictedFilter([...relatedMerged.values()]).slice(
-    0,
-    20,
-  );
+  let sidebarVideos = [...relatedMerged.values()].slice(0, 20);
 
   let sidebarFromFeedFallback = false;
   if (sidebarVideos.length === 0) {
@@ -223,7 +214,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
         ).videos
       : (await fetchTrendingVideos(db, { region: feedRegion, limit: 28 }))
           .videos;
-    sidebarVideos = applyRestrictedFilter(feedVideosRaw)
+    sidebarVideos = feedVideosRaw
       .filter((v) => v.videoId !== videoId)
       .slice(0, 20);
     sidebarFromFeedFallback = sidebarVideos.length > 0;

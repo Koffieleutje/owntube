@@ -1,7 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
 import { logger } from "@/lib/logger";
 import { watchHistory } from "@/server/db/schema";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
@@ -27,12 +26,12 @@ import {
   trendingTailPoolCache,
   trendingTailPoolInFlight,
 } from "@/server/recommendation/trending-tail-cache";
+import { fetchTrendingVideos } from "@/server/services/proxy";
 import {
   readFreshCacheRow,
   readLatestCacheRow,
   writeCache,
 } from "@/server/services/proxy/cache";
-import { fetchTrendingVideos } from "@/server/services/proxy";
 import {
   trendingVideoCategorySchema,
   type UnifiedVideo,
@@ -61,10 +60,9 @@ const TRENDING_TAIL_CACHE_TTL_MS = 90_000;
 function trendingTailCacheKey(
   userId: number | null,
   region: string,
-  hideRestricted: boolean,
   excludeSubscribed: boolean,
 ): string {
-  return `tail|${userId ?? "anon"}|${region}|${hideRestricted ? 1 : 0}|${excludeSubscribed ? 1 : 0}`;
+  return `tail|${userId ?? "anon"}|${region}|${excludeSubscribed ? 1 : 0}`;
 }
 
 /**
@@ -99,7 +97,6 @@ async function buildTrendingTailPoolUncached(
   db: Parameters<typeof fetchTrendingVideos>[0],
   userId: number | null,
   region: string,
-  hideRestricted: boolean,
   excludeSubscribed: boolean,
 ) {
   const trending = await fetchTrendingVideos(db, { region, limit: 200 });
@@ -107,9 +104,7 @@ async function buildTrendingTailPoolUncached(
   // (e.g. news channels) that matches no interest and never ends — pure noise in
   // a personalized home tail.
   const withoutLive = trending.videos.filter((v) => !v.isLive && !v.isUpcoming);
-  let pool = hideRestricted
-    ? stripRestrictedListVideos(withoutLive)
-    : withoutLive;
+  let pool = withoutLive;
   if (userId) {
     const seenRows = db
       .select({ videoId: watchHistory.videoId })
@@ -180,15 +175,9 @@ async function buildTrendingTailPool(
   db: Parameters<typeof fetchTrendingVideos>[0],
   userId: number | null,
   region: string,
-  hideRestricted: boolean,
   excludeSubscribed: boolean,
 ) {
-  const cacheKey = trendingTailCacheKey(
-    userId,
-    region,
-    hideRestricted,
-    excludeSubscribed,
-  );
+  const cacheKey = trendingTailCacheKey(userId, region, excludeSubscribed);
   const now = Date.now();
   const cached = trendingTailPoolCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
@@ -205,7 +194,6 @@ async function buildTrendingTailPool(
       db,
       userId,
       region,
-      hideRestricted,
       excludeSubscribed,
     );
     return {
@@ -292,16 +280,10 @@ async function computeHomeStream(
           db,
           userId,
           opts.region,
-          settings.hideRestrictedVideos,
           settings.excludeSubscribedFromRecommendations,
         ),
   ]);
-  const stream = mergePersonalizedWithTrendingTail(
-    settings.hideRestrictedVideos
-      ? stripRestrictedListVideos(personalized)
-      : personalized,
-    tailPool,
-  );
+  const stream = mergePersonalizedWithTrendingTail(personalized, tailPool);
   return { stream, coldStart };
 }
 
@@ -413,13 +395,7 @@ export const feedRouter = router({
         limit,
         category,
       });
-      let pool = stripRestrictedListVideos(trending.videos);
-      if (ctx.userId) {
-        const settings = getUserSettings(ctx.db, ctx.userId);
-        if (!settings.hideRestrictedVideos) {
-          pool = trending.videos;
-        }
-      }
+      let pool = trending.videos;
       if (ctx.userId) {
         const seenRows = ctx.db
           .select({ videoId: watchHistory.videoId })

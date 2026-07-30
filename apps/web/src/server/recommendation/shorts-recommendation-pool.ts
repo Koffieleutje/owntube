@@ -1,4 +1,3 @@
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
 import {
   mergeVideosByIdPreferNewer,
   pickNewestVideoPerChannel,
@@ -88,20 +87,18 @@ function sliceShortsPool(
   const start = (page - 1) * pageSize;
   const pageRows = entry.diversified.slice(start, start + pageSize);
   const hasMore = start + pageRows.length < entry.diversified.length;
-  const videos: UnifiedVideo[] = stripRestrictedListVideos(
-    pageRows.map((row) => {
-      const {
-        rawScore: _r,
-        preMmrRawScore: _p,
-        scoreBreakdown: _b,
-        candidateSource: _c,
-        coldStartJitter: _j,
-        titleVector: _tv,
-        ...video
-      } = row;
-      return video;
-    }),
-  );
+  const videos: UnifiedVideo[] = pageRows.map((row) => {
+    const {
+      rawScore: _r,
+      preMmrRawScore: _p,
+      scoreBreakdown: _b,
+      candidateSource: _c,
+      coldStartJitter: _j,
+      titleVector: _tv,
+      ...video
+    } = row;
+    return video;
+  });
   return {
     videos,
     coldStart: entry.coldStart,
@@ -202,12 +199,10 @@ export async function getShortsRecommendations(
       nowSec,
     );
     const uniqueRaw = pickNewestVideoPerChannel(
-      stripRestrictedListVideos(
-        [...byId.values()].filter(
-          (v) =>
-            !watchedEver.has(v.videoId) &&
-            !(v.channelId && blocked.has(v.channelId)),
-        ),
+      [...byId.values()].filter(
+        (v) =>
+          !watchedEver.has(v.videoId) &&
+          !(v.channelId && blocked.has(v.channelId)),
       ),
       { nowSec, maxPerChannel: 3 },
     );

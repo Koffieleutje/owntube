@@ -1,7 +1,6 @@
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { normalizeChannelTag } from "@/lib/channel-tag";
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
 import type { LongFormWindow } from "@/lib/long-form-uploads";
 import {
   compareSubscriptionHeads,
@@ -1111,13 +1110,10 @@ export const subscriptionsRouter = router({
       );
       const settings = getUserSettings(ctx.db, ctx.userId);
 
-      const restrictedFiltered = settings.hideRestrictedVideos
-        ? stripRestrictedListVideos(videos)
-        : videos;
       return {
         videos: settings.hideShortsInSubscriptions
-          ? await stripShortsFromSubscriptionFeed(ctx.db, restrictedFiltered)
-          : restrictedFiltered,
+          ? await stripShortsFromSubscriptionFeed(ctx.db, videos)
+          : videos,
       };
     }),
 
@@ -1188,13 +1184,10 @@ export const subscriptionsRouter = router({
         withMeta,
       );
       const settings = getUserSettings(ctx.db, ctx.userId);
-      const restrictedFiltered = settings.hideRestrictedVideos
-        ? stripRestrictedListVideos(withDurations)
-        : withDurations;
       const visibleVideos =
         (input.hideShorts ?? settings.hideShortsInSubscriptions)
-          ? await stripShortsFromSubscriptionFeed(ctx.db, restrictedFiltered)
-          : restrictedFiltered;
+          ? await stripShortsFromSubscriptionFeed(ctx.db, withDurations)
+          : withDurations;
       const candidateVideoIds = visibleVideos.map((v) => v.videoId);
       const ignoredRows =
         candidateVideoIds.length > 0

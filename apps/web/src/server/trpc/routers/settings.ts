@@ -33,7 +33,6 @@ const settingsPatchSchema = z.object({
   invidiousBaseUrls: z.array(z.string().max(512)).max(8).optional(),
   preferredInvidiousBaseUrl: z.string().max(512).optional(),
   trendingRegion: z.string().length(2).optional(),
-  hideRestrictedVideos: z.boolean().optional(),
   hideShortsInSubscriptions: z.boolean().optional(),
   excludeSubscribedFromRecommendations: z.boolean().optional(),
   personalizedFeedOnly: z.boolean().optional(),

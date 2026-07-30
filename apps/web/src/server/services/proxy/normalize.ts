@@ -143,69 +143,6 @@ export function reconcilePublishedAtWithText(
   return publishedAt;
 }
 
-export function upstreamBadgesOrLabelsRestricted(
-  o: Record<string, unknown>,
-): boolean {
-  const lists = [o.badges, o.videoBadges, o.ownerBadges];
-  for (const raw of lists) {
-    if (!Array.isArray(raw)) continue;
-    for (const item of raw) {
-      if (typeof item === "string") {
-        if (/member|membre|subscriber\s+only|subs?\s+only/i.test(item)) {
-          return true;
-        }
-      } else if (item && typeof item === "object") {
-        const r = item as Record<string, unknown>;
-        for (const c of [
-          r.label,
-          r.text,
-          r.type,
-          r.tooltip,
-          r.style,
-          r.title,
-        ]) {
-          if (
-            typeof c === "string" &&
-            /member|membre|subscriber\s+only|subs?\s+only/i.test(c)
-          ) {
-            return true;
-          }
-        }
-      }
-    }
-  }
-  const err = o.error;
-  if (typeof err === "string" && err.trim().length > 0) {
-    if (/\b(members?\s+only|subscriber|private)\b/i.test(err)) return true;
-  }
-  return false;
-}
-
-/**
- * Invidious/Piped list payloads may mark items that need channel membership,
- * payment, or Premium — exclude them from feeds and unified lists.
- */
-export function isUpstreamMembersOrPaidOnly(
-  o: Record<string, unknown>,
-): boolean {
-  const on = (v: unknown) => v === true || v === 1 || v === "1" || v === "true";
-  if (on(o.premium)) return true;
-  if (on(o.paid)) return true;
-  if (upstreamBadgesOrLabelsRestricted(o)) return true;
-  for (const key of [
-    "isMembersOnly",
-    "membersOnly",
-    "is_members_only",
-    "members_only",
-    "uploaderMember",
-    "subscribersOnly",
-    "requiresSubscription",
-  ] as const) {
-    if (on(o[key])) return true;
-  }
-  return false;
-}
-
 export function pickVideoThumbnail(
   thumbnails: unknown,
   videoId?: string,

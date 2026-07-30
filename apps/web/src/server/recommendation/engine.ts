@@ -1,5 +1,4 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { stripRestrictedListVideos } from "@/lib/feed-exclude-restricted";
 import { logger } from "@/lib/logger";
 import {
   mergeVideosByIdPreferNewer,
@@ -102,9 +101,7 @@ function diversifiedRowToVideo(row: ScoredVideo): UnifiedVideo {
 function diversifiedToVideos(
   entry: RecommendationPoolCacheEntry,
 ): UnifiedVideo[] {
-  return stripRestrictedListVideos(
-    entry.diversified.map(diversifiedRowToVideo),
-  );
+  return entry.diversified.map(diversifiedRowToVideo);
 }
 
 function sliceRecommendationPool(
@@ -115,9 +112,7 @@ function sliceRecommendationPool(
   const start = (page - 1) * pageSize;
   const pageRows = entry.diversified.slice(start, start + pageSize);
   const hasMore = start + pageRows.length < entry.diversified.length;
-  const videos: UnifiedVideo[] = stripRestrictedListVideos(
-    pageRows.map(diversifiedRowToVideo),
-  );
+  const videos: UnifiedVideo[] = pageRows.map(diversifiedRowToVideo);
   const personalizedPageCount = Math.max(
     1,
     Math.ceil(entry.diversified.length / pageSize),
@@ -415,13 +410,11 @@ async function ensureRecommendationPool(
         : [],
     );
     const uniqueRaw = pickNewestVideoPerChannel(
-      stripRestrictedListVideos(
-        [...byId.values()].filter(
-          (v) =>
-            !excludedVideoIds.has(v.videoId) &&
-            !ignoredVideoIds.has(v.videoId) &&
-            !(v.channelId && blockedRecommendationChannels.has(v.channelId)),
-        ),
+      [...byId.values()].filter(
+        (v) =>
+          !excludedVideoIds.has(v.videoId) &&
+          !ignoredVideoIds.has(v.videoId) &&
+          !(v.channelId && blockedRecommendationChannels.has(v.channelId)),
       ),
       { nowSec, maxPerChannel: 1 },
     );

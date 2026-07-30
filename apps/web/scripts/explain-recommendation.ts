@@ -8,7 +8,6 @@
  *
  * Usage: pnpm exec tsx scripts/explain-recommendation.ts <videoId> [userId]
  */
-import { stripRestrictedListVideos } from "../src/lib/feed-exclude-restricted";
 import {
   mergeVideosByIdPreferNewer,
   pickNewestVideoPerChannel,
@@ -93,13 +92,11 @@ async function main() {
   const watchedEver = new Set(signals.watchedVideoIds);
 
   const uniqueRaw = pickNewestVideoPerChannel(
-    stripRestrictedListVideos(
-      [...byId.values()].filter(
+    [...byId.values()].filter(
         (v) =>
           !watchedEver.has(v.videoId) &&
           !(v.channelId && blocked.has(v.channelId)),
       ),
-    ),
     { nowSec, maxPerChannel: 1 },
   );
 
