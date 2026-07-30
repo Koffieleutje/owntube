@@ -22,6 +22,11 @@
  *                  in `videoRenderer.badges`, moving it to the thumbnail's
  *                  time-status overlay, which Invidious did not read. Fixed on
  *                  the fork; this check keeps it fixed.
+ *  - `shortsFlag`   `isShort` on list items is a fork patch (Phase 3.3). Shorts
+ *                  cannot be identified any other way: YouTube stopped
+ *                  reporting a real duration for them and the parsers
+ *                  substitute an approximate 60s, so length cannot separate a
+ *                  Short from a genuine 60-second upload.
  *  - `listDuration` that *non-live* list items carry a real duration. It only
  *                  covers non-live items on purpose — trending is the
  *                  livestreams feed now, and `lengthSeconds: 0` is correct for
@@ -61,6 +66,13 @@ const PROBE_VIDEO_ID = process.env.UPSTREAM_CHECK_VIDEO_ID ?? "haxkWC6MgcQ";
  */
 const MULTI_AUDIO_VIDEO_ID =
   process.env.UPSTREAM_CHECK_MULTI_AUDIO_VIDEO_ID ?? "0e3GPea1Tyg";
+
+/**
+ * A channel with a populated Shorts tab, for the `shortsFlag` check. MrBeast:
+ * high-volume and long-lived, so the tab is unlikely to empty out.
+ */
+const SHORTS_CHANNEL_ID =
+  process.env.UPSTREAM_CHECK_SHORTS_CHANNEL_ID ?? "UCX6OQ3DkcsbYNE6H8uQQuVA";
 
 const TREND_REGION = process.env.UPSTREAM_CHECK_REGION ?? "NL";
 
@@ -266,6 +278,39 @@ async function checkAudioTracks(): Promise<Result> {
 }
 
 /**
+ * `isShort` on list items — the Phase 3.3 fork patch. Checked against a
+ * channel's Shorts tab, where every item is a Short by construction, so the
+ * expected answer is unambiguous: all of them flagged.
+ *
+ * Deliberately not satisfied by the duration: those items all report the
+ * approximate 60s the parser substitutes, which is exactly the signal this
+ * field exists to replace.
+ */
+async function checkShortsFlag(): Promise<Result> {
+  const page = (await getJson(
+    `/api/v1/channels/${encodeURIComponent(SHORTS_CHANNEL_ID)}/shorts`,
+  )) as { videos?: { videoId?: string; isShort?: boolean }[] };
+  const videos = page.videos ?? [];
+  if (videos.length === 0) {
+    return {
+      name: "shortsFlag",
+      ok: false,
+      skipped: true,
+      detail: `${SHORTS_CHANNEL_ID} returned no shorts — cannot tell a lost patch from an empty tab`,
+    };
+  }
+  const flagged = videos.filter((v) => v.isShort === true).length;
+  const ok = flagged === videos.length;
+  return {
+    name: "shortsFlag",
+    ok,
+    detail: ok
+      ? `all ${videos.length} items on the shorts tab are flagged isShort`
+      : `only ${flagged}/${videos.length} shorts-tab items are flagged isShort — the fork patch is missing or the parser changed`,
+  };
+}
+
+/**
  * Trending list items, checked against the detail endpoint for the same ids.
  *
  * Two distinct assertions, deliberately separated because they used to be
@@ -361,6 +406,7 @@ async function run(): Promise<void> {
       run: checkVideoStreamsAndByteRanges,
     },
     { names: ["audioTracks"], run: checkAudioTracks },
+    { names: ["shortsFlag"], run: checkShortsFlag },
     {
       names: ["listLiveFlag", "listDuration"],
       run: checkTrendingListItems,

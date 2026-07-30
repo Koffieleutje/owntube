@@ -174,7 +174,9 @@ describe("upstream isShort", () => {
   });
 
   it("reads the flag straight off a raw Invidious item", () => {
-    expect(invidiousItemIsStrictShort({ isShort: true, title: "x" })).toBe(true);
+    expect(invidiousItemIsStrictShort({ isShort: true, title: "x" })).toBe(
+      true,
+    );
     // Absent flag falls back to the existing length rule.
     expect(
       invidiousItemIsStrictShort({ lengthSeconds: 1076, title: "x #shorts" }),
