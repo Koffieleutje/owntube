@@ -178,6 +178,35 @@ So the two exports trade off exactly the thing a converter needs:
 Neither gives headless + seek out of the box. That is the single most important
 correction this spike produced.
 
+## po_token is not required (here, today)
+
+`potoken-test.ts` runs SABR with and without BotGuard attestation:
+
+```
+WEB           no po_token: WORKS  2 segments, init=true
+ANDROID       no po_token: WORKS  2 segments, init=true
+IOS           no po_token: WORKS  2 segments, init=true
+TV            no po_token: WORKS  2 segments, init=true
+MWEB          no po_token: WORKS  2 segments, init=true
+WEB_EMBEDDED  no po_token: WORKS  2 segments, init=true
+WEB         WITH po_token: WORKS  2 segments, init=true
+```
+
+Three caveats, all of which matter more than the result:
+
+- **This is one IP.** po_token enforcement tracks IP reputation, and datacenter
+  ranges are treated far more harshly than a home connection. "Not needed here"
+  is not "not needed anywhere".
+- **It can change without notice.** YouTube tightens this periodically; yt-dlp's
+  SABR branch still documents a PO Token as required for `web`.
+- **Only short unauthenticated VOD pulls were tested** (2 segments). Longer
+  sessions may trip `streamProtectionStatus`, which `SabrStream` tracks and this
+  test did not inspect.
+
+So: do not build po_token in as mandatory, but keep the ability to mint one and
+attach it lazily when the server objects. `SabrStream.setPoToken()` exists for
+exactly that, and attestation is cheap anyway — **263ms**, then cacheable.
+
 ## Other findings worth keeping
 
 - **`stream.abort()`, never `reader.cancel()`.** Cancelling the reader leaves
