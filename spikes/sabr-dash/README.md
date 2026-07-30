@@ -53,105 +53,55 @@ through invidious-companion.
 
 **Captions are therefore a reason the companion cannot simply be dropped.**
 
-### Known limitation: long videos stop at ~12 fragments
+### Long videos: SOLVED
 
-Short videos convert end to end — `dQw4w9WgXcQ` (213s) pulls complete, 240 MB,
-38 fragments. Videos of ~25 minutes and up stop after about 60 seconds of media:
+Every video that stalled now downloads completely, verified in one session:
 
-| video | duration | result |
-|---|---|---|
-| `dQw4w9WgXcQ` | 213s | **complete**, 38 fragments |
-| `0e3GPea1Tyg` | 1541s | stops at ~12 fragments (~63s) |
-| `Li8SgZcbSOI` | 1484s | stops at ~14 fragments |
-| `Y07j3hXAI-g` | 3116s | stops at ~12 fragments |
+| video | duration | before | after |
+|---|---|---|---|
+| `0e3GPea1Tyg` | 1541s | 12 fragments, "attestation required" | **288/288, 6s** |
+| `Li8SgZcbSOI` | 1484s | 14 fragments | **288/288, 7s** |
+| `Y07j3hXAI-g` | 3116s | 12 fragments | **609/609, 19s** |
+| `dQw4w9WgXcQ` | 213s | worked | still works |
 
-**This is our bug, not YouTube policy.** yt-dlp downloads `0e3GPea1Tyg` in full
-over SABR — 288/288 fragments, 17.4 MB, in 4 seconds — from this host, with the
-same client (ANDROID_VR) and the same itag (160), minutes before and after our
-attempt fails. Its own state line ends `pot:N`: **no po_token at all**.
+No po_token involved. Three causes stacked on top of each other, found by
+decoding our own request bytes with yt-dlp's proto classes and diffing against
+its successful request at the same playback position:
 
-```
-[sabr:stream] All enabled formats have reached their last expected segment
-              at player time 1541208 ms, assuming end of vod.
-[SABR State] v:0e3GPea1Tyg c:ANDROID_VR t:1541208 rn:146 act:Y pot:N
-             cr:[251:0-9007199254740991, 160:1-288 (0-1541208)]
-```
+1. **Player-response provenance — the big one.** youtubei.js's
+   `getBasicInfo(id, 'ANDROID_VR')` carries its WEB session into the call, and
+   the GVS classifies the resulting streaming session as suspect: it serves
+   ~60s of media, sends a `SabrContextUpdate` (which it never sends yt-dlp),
+   then stops serving and demands attestation. A hand-rolled `/youtubei/v1/player`
+   call with a pure ANDROID_VR context — borrowing only the visitorData, which
+   is required (`LOGIN_REQUIRED` without it) — streams freely. See
+   `raw-vr-test.ts`.
+2. **`EnabledTrackTypes.VIDEO_ONLY` sends 2 on the wire, a value SABR does not
+   have.** The protocol knows audio+video (0) and audio-only (1); yt-dlp
+   expresses video-only as 0 with the audio track discarded client-side:
+   selected so the server initializes it, advertised as fully buffered
+   (0..MAX, the server's *own* chosen format id — it may initialize a different
+   format than selected, observed 140 -> 251), never named in
+   `preferredAudioFormatIds`.
+3. **Media-header times were read from the wrong field.** Raw player responses
+   send `startMs`/`durationMs` as literal zeroes with the real values only in
+   `timeRange` ticks. Trusting the zeroes records every segment as zero-length,
+   so the client re-requests position 0 until the server gives up. `timeRange`
+   is authoritative when present; init segments are skipped entirely.
 
-yt-dlp does stall on this video occasionally — one run in three did — but it
-succeeds far more often than not, while we fail every time.
+All three fixes are in `googlevideo-seek.patch` (which is now a misnomer — it
+carries the seek fix, the cumulative `bufferedRanges` fix, the timescale fix,
+and these). Regression: 213s conversion 0 timeline mismatches, seek works at
+30/60/120/180s, the youtubei.js path still completes on short videos.
 
-#### What the failure looks like
+**Consequences for the converter design:**
 
-The error is `Cannot proceed with stream: attestation required`, which is what
-sent the earlier investigation after po_tokens. Two findings say attestation is
-a symptom rather than the cause:
-
-1. **yt-dlp needs no token for this video** (`pot:N` above). ANDROID_VR is
-   exempt, and it still gets all 288 fragments.
-2. **The demand is provoked by our own request.** googlevideo always names the
-   audio track in `preferredAudioFormatIds`, even when that track is being
-   discarded for a video-only pull. yt-dlp sends an **empty** preferred list for
-   a discarded track. Suppressing ours changes the failure from `attestation
-   required` to an ordinary stall — so the server is reacting to being asked to
-   serve a track we intend to throw away.
-
-That change is **not** committed: with the audio track no longer served, the
-end-of-stream completeness check trips on the discarded format
-(`Format 251:: Missing segments: [1..22]`), so it needs the discard path taught
-that a suppressed track has nothing to await. It is the strongest lead here.
-
-#### Diffed against a working request
-
-At the exact fragment we die on, yt-dlp's request is:
-
-```
-player_time_ms=63273
-buffered_ranges=[
-  itag 251 (discarded): 0 .. 9007199254740991, segments 0..9007199254740991
-  itag 160:             0 .. 63273 ms,         segments 1..12
-]
-```
-
-Ours matches this — same player time (63272), same video range, same cumulative
-shape — once the `bufferedRanges` and timescale fixes below are applied. The
-remaining differences are the discarded track's dummy range (we write
-`startSegmentIndex` = MAX_INT32 where yt-dlp writes 0) and `ClientAbrState`
-fields we never set (`drc_enabled`, `enable_voice_boost`, and
-`media_capabilities`, which yt-dlp sends for ANDROID/IOS/ANDROID_VR).
-
-**Setting those did not help, and made things worse**: with them the 213s video
-regressed to 0 bytes and `Player response reload requested by server`. They are
-reverted. Recorded so the next attempt does not repeat them blind.
-
-#### Attestation does work from this host
-
-Worth separating from the above, because the earlier write-up got it wrong.
-Running Brainicism's `bgutil-ytdlp-pot-provider` container here mints a real
-integrity token first try:
-
-```
-Using challenge from /att/get
-Generated IntegrityToken: {"integrityToken":"ULSw64xpJGoe...","estimatedTtlSecs":43200}
-```
-
-So the spike's own minter (`minter.ts`) is simply broken, and the difference is
-visible in that log line: the provider takes its challenge from
-**`https://www.youtube.com/att/get`**, while `minter.ts` follows the companion in
-asking Innertube via `getAttestationChallenge`. Not chased further, because no
-token is needed to fix the actual bug.
-
-To bring the provider back up:
-
-```bash
-docker start bgutil-pot   # or: docker run -d --name bgutil-pot -p 127.0.0.1:4416:4416 \
-                          #       brainicism/bgutil-ytdlp-pot-provider
-```
-
-#### Next step
-
-Suppress the discarded track from `preferredAudioFormatIds` **and** exempt it
-from the end-of-stream segment check. That is a contained change in
-`SabrStream`, and it is the only lead that has moved the failure so far.
+- The player response must be fetched with a clean per-client context, not
+  through a shared youtubei.js session. (An attested WEB session may also work —
+  untested — but the raw ANDROID_VR call needs no BotGuard at all.)
+- No po_token machinery is required for VOD via ANDROID_VR.
+- The `minter.ts` / bgutil / companion-token investigations below are therefore
+  **background, not blockers**. Kept for when YouTube tightens ANDROID_VR.
 
 ## What it proves
 

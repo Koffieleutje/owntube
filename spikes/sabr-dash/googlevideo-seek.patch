@@ -1,5 +1,5 @@
 diff --git a/src/core/SabrStream.ts b/src/core/SabrStream.ts
-index f1fef22..8e32249 100644
+index f1fef22..8432c45 100644
 --- a/src/core/SabrStream.ts
 +++ b/src/core/SabrStream.ts
 @@ -58,6 +58,19 @@ export interface InitializedFormat {
@@ -39,7 +39,7 @@ index f1fef22..8e32249 100644
    }>;
  }
  
-@@ -141,7 +156,12 @@ export class SabrStream extends EventEmitterLike {
+@@ -141,8 +156,15 @@ export class SabrStream extends EventEmitterLike {
    private partialSegmentQueue = new Map<number, Segment>();
    private requestNumber = 0;
    private durationMs = Infinity;
@@ -51,9 +51,12 @@ index f1fef22..8e32249 100644
 +   */
 +  private seededBufferedRanges: BufferedRange[] = [];
    private formatToDiscard?: string;
++  /** Which track `formatToDiscard` refers to, so a server-side format switch can be followed. */
++  private discardedMediaType?: 'audio' | 'video';
    private mediaHeadersProcessed = false;
    private mainFormat?: InitializedFormat;
-@@ -305,7 +325,8 @@ export class SabrStream extends EventEmitterLike {
+   private _errored = false;
+@@ -305,7 +327,8 @@ export class SabrStream extends EventEmitterLike {
          formatKey,
          formatInitializationMetadata: format.formatInitializationMetadata,
          downloadedSegments: Array.from(format.downloadedSegments.entries()),
@@ -63,7 +66,7 @@ index f1fef22..8e32249 100644
        });
      }
  
-@@ -315,7 +336,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -315,7 +338,7 @@ export class SabrStream extends EventEmitterLike {
        activeSabrContexts: Array.from(this.activeSabrContextTypes),
        sabrContextUpdates: Array.from(this.sabrContexts.entries()),
        formatToDiscard: this.formatToDiscard,
@@ -72,7 +75,7 @@ index f1fef22..8e32249 100644
        nextRequestPolicy: this.nextRequestPolicy,
        initializedFormats,
        playerTimeMs
-@@ -358,7 +379,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -358,14 +381,41 @@ export class SabrStream extends EventEmitterLike {
        this._errored = false;
        this._aborted = false;
  
@@ -84,10 +87,22 @@ index f1fef22..8e32249 100644
  
        if (options.state && this.restoreState(videoFormat, audioFormat, options.state)) {
          playerTimeMs = options.state.playerTimeMs || 0;
-@@ -367,6 +391,20 @@ export class SabrStream extends EventEmitterLike {
-       const maxRetries = options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
-       const enabledTrackTypesBitfield = options.enabledTrackTypes ?? EnabledTrackTypes.VIDEO_AND_AUDIO;
+       }
  
+       const maxRetries = options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
+-      const enabledTrackTypesBitfield = options.enabledTrackTypes ?? EnabledTrackTypes.VIDEO_AND_AUDIO;
++      const enabledTrackTypes = options.enabledTrackTypes ?? EnabledTrackTypes.VIDEO_AND_AUDIO;
++      // On the wire, SABR knows only audio+video (0) and audio-only (1); there
++      // is no video-only value. A video-only pull is expressed as 0 with the
++      // audio track discarded client-side — selected so the server initializes
++      // it, advertised as fully buffered, never named as preferred. Sending 2
++      // "works" for a while, but on long videos the server eventually stops
++      // serving media and demands attestation. yt-dlp sends 0 and streams the
++      // same videos to completion.
++      const enabledTrackTypesBitfield = enabledTrackTypes === EnabledTrackTypes.VIDEO_ONLY ?
++        EnabledTrackTypes.VIDEO_AND_AUDIO :
++        enabledTrackTypes;
++
 +      if (options.startAtMs && !options.state) {
 +        const seekMs = options.startAtMs;
 +        this.seededBufferedRanges = [ videoFormat, audioFormat ]
@@ -101,11 +116,32 @@ index f1fef22..8e32249 100644
 +            timeRange: { startTicks: '0', durationTicks: String(seekMs), timescale: 1000 }
 +          })) as any;
 +      }
-+
+ 
        const abrState: Record<string, any> = {
          playerTimeMs,
-         audioTrackId: audioFormat.audioTrackId,
-@@ -400,7 +438,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -379,10 +429,11 @@ export class SabrStream extends EventEmitterLike {
+       };
+ 
+       // NOTE: 0 - video & audio, 1 - audio only, 2 - video only
+-      if (abrState.enabledTrackTypesBitfield === 1 || abrState.enabledTrackTypesBitfield === 2) {
+-        this.formatToDiscard = abrState.enabledTrackTypesBitfield === 1 ?
++      if (enabledTrackTypes === EnabledTrackTypes.AUDIO_ONLY || enabledTrackTypes === EnabledTrackTypes.VIDEO_ONLY) {
++        this.formatToDiscard = enabledTrackTypes === EnabledTrackTypes.AUDIO_ONLY ?
+           FormatKeyUtils.fromFormat(videoFormat) :
+           FormatKeyUtils.fromFormat(audioFormat);
++        this.discardedMediaType = enabledTrackTypes === EnabledTrackTypes.AUDIO_ONLY ? 'video' : 'audio';
+       }
+ 
+       while (parseInt(abrState.playerTimeMs) < this.durationMs) {
+@@ -393,14 +444,17 @@ export class SabrStream extends EventEmitterLike {
+ 
+         this.logger.debug(TAG, `Starting new segment fetch at playback position: ${abrState.playerTimeMs}ms`);
+ 
+-        this.mainFormat = abrState.enabledTrackTypesBitfield === 1 ?
++        this.mainFormat = enabledTrackTypes === EnabledTrackTypes.AUDIO_ONLY ?
+           this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(audioFormat) || '') :
+           this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(videoFormat) || '');
+ 
          if (this.mainFormat)
            this.validateAndCorrectDuration(this.mainFormat.formatInitializationMetadata);
  
@@ -117,7 +153,7 @@ index f1fef22..8e32249 100644
  
          const { shouldStop } = this.checkForStall({
            playerTimeMs: abrState.playerTimeMs,
-@@ -465,7 +506,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -465,7 +519,7 @@ export class SabrStream extends EventEmitterLike {
      const expectedAudioFormatKey = FormatKeyUtils.fromFormat(audioFormat) || '';
  
      for (const format of state.initializedFormats) {
@@ -126,7 +162,7 @@ index f1fef22..8e32249 100644
  
        if (formatKey !== expectedVideoFormatKey && formatKey !== expectedAudioFormatKey) {
          this.logger.warn(TAG, `State contains an unexpected format key "${formatKey}". It will be ignored.`);
-@@ -475,7 +516,8 @@ export class SabrStream extends EventEmitterLike {
+@@ -475,7 +529,8 @@ export class SabrStream extends EventEmitterLike {
        this.initializedFormatsMap.set(formatKey, {
          formatInitializationMetadata,
          downloadedSegments: new Map(downloadedSegments),
@@ -136,7 +172,7 @@ index f1fef22..8e32249 100644
        });
      }
  
-@@ -490,7 +532,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -490,7 +545,7 @@ export class SabrStream extends EventEmitterLike {
      this.activeSabrContextTypes = new Set(state.activeSabrContexts || []);
      this.sabrContexts = new Map(state.sabrContextUpdates || []);
      this.formatToDiscard = state.formatToDiscard;
@@ -145,7 +181,7 @@ index f1fef22..8e32249 100644
      this.nextRequestPolicy = state.nextRequestPolicy;
  
      return true;
-@@ -601,12 +643,12 @@ export class SabrStream extends EventEmitterLike {
+@@ -601,12 +656,12 @@ export class SabrStream extends EventEmitterLike {
      const initializedVideoFormat = this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(selectedVideoFormat) || '');
      const initializedAudioFormat = this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(selectedAudioFormat) || '');
  
@@ -163,7 +199,7 @@ index f1fef22..8e32249 100644
  
      this.mediaHeadersProcessed = false;
      const response = await this.makeStreamingRequest(requestBody);
-@@ -615,6 +657,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -615,30 +670,36 @@ export class SabrStream extends EventEmitterLike {
      if (!processedParts.length) {
        throw new Error('No valid parts received from server.');
      } else if ((this.streamProtectionStatus?.status || 0) >= 2 && !processedParts.includes(UMPPartId.MEDIA)) {
@@ -171,7 +207,14 @@ index f1fef22..8e32249 100644
        throw new Error('No media parts or protocol updates received from server.');
      }
  
-@@ -628,17 +671,22 @@ export class SabrStream extends EventEmitterLike {
+     if (
+       processedParts.includes(UMPPartId.MEDIA_HEADER) &&
+       (initializedVideoFormat?.lastMediaHeaders?.length && initializedAudioFormat?.lastMediaHeaders?.length) ||
+-      (abrState.enabledTrackTypesBitfield !== 0 && this.mainFormat?.lastMediaHeaders?.length)
++      (this.discardedMediaType !== undefined && this.mainFormat?.lastMediaHeaders?.length)
+     ) {
+       this.mediaHeadersProcessed = true;
+     }
    }
  
    /**
@@ -197,7 +240,7 @@ index f1fef22..8e32249 100644
      const formats = [ initializedVideoFormat, initializedAudioFormat ];
  
      for (const initializedFormat of formats) {
-@@ -650,29 +698,90 @@ export class SabrStream extends EventEmitterLike {
+@@ -650,29 +711,112 @@ export class SabrStream extends EventEmitterLike {
          // Skip formats marked for discarding; a dummy range will be created for them later.
          FormatKeyUtils.fromFormatInitializationMetadata(initializedFormat.formatInitializationMetadata) === this.formatToDiscard
        ) {
@@ -238,8 +281,7 @@ index f1fef22..8e32249 100644
 +    const ends = this.mainFormat.consumedRanges.map(
 +      (range) => parseInt(range.startTimeMs || '0') + parseInt(range.durationMs || '0')
 +    );
- 
--      bufferedRanges.push({
++
 +    return Math.max(...ends);
 +  }
 +
@@ -249,9 +291,28 @@ index f1fef22..8e32249 100644
 +   * @private
 +   */
 +  private recordConsumedSegment(initializedFormat: InitializedFormat, header: MediaHeader): void {
++    }
++    // An init segment is metadata, not content: it occupies no playback time,
++    // and recording it would seed a zero-length range at sequence 0 that the
++    // real segment 1 then never extends.
++    if (header.isInitSeg) return;
++
 +    const sequenceNumber = header.sequenceNumber || 1;
-+    const startMs = parseInt(header.startMs || '0');
-+    const durationMs = parseInt(header.durationMs || '0');
++
++    // Media headers time their segment two ways: startMs/durationMs, or
++    // timeRange ticks. Some clients (a raw ANDROID_VR player response, for one)
++    // send the direct fields as literal zeroes and put the real values only in
++    // timeRange — so timeRange is authoritative when present, and the direct
++    // fields are the fallback rather than the other way round. Trusting the
++    // zeroes records every segment as zero-length, the advertised position
++    // never advances, and the client re-requests position 0 until the server
++    // gives up on it.
++    const timescale = header.timeRange?.timescale || 0;
++    const ticksToMs = (ticks?: string): number | undefined =>
++      ticks !== undefined && timescale ? Math.round((parseInt(ticks) * 1000) / timescale) : undefined;
++
++    const startMs = ticksToMs(header.timeRange?.startTicks) ?? parseInt(header.startMs || '0');
++    const durationMs = ticksToMs(header.timeRange?.durationTicks) ?? parseInt(header.durationMs || '0');
 +
 +    if (initializedFormat.consumedRanges.some(
 +      (range) => sequenceNumber >= (range.startSegmentIndex || 1) && sequenceNumber <= (range.endSegmentIndex || 1)
@@ -262,7 +323,8 @@ index f1fef22..8e32249 100644
 +    const contiguous = initializedFormat.consumedRanges.find(
 +      (range) => range.endSegmentIndex === sequenceNumber - 1
 +    );
-+
+ 
+-      bufferedRanges.push({
 +    if (!contiguous) {
 +      initializedFormat.consumedRanges.push({
          durationMs: durationMs.toString(),
@@ -299,7 +361,7 @@ index f1fef22..8e32249 100644
    }
  
    /**
-@@ -687,14 +796,19 @@ export class SabrStream extends EventEmitterLike {
+@@ -687,25 +831,40 @@ export class SabrStream extends EventEmitterLike {
    private buildRequestBody(
      abrState: ClientAbrState,
      selectedAudioFormat: SabrFormat,
@@ -317,8 +379,79 @@ index f1fef22..8e32249 100644
 +    }
      const { sabrContexts, unsentSabrContexts } = this.prepareSabrContexts();
  
++
++
      const { selectedFormatIds, updatedBufferedRanges } = this.prepareFormatSelections(
-@@ -874,6 +988,11 @@ export class SabrStream extends EventEmitterLike {
+       [ selectedVideoFormat, selectedAudioFormat ],
+       bufferedRanges
+     );
+ 
+-    return VideoPlaybackAbrRequest.encode({
++    // Never ask for the track being discarded. It must still be *selected* so
++    // the server initializes it and it can be marked fully buffered, but naming
++    // it as preferred requests delivery of something we will throw away — and on
++    // long videos the server eventually refuses the whole stream over it
++    // ("attestation required" after ~60s of media, observed on three videos of
++    // 25 minutes and up). yt-dlp sends an empty preferred list for a discarded
++    // track and streams the same videos to completion.
++    const encoded = VideoPlaybackAbrRequest.encode({
+       clientAbrState: abrState,
+-      preferredAudioFormatIds: [ selectedAudioFormat ],
+-      preferredVideoFormatIds: [ selectedVideoFormat ],
++      preferredAudioFormatIds: this.discardedMediaType === 'audio' ? [] : [ selectedAudioFormat ],
++      preferredVideoFormatIds: this.discardedMediaType === 'video' ? [] : [ selectedVideoFormat ],
+       preferredSubtitleFormatIds: [],
+       selectedFormatIds,
+       videoPlaybackUstreamerConfig: base64ToU8(this.videoPlaybackUstreamerConfig),
+@@ -719,6 +878,14 @@ export class SabrStream extends EventEmitterLike {
+       bufferedRanges: updatedBufferedRanges,
+       field1000: []
+     }).finish();
++
++    if (dumpDir) {
++      const fs = (globalThis as any).process.getBuiltinModule?.('fs') ?? require('fs');
++      fs.writeFileSync(`${dumpDir}/req-${this.requestNumber}.bin`, encoded);
++    }
++
++    return encoded;
+   }
+ 
+   /**
+@@ -756,16 +923,30 @@ export class SabrStream extends EventEmitterLike {
+     const updatedBufferedRanges = [ ...currentBufferedRanges ];
+     const formatsInitialized = this.initializedFormatsMap.size > 0;
+ 
++    // The discarded format the server actually initialized, when it has: its
++    // formatId is what the dummy range below must carry. The server is free to
++    // initialize a different format for the discarded track than the one we
++    // selected (observed: audio 140 selected, 251 initialized), and a
++    // fully-buffered claim about a format the server is not serving means
++    // nothing to it.
++    const discardedInitialized = this.formatToDiscard ?
++      this.initializedFormatsMap.get(this.formatToDiscard) : undefined;
++
+     for (const format of formats) {
+       const formatKey = FormatKeyUtils.fromFormat(format);
+-      const shouldDiscard = this.formatToDiscard && formatKey === this.formatToDiscard;
++      const mediaType = format.width ? 'video' : 'audio';
++      const shouldDiscard = this.formatToDiscard !== undefined &&
++        (formatKey === this.formatToDiscard || mediaType === this.discardedMediaType);
+ 
+       if (shouldDiscard) {
+         updatedBufferedRanges.push({
+-          formatId: format,
++          formatId: discardedInitialized?.formatInitializationMetadata.formatId ?? format,
+           durationMs: MAX_INT32_VALUE,
+           startTimeMs: String(0),
+-          startSegmentIndex: parseInt(MAX_INT32_VALUE),
++          // 0..MAX — the whole track, from the start. This is a claim that the
++          // track is entirely buffered; a MAX..MAX range is a zero-width claim
++          // out at infinity. yt-dlp sends 0..MAX and the server honours it.
++          startSegmentIndex: 0,
+           endSegmentIndex: parseInt(MAX_INT32_VALUE),
+           timeRange: {
+             durationTicks: MAX_INT32_VALUE,
+@@ -874,6 +1055,11 @@ export class SabrStream extends EventEmitterLike {
          const handler = this.umpPartHandlers.get(part.type);
          if (handler) {
            handler(part);
@@ -330,7 +463,7 @@ index f1fef22..8e32249 100644
          }
        });
      }
-@@ -903,9 +1022,6 @@ export class SabrStream extends EventEmitterLike {
+@@ -903,9 +1089,6 @@ export class SabrStream extends EventEmitterLike {
      for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
        try {
          await fetchFn();
@@ -340,7 +473,7 @@ index f1fef22..8e32249 100644
          return true;
        } catch (e) {
          const error = e as Error;
-@@ -920,8 +1036,16 @@ export class SabrStream extends EventEmitterLike {
+@@ -920,8 +1103,16 @@ export class SabrStream extends EventEmitterLike {
            break;
          }
  
@@ -359,7 +492,25 @@ index f1fef22..8e32249 100644
          await wait(retryBackoffMs);
        } finally {
          this.partialSegmentQueue.clear();
-@@ -964,7 +1088,8 @@ export class SabrStream extends EventEmitterLike {
+@@ -961,10 +1152,26 @@ export class SabrStream extends EventEmitterLike {
+ 
+     const formatIdKey = FormatKeyUtils.fromFormatInitializationMetadata(formatInitMetadata);
+ 
++    // The server is free to initialize a different format for a track than the
++    // one selected — observed live: video-only, audio 140 selected for discard,
++    // server initializes 251 instead. The discard applies to the *track*, not to
++    // the exact format we happened to name, so follow the server's choice by
++    // media type. Without this, every later comparison against `formatToDiscard`
++    // silently misses and the discarded track fails validation at end of stream.
++    if (this.discardedMediaType && formatIdKey !== this.formatToDiscard) {
++      const isAudio = (formatInitMetadata.mimeType || '').startsWith('audio');
++      const isVideo = (formatInitMetadata.mimeType || '').startsWith('video');
++      if ((this.discardedMediaType === 'audio' && isAudio) || (this.discardedMediaType === 'video' && isVideo)) {
++        this.logger.debug(TAG, `Re-keying discarded format ${this.formatToDiscard} -> ${formatIdKey} (server chose a different format for the discarded track)`);
++        this.formatToDiscard = formatIdKey;
++      }
++    }
++
      const initializedFormat: InitializedFormat = {
        formatInitializationMetadata: formatInitMetadata,
        downloadedSegments: new Map<number, Segment>(),
@@ -369,7 +520,7 @@ index f1fef22..8e32249 100644
      };
  
      this.initializedFormatsMap.set(formatIdKey, initializedFormat);
-@@ -1209,6 +1334,11 @@ export class SabrStream extends EventEmitterLike {
+@@ -1209,6 +1416,11 @@ export class SabrStream extends EventEmitterLike {
        segment.bufferedChunks = [];
  
        initializedFormat.lastMediaHeaders.push(segment.mediaHeader);
@@ -381,7 +532,7 @@ index f1fef22..8e32249 100644
        initializedFormat.downloadedSegments.set(segment.segmentNumber, segment);
        this.partialSegmentQueue.delete(headerId);
      }
-@@ -1312,7 +1442,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -1312,10 +1524,11 @@ export class SabrStream extends EventEmitterLike {
      this.nextRequestPolicy = undefined;
      this.mainFormat = undefined;
      this.requestNumber = 0;
@@ -390,6 +541,10 @@ index f1fef22..8e32249 100644
      this.mediaHeadersProcessed = false;
      this.streamProtectionStatus = undefined;
      this.formatToDiscard = undefined;
++    this.discardedMediaType = undefined;
+     this.abortController = undefined;
+     this.progressTracker = {
+       lastProgressTime: Date.now(),
 diff --git a/src/types/sabrStreamTypes.ts b/src/types/sabrStreamTypes.ts
 index 796980e..bb61bcd 100644
 --- a/src/types/sabrStreamTypes.ts
