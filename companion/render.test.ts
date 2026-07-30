@@ -77,3 +77,27 @@ test("well-formed: balanced item tags, one per feed item", () => {
   assert.ok(xml.startsWith('<?xml version="1.0"'));
   assert.ok(xml.trimEnd().endsWith("</rss>"));
 });
+
+test("items with chapters reference the JSON chapters endpoint", () => {
+  const feed: FeedSnapshot = {
+    ...sample,
+    items: sample.items.map((it) => ({
+      ...it,
+      chapters: [{ startSeconds: 0, title: "Intro" }],
+    })),
+  };
+  const xml = renderRss(feed, "audio", {
+    selfUrl: "https://owntube.example/rss/playlist/cooking.audio.xml",
+  });
+  assert.match(
+    xml,
+    /xmlns:podcast="https:\/\/podcastindex\.org\/namespace\/1\.0"/,
+  );
+  assert.match(
+    xml,
+    /<podcast:chapters url="https:\/\/owntube\.example\/chapters\/abc123XYZ_-\.json" type="application\/json\+chapters"\/>/,
+  );
+  // Without a self URL there is no origin to build the link from.
+  const bare = renderRss(feed, "audio");
+  assert.doesNotMatch(bare, /podcast:chapters url=/);
+});

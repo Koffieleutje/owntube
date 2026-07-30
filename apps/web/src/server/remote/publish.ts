@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { toMediaOriginUrl } from "@/lib/media-origin";
+import { parseChaptersFromDescription } from "@/lib/video-chapters";
 import type { AppDb } from "@/server/db/client";
 import {
   channelMeta,
@@ -53,6 +54,9 @@ export type FeedItem = {
   channelName?: string;
   enclosureAudio: string;
   enclosureVideo: string;
+  /** YouTube-style chapters parsed from the description; the companion serves
+   * them as Podcasting 2.0 JSON chapters. Absent when none were found. */
+  chapters?: { startSeconds: number; title: string }[];
 };
 
 export type FeedSnapshot = {
@@ -115,6 +119,16 @@ function enclosures(
   };
 }
 
+/**
+ * Item artwork must be reachable from anywhere (podcast apps load it off-LAN),
+ * so thumbnails always point at YouTube's public CDN rather than whatever
+ * LAN-proxied URL the detail lookup returns. hqdefault exists for every video;
+ * maxresdefault does not.
+ */
+function publicThumbnail(videoId: string): string {
+  return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -152,20 +166,26 @@ async function enrichVideoItems(
     const enc = enclosures(r.videoId, appOrigin);
     try {
       const d = await fetchVideoDetail(db, { videoId: r.videoId });
+      const chapters = parseChaptersFromDescription(
+        d.description,
+        d.durationSeconds,
+      );
       return {
         videoId: r.videoId,
         title: d.title ?? r.title ?? r.videoId,
         description: d.description,
         durationSeconds: d.durationSeconds,
         publishedAt: d.publishedAt,
-        thumbnailUrl: d.thumbnailUrl,
+        thumbnailUrl: publicThumbnail(r.videoId),
         channelName: d.channelName,
+        ...(chapters.length > 0 ? { chapters } : {}),
         ...enc,
       } satisfies FeedItem;
     } catch {
       return {
         videoId: r.videoId,
         title: r.title ?? r.videoId,
+        thumbnailUrl: publicThumbnail(r.videoId),
         ...enc,
       } satisfies FeedItem;
     }
@@ -193,7 +213,7 @@ async function mergedChannelItems(
     videoId: e.videoId,
     title: e.title,
     publishedAt: e.publishedAt,
-    thumbnailUrl: e.thumbnailUrl,
+    thumbnailUrl: publicThumbnail(e.videoId),
     channelName: e.channelName,
     ...enclosures(e.videoId, appOrigin),
   }));

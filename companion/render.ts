@@ -15,6 +15,9 @@ export type FeedItem = {
   channelName?: string;
   enclosureAudio: string;
   enclosureVideo: string;
+  /** YouTube-style chapters (from the video description), served as
+   * Podcasting 2.0 JSON chapters at /chapters/<videoId>.json. */
+  chapters?: { startSeconds: number; title: string }[];
 };
 
 export type FeedSnapshot = {
@@ -92,7 +95,11 @@ function watchLinkFromEnclosure(
   }
 }
 
-function renderItem(item: FeedItem, variant: Variant): string {
+function renderItem(
+  item: FeedItem,
+  variant: Variant,
+  chaptersBase?: string,
+): string {
   const enclosureUrl =
     variant === "audio" ? item.enclosureAudio : item.enclosureVideo;
   const mime = variant === "audio" ? "audio/mp4" : "video/mp4";
@@ -126,6 +133,11 @@ function renderItem(item: FeedItem, variant: Variant): string {
   if (item.thumbnailUrl) {
     parts.push(`      <itunes:image href="${xmlEscape(item.thumbnailUrl)}"/>`);
   }
+  if (chaptersBase && item.chapters && item.chapters.length > 0) {
+    parts.push(
+      `      <podcast:chapters url="${xmlEscape(`${chaptersBase}/chapters/${encodeURIComponent(item.videoId)}.json`)}" type="application/json+chapters"/>`,
+    );
+  }
   // length="0": the enclosure is resolved on demand (signed, expiring stream),
   // so the byte length is unknown ahead of time; clients tolerate 0.
   parts.push(
@@ -150,7 +162,7 @@ export function renderRss(
   const title = `${feed.title}${variant === "audio" ? "" : " (Video)"}`;
   const head = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">',
+    '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podcast="https://podcastindex.org/namespace/1.0">',
     "  <channel>",
     `    <title>${xmlEscape(title)}</title>`,
     `    <description>${xmlEscape(feed.description ?? feed.title)}</description>`,
@@ -176,6 +188,16 @@ export function renderRss(
     if (feed.link) head.push(`      <link>${xmlEscape(feed.link)}</link>`);
     head.push("    </image>");
   }
-  const items = feed.items.map((it) => renderItem(it, variant));
+  // Chapters JSON is served from this same host; derive the origin from the
+  // self URL so no extra configuration is needed.
+  let chaptersBase: string | undefined;
+  if (options.selfUrl) {
+    try {
+      chaptersBase = new URL(options.selfUrl).origin;
+    } catch {
+      /* relative/odd self URL — items simply omit chapters */
+    }
+  }
+  const items = feed.items.map((it) => renderItem(it, variant, chaptersBase));
   return `${head.join("\n")}\n${items.join("\n")}\n  </channel>\n</rss>\n`;
 }

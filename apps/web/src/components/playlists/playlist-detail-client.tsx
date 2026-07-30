@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useCopyRssUrl } from "@/components/feeds/copy-rss-url";
+import { CopyRssUrlButton } from "@/components/feeds/copy-rss-url";
 import { PlaylistFormModal } from "@/components/playlists/playlist-form-modal";
 import { PlaylistTags } from "@/components/playlists/playlist-tags";
 import {
@@ -39,8 +39,6 @@ export function PlaylistDetailClient({ playlistId }: { playlistId: number }) {
   useEffect(() => {
     if (itemsQuery.data) setItems(itemsQuery.data);
   }, [itemsQuery.data]);
-
-  const copyRssUrl = useCopyRssUrl();
 
   const [editOpen, setEditOpen] = useState(false);
   const detail = detailQuery.data;
@@ -86,13 +84,11 @@ export function PlaylistDetailClient({ playlistId }: { playlistId: number }) {
               {detail.name}
             </h1>
             <div className="flex shrink-0 gap-2">
-              <button
-                type="button"
-                onClick={() => void copyRssUrl("playlist", String(playlistId))}
-                className="rounded-full border border-white/25 bg-black/20 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-black/35"
-              >
-                Copy RSS URL
-              </button>
+              <CopyRssUrlButton
+                kind="playlist"
+                refId={String(playlistId)}
+                buttonClassName="rounded-full border border-white/25 bg-black/20 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-black/35"
+              />
               <button
                 type="button"
                 onClick={() => setEditOpen(true)}

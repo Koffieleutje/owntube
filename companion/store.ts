@@ -50,6 +50,11 @@ export class FeedStore {
         username TEXT PRIMARY KEY,
         pass_sha256 TEXT NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS video_chapters (
+        video_id TEXT PRIMARY KEY,
+        json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       )`,
     );
     this.migrateOwnerColumn();
@@ -132,10 +137,43 @@ export class FeedStore {
         for (const u of existingUsers) {
           if (!usernames.has(u.username)) delUser.run(u.username);
         }
+        this.replaceChaptersLocked(rows);
       },
     );
     tx(feeds, users);
     return { upserted: feeds.length };
+  }
+
+  /** Rebuild the per-video chapters index from the pushed items (full-set
+   * semantics, like everything else). Runs inside replaceAll's transaction. */
+  private replaceChaptersLocked(feeds: FeedSnapshot[]): void {
+    this.db.exec("DELETE FROM video_chapters");
+    const upsert = this.db.prepare(
+      `INSERT INTO video_chapters (video_id, json, updated_at)
+       VALUES (?, ?, unixepoch())
+       ON CONFLICT(video_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+    );
+    for (const feed of feeds) {
+      for (const item of feed.items) {
+        if (item.chapters && item.chapters.length > 0) {
+          upsert.run(item.videoId, JSON.stringify(item.chapters));
+        }
+      }
+    }
+  }
+
+  chaptersFor(
+    videoId: string,
+  ): { startSeconds: number; title: string }[] | null {
+    const row = this.db
+      .prepare("SELECT json FROM video_chapters WHERE video_id = ?")
+      .get(videoId) as { json: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.json) as { startSeconds: number; title: string }[];
+    } catch {
+      return null;
+    }
   }
 
   getUser(username: string): UserCredential | null {

@@ -176,11 +176,16 @@ export const settingsRouter = router({
       }),
     )
     .query(({ ctx, input }) => {
+      const none = (reason: "no-companion" | "not-published") => ({
+        audioUrl: null,
+        videoUrl: null,
+        reason,
+      });
       const base = process.env.OWNTUBE_PUBLISH_TARGET?.trim().replace(
         /\/+$/,
         "",
       );
-      if (!base) return { url: null, reason: "no-companion" as const };
+      if (!base) return none("no-companion");
       const row = ctx.db
         .select({ slug: publishedFeeds.slug })
         .from(publishedFeeds)
@@ -192,16 +197,20 @@ export const settingsRouter = router({
           ),
         )
         .get();
-      if (!row) return { url: null, reason: "not-published" as const };
+      if (!row) return none("not-published");
       const user = ctx.db
         .select({ email: users.email })
         .from(users)
         .where(eq(users.id, ctx.userId))
         .get();
-      if (!user) return { url: null, reason: "not-published" as const };
+      if (!user) return none("not-published");
       const auth = `${encodeURIComponent(user.email)}:${ensureRssPass(ctx.db, ctx.userId)}`;
-      const url = `${base.replace(/^(https?:\/\/)/, `$1${auth}@`)}/rss/${encodeURIComponent(input.kind)}/${encodeURIComponent(row.slug)}.audio.xml`;
-      return { url, reason: null };
+      const feed = `${base.replace(/^(https?:\/\/)/, `$1${auth}@`)}/rss/${encodeURIComponent(input.kind)}/${encodeURIComponent(row.slug)}`;
+      return {
+        audioUrl: `${feed}.audio.xml`,
+        videoUrl: `${feed}.video.xml`,
+        reason: null,
+      };
     }),
 
   checkInstances: protectedProcedure.query(async () => {

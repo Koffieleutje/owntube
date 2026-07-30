@@ -346,6 +346,38 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // Podcasting 2.0 JSON chapters, referenced from feed items. Deliberately
+    // unauthenticated: podcast apps fetch this URL bare (feed credentials are
+    // not applied to linked resources), and the content is YouTube's public
+    // chapter data keyed by public video id — nothing about the user in it.
+    if (method === "GET" || method === "HEAD") {
+      const chapters = pathname.match(
+        /^\/chapters\/([A-Za-z0-9_-]{6,32})\.json$/,
+      );
+      if (chapters) {
+        const list = store.chaptersFor(chapters[1]);
+        if (!list) {
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("no chapters\n");
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "application/json+chapters",
+          "cache-control": "public, max-age=3600",
+        });
+        res.end(
+          JSON.stringify({
+            version: "1.2.0",
+            chapters: list.map((c) => ({
+              startTime: c.startSeconds,
+              title: c.title,
+            })),
+          }),
+        );
+        return;
+      }
+    }
+
     if (method === "POST" && pathname === "/publish") {
       await handlePublish(req, res);
       return;

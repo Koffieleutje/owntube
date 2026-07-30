@@ -117,19 +117,22 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
             Hide watched videos
           </label>
           {/* History has no companion feed; Queue and Saved publish as fixed slugs. */}
-          {section !== "history" ? (
-            <button
-              type="button"
-              role="menuitem"
-              className="mt-1 w-full rounded-lg px-1 py-2 text-left transition hover:bg-[hsl(var(--muted)_/_0.65)]"
-              onClick={() => {
-                setOpen(false);
-                void copyRssUrl(section, section);
-              }}
-            >
-              Copy RSS URL
-            </button>
-          ) : null}
+          {section !== "history"
+            ? (["audio", "video"] as const).map((variant) => (
+                <button
+                  key={variant}
+                  type="button"
+                  role="menuitem"
+                  className="mt-1 w-full rounded-lg px-1 py-2 text-left transition hover:bg-[hsl(var(--muted)_/_0.65)]"
+                  onClick={() => {
+                    setOpen(false);
+                    void copyRssUrl(section, section, variant);
+                  }}
+                >
+                  Copy RSS URL ({variant})
+                </button>
+              ))
+            : null}
         </div>
       ) : null}
     </div>

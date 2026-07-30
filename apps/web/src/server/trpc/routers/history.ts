@@ -5,6 +5,7 @@ import { watchHistory } from "@/server/db/schema";
 import { removeWatchedFromQueue } from "@/server/queue/remove-watched";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
+import { notifyPcsPlayback } from "@/server/remote/pcs-notify";
 import { fetchVideoDetail } from "@/server/services/proxy";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
@@ -113,6 +114,17 @@ export const historyRouter = router({
             0;
           clearRecommendationCachesForUser(ctx.userId);
         }
+        if (!input.isShort) {
+          notifyPcsPlayback({
+            videoId: input.videoId,
+            positionSeconds,
+            completed: completed === 1,
+            durationSeconds: Math.max(
+              recent.videoDurationSeconds,
+              input.videoDurationSeconds,
+            ),
+          });
+        }
         return { id: recent.id, updated: true, dequeued };
       }
 
@@ -141,6 +153,14 @@ export const historyRouter = router({
           removeWatchedFromQueue(ctx.db, ctx.userId, [input.videoId]).length >
           0;
         clearRecommendationCachesForUser(ctx.userId);
+      }
+      if (!input.isShort) {
+        notifyPcsPlayback({
+          videoId: input.videoId,
+          positionSeconds: input.positionSeconds ?? 0,
+          completed: !!input.completed,
+          durationSeconds: input.videoDurationSeconds,
+        });
       }
       return { id: inserted.id, updated: false, dequeued };
     }),

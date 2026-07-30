@@ -31,7 +31,12 @@ export function RssFeedsSection() {
         `$1${encodeURIComponent(creds.username)}:${creds.pass}@`,
       )
     : null;
-  const queueUrl = feedBase ? `${feedBase}/rss/queue/queue.audio.xml` : null;
+  const queueUrls = feedBase
+    ? ([
+        ["audio", `${feedBase}/rss/queue/queue.audio.xml`],
+        ["video", `${feedBase}/rss/queue/queue.video.xml`],
+      ] as const)
+    : null;
 
   const copy = (label: string, value: string) => {
     void navigator.clipboard.writeText(value).then(() => {
@@ -72,24 +77,29 @@ export function RssFeedsSection() {
               {copied === "creds" ? "Copied" : "Copy"}
             </Button>
           </div>
-          {queueUrl ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[hsl(var(--muted-foreground))]">
-                Queue feed
-              </span>
-              <code className="max-w-full truncate rounded bg-[hsl(var(--muted))] px-1.5 py-0.5">
-                {queueUrl}
-              </code>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => copy("queue", queueUrl)}
-              >
-                {copied === "queue" ? "Copied" : "Copy"}
-              </Button>
-            </div>
-          ) : null}
+          {queueUrls
+            ? queueUrls.map(([variant, url]) => (
+                <div
+                  key={variant}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <span className="text-[hsl(var(--muted-foreground))]">
+                    Queue feed ({variant})
+                  </span>
+                  <code className="max-w-full truncate rounded bg-[hsl(var(--muted))] px-1.5 py-0.5">
+                    {url}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copy(variant, url)}
+                  >
+                    {copied === variant ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              ))
+            : null}
           {creds.companionUrl ? (
             <p className="text-[hsl(var(--muted-foreground))]">
               All feeds (channels, playlists, saved):{" "}

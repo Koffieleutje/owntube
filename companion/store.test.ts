@@ -84,3 +84,38 @@ test("legacy ownerless table is migrated and orphans pruned on publish", () => {
   assert.equal(store.list("").length, 0);
   assert.equal(store.list("alice").length, 1);
 });
+
+test("chapters index rebuilds from pushed items", () => {
+  const { store } = freshStore();
+  const withChapters = {
+    ...snap("alice", "queue", "queue"),
+    items: [
+      {
+        videoId: "vidWITHchap",
+        title: "T",
+        enclosureAudio: "https://m/a.m4a",
+        enclosureVideo: "https://m/a.mp4",
+        chapters: [
+          { startSeconds: 0, title: "Intro" },
+          { startSeconds: 90, title: "Main" },
+        ],
+      },
+    ],
+  };
+  store.replaceAll(
+    [withChapters],
+    [{ username: "alice", passSha256: "a".repeat(64) }],
+  );
+  assert.deepEqual(store.chaptersFor("vidWITHchap"), [
+    { startSeconds: 0, title: "Intro" },
+    { startSeconds: 90, title: "Main" },
+  ]);
+  assert.equal(store.chaptersFor("unknown0000"), null);
+
+  // Next publish without that item prunes its chapters.
+  store.replaceAll(
+    [snap("alice", "queue", "queue")],
+    [{ username: "alice", passSha256: "a".repeat(64) }],
+  );
+  assert.equal(store.chaptersFor("vidWITHchap"), null);
+});
