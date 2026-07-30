@@ -88,6 +88,7 @@ export function mapInvidiousItem(
     publishedAt: reconciledPublishedAt,
     isLive: isLive || undefined,
     isUpcoming: isUpcoming || undefined,
+    isShort: o.isShort === true || isShortItem || undefined,
   });
   if (!parsed.success) return null;
   return parsed.data;

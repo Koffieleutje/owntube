@@ -41,6 +41,14 @@ export const unifiedVideoSchema = z.object({
   isLive: z.boolean().optional(),
   /** Scheduled premiere not started yet (Invidious `isUpcoming`). */
   isUpcoming: z.boolean().optional(),
+  /**
+   * YouTube served this as a Short (Invidious `isShort`). Read from upstream,
+   * not inferred — and it cannot be inferred, because YouTube stopped reporting
+   * a real duration for Shorts and Invidious substitutes an approximate 60s, so
+   * a genuine 60-second upload is indistinguishable by length. Absent on
+   * payloads cached before this field existed.
+   */
+  isShort: z.boolean().optional(),
   /** Why this row was recommended (personalized feed only). */
   recommendationReason: recommendationReasonSchema.optional(),
 });
