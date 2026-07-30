@@ -532,6 +532,43 @@ taste onboarding). Invidious resolves a locale per request and the instance sets
 no `default_locale`. Fixed by sending `hl` from `fetchJson`, the choke point all
 21 Invidious API calls share; `INVIDIOUS_LOCALE` overrides.
 
+**Correction, found while verifying the deploy — `9bb0cec`'s commit message is
+too generous to upstream.** It says "trust upstream's timestamp instead of
+re-deriving it from prose". That is true of `/api/v1/videos`, but **list
+endpoints' `published` is itself derived from the prose**: `VideoRendererParser`
+sets `published = decode_date(publishedTimeText)`, i.e. `Time.utc - delta`. So
+there was no precise timestamp being discarded on list rows.
+
+Removing the reconciliation is still right, for a sharper reason: `decode_date`
+uses **calendar** months and years (Crystal `delta.months` / `delta.years`) while
+OwnTube's `parseRelativePublishedToUnix` uses fixed 30- and 365-day spans, so the
+override was replacing a calendar-correct derivation with a worse approximation —
+and collapsing same-bucket rows into ties on the way.
+
+**What this exposes, and what it does not.** Measured, same channel, list vs
+detail for the same ids:
+
+| `publishedText` | list `published` | true date (detail) | gap |
+|---|---|---|---|
+| "4 days ago" | 2026-07-26 | 2026-07-25 | 36 h |
+| "1 month ago" | 2026-06-30 | 2026-06-27 | 84 h |
+| "1 month ago" | 2026-06-30 | 2026-06-13 | 420 h |
+| "1 month ago" | 2026-06-30 | 2026-05-30 | **756 h** |
+| "2 months ago" | 2026-05-30 | 2026-05-02 | 684 h |
+
+Every "1 month ago" row collapses to one instant, though the true dates span four
+weeks. **This is an upstream limitation, not an OwnTube inference to delete**:
+YouTube does not put exact dates in list renderers, so no amount of parsing
+recovers them. Feed ordering is therefore coarse-grained for anything older than
+a day, and *was already*, both before and after this phase.
+
+Deliberately **not** fixed here, because it is a new feature rather than a data
+gap: precise dates could be backfilled from `/api/v1/videos` for rows where order
+matters (the pattern already exists —
+`backfillMissingDurationsFromChannelCache`). Worth its own item if list ordering
+ever looks wrong; noting it so the limitation is on the record rather than
+rediscovered as a bug.
+
 **The sequencing is the interesting part.** `reconcilePublishedAtWithText` was
 inert here *only* because Arabic text failed to parse — the parser knows English
 and French. Landing the locale fix first would have looked like a clean win and

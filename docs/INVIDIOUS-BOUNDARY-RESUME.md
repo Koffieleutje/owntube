@@ -101,6 +101,11 @@ branches (`raw.livestream`, `duration === -1 && uploaded === -1`).
   emitted at zero sites, while keeping `premiereTimestamp` (2 sites) that a
   sample of 455 rows had also shown as absent — because no premiere happened to
   be in the sample. A corpus proves presence, not absence.
+- **A list endpoint and a detail endpoint are different contracts.** 3.5's
+  `published` is a real date on `/api/v1/videos` but a prose-derived
+  `Time.utc - delta` on list endpoints, so all "1 month ago" rows share one
+  instant while their true dates span four weeks (measured: up to 756h off).
+  Check which endpoint a field is precise on before building on it.
 - **Check what upstream is actually being asked for.** OwnTube sent no `hl`, so
   Invidious answered in whatever locale it resolved — Arabic here — and
   `publishedText` is user-visible. Request parameters are part of the contract
