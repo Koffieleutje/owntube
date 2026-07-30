@@ -156,9 +156,23 @@ same host, in the same minute**, so this is not IP reputation and not the
 [INFO] Successfully generated PO token
 ```
 
-Something in its environment — Deno rather than Node, the Web Worker it runs the
-snapshot in, its `getFetchClient` headers — makes its attestation acceptable and
-ours not. That difference has not been isolated.
+Eliminated as causes, each by measurement:
+
+| suspect | test | result |
+|---|---|---|
+| IP reputation | companion minted a valid token 84s before our attempt | not the IP |
+| flaky attestation | `mint-retry-test.ts`, fresh session each time | **0/9**, deterministic |
+| Node vs Deno | same code run under `denoland/deno` | rejected in both |
+| bgutils version | 3.1.3, then 3.2.0 (what the companion pins) | rejected in both |
+| jsdom version | 25.0.1, then 26.1.0 (what the companion pins) | rejected in both |
+| missing canvas | companion logs the same error and succeeds | benign, as it says |
+| user agent / origin / navigator | matched to the companion | still rejected |
+| proxy or IPv6 rotation | companion has neither configured | same egress as us |
+
+Still untested: the companion pins a **Deno fork of youtubei.js**
+(`YouTube.js@v17.0.1-deno` from jsdelivr) rather than the npm package, pins
+`player_id`, and takes its snapshot inside a Web Worker. One of those is the
+remaining difference.
 
 #### Next step
 
