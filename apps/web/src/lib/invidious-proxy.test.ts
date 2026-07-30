@@ -17,7 +17,7 @@ describe("shouldUseInvidiousProxyForUrl", () => {
       "http://127.0.0.1:3001/api/manifest/hls_playlist/expire/1/id/x/playlist/index.m3u8";
     expect(shouldUseInvidiousProxyForUrl(url)).toBe(true);
     expect(toProxiedOrDirectPlayback(url, "http://localhost:3000", "")).toBe(
-      "http://localhost:3000/invidious/api/manifest/hls_playlist/expire/1/id/x/playlist/index.m3u8",
+      "http://localhost:3000/stream/api/manifest/hls_playlist/expire/1/id/x/playlist/index.m3u8",
     );
   });
 });
@@ -99,13 +99,13 @@ https://manifest.googlevideo.com/api/manifest/hls/id/xyz/playlist/index.m3u8
 describe("rewriteInvidiousVideoplaybackLinesToYtHls", () => {
   it("rewrites Invidious local videoplayback segment lines to yt-hls", () => {
     const body = `#EXTINF:5.0,
-http://localhost:3000/invidious/videoplayback?id=x&itag=91&host=rr1---sn-abc.c.youtube.com&file=seg.ts&expire=1`;
+http://localhost:3000/stream/videoplayback?id=x&itag=91&host=rr1---sn-abc.c.youtube.com&file=seg.ts&expire=1`;
     const out = rewriteInvidiousVideoplaybackLinesToYtHls(
       body,
       "http://localhost:3000",
     );
     expect(out).toContain("http://localhost:3000/yt-hls?url=");
-    expect(out).not.toContain("/invidious/videoplayback");
+    expect(out).not.toContain("/stream/videoplayback");
     expect(
       googlevideoUrlFromInvidiousVideoplaybackReference(
         "http://:3210/videoplayback?id=x&host=rr1---sn-abc.c.youtube.com&file=seg.ts",
@@ -125,9 +125,7 @@ http://:3210/videoplayback?id=x&file=seg.ts`;
         "localhost:3000",
         "http://192.168.1.11:3210",
       ),
-    ).toContain(
-      "http://localhost:3000/invidious/videoplayback?id=x&file=seg.ts",
-    );
+    ).toContain("http://localhost:3000/stream/videoplayback?id=x&file=seg.ts");
   });
 
   it("rewrites Invidious local=true URLs with missing hostname", () => {
@@ -141,7 +139,7 @@ http://:3210/api/manifest/hls_playlist/id/x/playlist/index.m3u8?local=true`;
         "http://192.168.1.11:3210",
       ),
     ).toContain(
-      "http://localhost:3000/invidious/api/manifest/hls_playlist/id/x/playlist/index.m3u8?local=true",
+      "http://localhost:3000/stream/api/manifest/hls_playlist/id/x/playlist/index.m3u8?local=true",
     );
   });
 
@@ -155,6 +153,6 @@ http://127.0.0.1:3001/api/v1/segment/abc`;
         "192.168.1.14:3000",
         "http://127.0.0.1:3001",
       ),
-    ).toContain("http://192.168.1.14:3000/invidious/api/v1/segment/abc");
+    ).toContain("http://192.168.1.14:3000/stream/api/v1/segment/abc");
   });
 });

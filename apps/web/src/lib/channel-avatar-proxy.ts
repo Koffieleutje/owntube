@@ -113,7 +113,7 @@ export function invidiousUpstreamProxyPath(
     path.startsWith("/api/v1/") ||
     path.startsWith("/ggpht/")
   ) {
-    return `/invidious${path}${parsed.search}`;
+    return `/image${path}${parsed.search}`;
   }
   return null;
 }

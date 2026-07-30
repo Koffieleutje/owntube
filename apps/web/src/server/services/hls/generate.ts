@@ -86,8 +86,8 @@ export function companionDirectSegmentUri(url: string): string | null {
 }
 
 /**
- * Segment/init URI for a media playlist. Default: rewrite the absolute Invidious
- * stream URL to OwnTube's same-origin `/invidious/…` proxy path. With
+ * Segment/init URI for a media playlist. Default: rewrite the absolute upstream
+ * stream URL to OwnTube's same-origin `/stream/…` proxy path. With
  * INVIDIOUS_DIRECT_HLS_SEGMENTS=true: point at Invidious/companion directly
  * (CORS `*`) so segments skip our Node proxy — never at googlevideo.
  */
@@ -98,7 +98,7 @@ export function segmentUri(url: string): string {
   }
   try {
     const u = new URL(url);
-    return `/invidious${u.pathname}${u.search}`;
+    return `/stream${u.pathname}${u.search}`;
   } catch {
     return url;
   }

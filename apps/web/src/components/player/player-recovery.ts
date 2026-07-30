@@ -4,6 +4,9 @@ export function shouldAutoRecoverPlaybackSource(src: string): boolean {
   if (src.includes("/videoplayback")) return true;
   return (
     src.includes("/yt-hls?url=") ||
+    src.includes("/stream/api/manifest/hls") ||
+    src.includes("/stream/api/v1/") ||
+    // Legacy prefix, still present in manifests from before Phase 5.
     src.includes("/invidious/api/manifest/hls") ||
     src.includes("/invidious/api/v1/")
   );

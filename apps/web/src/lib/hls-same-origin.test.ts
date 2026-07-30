@@ -33,11 +33,11 @@ describe("proxyUrlForHlsFetch", () => {
     expect(decodeURIComponent(out)).toContain("/videoplayback/id/abc/seg.ts");
   });
 
-  it("rewrites Invidious manifest paths to /invidious", () => {
+  it("rewrites Invidious manifest paths to /stream", () => {
     const url =
       "http://127.0.0.1:3001/api/manifest/hls_playlist/expire/1/id/x/index.m3u8";
     expect(proxyUrlForHlsFetch(url, ORIGIN)).toBe(
-      `${ORIGIN}/invidious/api/manifest/hls_playlist/expire/1/id/x/index.m3u8`,
+      `${ORIGIN}/stream/api/manifest/hls_playlist/expire/1/id/x/index.m3u8`,
     );
   });
 

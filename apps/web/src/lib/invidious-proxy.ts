@@ -15,17 +15,17 @@ export function isInvidiousProxyAvailable(): boolean {
 
 /**
  * hls.js fetches the manifest and segments in the browser. Cross-origin
- * requests to the Invidious port often fail (no CORS). We route everything
- * through OwnTube: `/invidious/...` (same origin). Folder must not start
- * with `_` — Next.js treats `_name` as a private (non-routed) segment.
+ * requests to the upstream port often fail (no CORS). We route everything
+ * through OwnTube's same-origin `/stream/...` proxy. Folder must not start with
+ * `_` — Next.js treats `_name` as a private (non-routed) segment.
  */
-export function toInvidiousProxyUrl(
+export function toStreamProxyUrl(
   absoluteUrl: string,
   appOrigin: string,
 ): string {
   const u = new URL(absoluteUrl);
   return new URL(
-    `/invidious${u.pathname}${u.search}${u.hash}`,
+    `/stream${u.pathname}${u.search}${u.hash}`,
     appOrigin,
   ).toString();
 }
@@ -76,7 +76,7 @@ export function shouldUseInvidiousProxyForUrl(mediaUrl: string): boolean {
 
 /**
  * m3u8 can list absolute segment URLs. Replace known Invidious base URLs
- * with our `/invidious` same-origin base.
+ * with our `/stream` same-origin base.
  */
 /** Hostnames that must be fetched same-origin (YouTube HLS / segments). */
 export function isYoutubeFamilyHostname(hostname: string): boolean {
@@ -126,7 +126,12 @@ function isOwnTubeInvidiousHopUrl(
   try {
     const u = new URL(absoluteUrl);
     const app = new URL(appOrigin);
-    return u.origin === app.origin && u.pathname.startsWith("/invidious/");
+    return (
+      u.origin === app.origin &&
+      (u.pathname.startsWith("/stream/") ||
+        // Legacy prefix, still present in manifests from before Phase 5.
+        u.pathname.startsWith("/invidious/"))
+    );
   } catch {
     return false;
   }
@@ -172,7 +177,7 @@ function proxyResolvedPlaylistUrl(
     try {
       const invOrigin = new URL(inv).origin;
       if (parsed.origin === invOrigin) {
-        return toInvidiousProxyUrl(absoluteUrl, appOrigin);
+        return toStreamProxyUrl(absoluteUrl, appOrigin);
       }
     } catch {
       /* ignore */
@@ -184,7 +189,7 @@ function proxyResolvedPlaylistUrl(
 
 /**
  * Resolve relative HLS media lines and URI="…" tags against the upstream
- * manifest URL, then rewrite to same-origin `/yt-hls` or `/invidious` hops.
+ * manifest URL, then rewrite to same-origin `/yt-hls` or `/stream` hops.
  */
 export function rewriteHlsPlaylistMediaUrls(
   body: string,
@@ -225,7 +230,7 @@ export function rewriteHlsPlaylistMediaUrls(
 
 /**
  * Invidious `local=true` can emit `http://:3210/...` when domain is unset in config.
- * Rewrite those to our same-origin `/invidious` hop before hls.js loads child playlists.
+ * Rewrite those to our same-origin `/stream` hop before hls.js loads child playlists.
  */
 function rewriteMalformedInvidiousPortUrls(
   body: string,
@@ -255,7 +260,7 @@ export function rewriteM3u8ForOwnTubeProxy(
   const base = invidiousBase?.trim() ?? "";
   if (!base) return body;
   const u = new URL(base);
-  const proxyRoot = `${appOrigin}/invidious`;
+  const proxyRoot = `${appOrigin}/stream`;
   const out: string[] = [u.origin];
   if (u.port) {
     if (u.protocol === "http:") {
@@ -418,7 +423,7 @@ export function toProxiedOrDirectPlayback(
   if (!rawPlayback) return rawPlayback;
   const playback = rawPlayback;
   if (shouldUseInvidiousProxyForUrl(playback)) {
-    return toInvidiousProxyUrl(playback, appOrigin);
+    return toStreamProxyUrl(playback, appOrigin);
   }
   if (shouldUseYouTubeHopProxyForUrl(rawPlayback)) {
     return toYouTubeHopProxyUrl(rawPlayback, appOrigin);
@@ -440,7 +445,7 @@ export function toProxiedOrDirectPoster(
 ): string | undefined {
   if (!rawPoster) return undefined;
   if (shouldUseInvidiousProxyForUrl(rawPoster)) {
-    return toInvidiousProxyUrl(rawPoster, appOrigin);
+    return toStreamProxyUrl(rawPoster, appOrigin);
   }
   const rewritten = requestHost
     ? rewriteStreamUrlForRequestHost(rawPoster, requestHost)

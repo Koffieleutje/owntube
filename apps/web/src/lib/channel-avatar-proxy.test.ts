@@ -27,11 +27,11 @@ describe("toBrowserChannelAvatarUrl", () => {
     expect(toBrowserChannelAvatarUrl(url)).toBe(url);
   });
 
-  it("routes Invidious /vi/ paths through /invidious", () => {
+  it("routes Invidious /vi/ paths through /image", () => {
     process.env.INVIDIOUS_BASE_URL = "http://192.168.1.11:3210";
     const url = "http://192.168.1.11:3210/vi/UCabc/hqdefault.jpg";
     expect(toBrowserChannelAvatarUrl(url)).toBe(
-      "/invidious/vi/UCabc/hqdefault.jpg",
+      "/image/vi/UCabc/hqdefault.jpg",
     );
   });
 
@@ -91,12 +91,10 @@ describe("toBrowserUpstreamImageUrl", () => {
     expect(toBrowserUpstreamImageUrl(url)).toBe(url);
   });
 
-  it("routes Invidious /vi/ through /invidious when origin matches", () => {
+  it("routes Invidious /vi/ through /image when origin matches", () => {
     process.env.INVIDIOUS_BASE_URL = "http://192.168.1.11:3210";
     const url = "http://192.168.1.11:3210/vi/abc123/hq720.jpg";
-    expect(toBrowserUpstreamImageUrl(url)).toBe(
-      "/invidious/vi/abc123/hq720.jpg",
-    );
+    expect(toBrowserUpstreamImageUrl(url)).toBe("/image/vi/abc123/hq720.jpg");
   });
 
   it("proxies Piped proxy /vi/ via channel-avatar (not Invidious)", () => {

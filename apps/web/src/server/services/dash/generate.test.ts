@@ -110,7 +110,7 @@ describe("companion-direct segments", () => {
       562,
     );
     // 12Mbps 2160p: aborted multi-MB fetches must drain bounded → proxy.
-    expect(mpd).toContain("<BaseURL>/invidious/videoplayback?itag=313");
+    expect(mpd).toContain("<BaseURL>/stream/videoplayback?itag=313");
     // 2.5Mbps seek rung and audio: latency-critical on seeks → direct.
     expect(mpd).toContain(
       "<BaseURL>https://inv.example/companion/videoplayback?itag=248",
@@ -124,8 +124,8 @@ describe("companion-direct segments", () => {
     vi.stubEnv("INVIDIOUS_DIRECT_DASH_SEGMENTS", "false");
     const mpd = buildMpd([vp9_2160, vp9_1080], aacTrack, 562);
     expect(mpd).not.toContain("companion/videoplayback");
-    expect(mpd).toContain("<BaseURL>/invidious/videoplayback?itag=313");
-    expect(mpd).toContain("<BaseURL>/invidious/videoplayback?itag=140");
+    expect(mpd).toContain("<BaseURL>/stream/videoplayback?itag=313");
+    expect(mpd).toContain("<BaseURL>/stream/videoplayback?itag=140");
   });
 });
 

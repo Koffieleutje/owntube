@@ -19,7 +19,7 @@ import { fetchVideoDetail } from "@/server/services/proxy";
  * saved inbox) and subscription uploads into self-contained feed snapshots and
  * pushes them to the public companion (see `companion/`). The companion stores
  * and renders them as podcast RSS; every `<enclosure>` points back at the LAN
- * media origin (`/media/<id>.{m4a,mp4}`), so metadata is public-behind-basic-auth
+ * media origin (`/enclosure/<id>.{m4a,mp4}`), so metadata is public-behind-basic-auth
  * while the media itself only streams on the LAN.
  *
  * Nothing here is opt-in: we publish everything. The companion replaces its full
@@ -99,8 +99,8 @@ function enclosures(
   appOrigin: string,
 ): { enclosureAudio: string; enclosureVideo: string } {
   return {
-    enclosureAudio: toMediaOriginUrl(`/media/${videoId}.m4a`, appOrigin),
-    enclosureVideo: toMediaOriginUrl(`/media/${videoId}.mp4`, appOrigin),
+    enclosureAudio: toMediaOriginUrl(`/enclosure/${videoId}.m4a`, appOrigin),
+    enclosureVideo: toMediaOriginUrl(`/enclosure/${videoId}.mp4`, appOrigin),
   };
 }
 

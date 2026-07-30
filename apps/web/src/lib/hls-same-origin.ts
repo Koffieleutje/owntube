@@ -8,7 +8,7 @@ import {
 } from "hls.js";
 import {
   isYoutubeFamilyHostname,
-  toInvidiousProxyUrl,
+  toStreamProxyUrl,
   toYouTubeHopProxyUrl,
 } from "@/lib/invidious-proxy";
 
@@ -25,7 +25,12 @@ function isAlreadyProxied(url: URL, appOrigin: string): boolean {
   try {
     const app = new URL(appOrigin);
     if (url.origin !== app.origin) return false;
-    return url.pathname === "/yt-hls" || url.pathname.startsWith("/invidious/");
+    return (
+      url.pathname === "/yt-hls" ||
+      url.pathname.startsWith("/stream/") ||
+      // Legacy prefix, still present in manifests handed out before Phase 5.
+      url.pathname.startsWith("/invidious/")
+    );
   } catch {
     return false;
   }
@@ -105,7 +110,7 @@ export function proxyUrlForHlsFetch(
       return toYouTubeHopProxyUrl(resolved.toString(), appOrigin);
     }
     if (invidiousMediaPath(resolved.pathname)) {
-      return toInvidiousProxyUrl(resolved.toString(), appOrigin);
+      return toStreamProxyUrl(resolved.toString(), appOrigin);
     }
     return rawUrl;
   } catch {

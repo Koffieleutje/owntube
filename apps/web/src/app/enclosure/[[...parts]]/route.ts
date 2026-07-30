@@ -4,9 +4,9 @@ import { resolveInvidiousAbsoluteMediaUrl } from "@/server/services/proxy/normal
 /**
  * Stable, single-file media endpoint used as the RSS `<enclosure>` target for
  * the remote-control publisher (see `server/remote/publish.ts`). A podcast /
- * RSS client fetches `/media/<videoId>.m4a` (audio) or `.mp4` (progressive
+ * RSS client fetches `/enclosure/<videoId>.m4a` (audio) or `.mp4` (progressive
  * video); this route resolves the *current* stream for that id and 302s to the
- * same-origin `/invidious/videoplayback` proxy, which already forwards Range,
+ * same-origin `/stream/videoplayback` proxy, which already forwards Range,
  * emits 206, retries, and asks Invidious to proxy googlevideo (`local=true`) so
  * the bytes are server-fetchable — the raw googlevideo URLs are IP-locked to
  * the client and 403 when proxied from our IP.
@@ -86,17 +86,17 @@ function pickMuxed(formatStreams: InvidiousFormat[]): InvidiousFormat | null {
 }
 
 /**
- * Rewrite an Invidious stream URL to our same-origin `/invidious` proxy path.
+ * Rewrite an upstream stream URL to our same-origin `/stream` proxy path.
  * Relative (`local=true`) URLs are resolved against the Invidious base first.
  * A relative `Location` keeps the redirect on whichever origin served this
- * route (the media origin), which also proxies `/invidious`.
+ * route (the media origin), which also proxies `/stream`.
  */
 function toProxyPath(streamUrl: string): string | null {
   const abs = resolveInvidiousAbsoluteMediaUrl(streamUrl, invidiousBase());
   if (!abs) return null;
   try {
     const u = new URL(abs);
-    return `/invidious${u.pathname}${u.search}`;
+    return `/stream${u.pathname}${u.search}`;
   } catch {
     return null;
   }
