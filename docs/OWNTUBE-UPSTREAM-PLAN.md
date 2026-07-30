@@ -12,7 +12,7 @@ Status: **not started — plan only.** Written 2026-07-30.
 | 4 — `comments` | **not started** | |
 | 5 — `videos` | **not started** | composes companion `/player` |
 | 6 — cutover | **not started** | fork goes 8 patches → 0 |
-| 7 — SABR connector | **spiked** — see `spikes/sabr-dash/` | conversion and seek proven; attestation is the open problem |
+| 7 — SABR connector | **spiked** — see `spikes/sabr-dash/` | conversion, seek and long videos all proven; no po_token needed |
 
 This plan is a sibling of `INVIDIOUS-BOUNDARY-PLAN.md`, which shrank the boundary
 from OwnTube's side. This one proposes removing the far side of it.
@@ -157,14 +157,15 @@ What the spike settled:
   initialized; `bufferedRanges` advertises only the most recent delta instead of
   everything consumed; and millisecond ticks are labelled with the media
   timescale, understating every range by ~24x.
-- **Long videos need a po_token, short ones do not.** A 213s video converts
-  complete; videos of 25 minutes and up stop after ~60s of media with
-  `attestation required`. **yt-dlp fails identically on the same videos**, so this
-  is server policy rather than a converter defect — but it means stage 7 depends
-  on minting a token the server accepts, which is currently unsolved here (a token
-  we attach is rejected, not ignored). invidious-companion mints working tokens on
-  this host today, so this is a solvable integration problem, and it is another
-  reason the companion cannot simply be dropped.
+- **Long videos work, with no po_token.** Three stacked googlevideo/usage bugs
+  made videos over ~25 minutes stall at ~60s in a way that looked exactly like an
+  attestation demand; all three are fixed in the spike's patch and 25- and
+  52-minute videos now pull complete (288/288 and 609/609 fragments). The
+  critical design constraint that emerged: **the player response must come from a
+  clean per-client innertube call** (a raw ANDROID_VR context borrowing only the
+  visitorData) — fetching it through a shared youtubei.js WEB session gets the
+  streaming session classified as suspect and cut off. See the spike README's
+  "Long videos: SOLVED" section for the full diagnosis.
 
 `SabrStream` cannot seek **as shipped**, and four attempts from outside the
 library all failed. The fix had to be inside it, and is now in
