@@ -1,10 +1,35 @@
 import { z } from "zod";
 
+/**
+ * The OwnTube ↔ upstream contract.
+ *
+ * These schemas are the boundary: everything OwnTube shows comes through them.
+ * Each field is tagged with where its value actually comes from, because the
+ * point of Phase 3 (see docs/INVIDIOUS-BOUNDARY-PLAN.md) is to shrink one of
+ * those categories and it cannot be shrunk if it is invisible.
+ *
+ *   [upstream]  Read from an Invidious field, more or less as-is. The good case.
+ *   [derived]   Computed by OwnTube from upstream data — a selection from a list,
+ *               a normalisation, a unit change. Deterministic, not a guess.
+ *   [inferred]  OwnTube guessing where upstream gives no answer. **This is the
+ *               surface to shrink.** Every entry here can break silently when
+ *               YouTube changes shape, because nothing declares the guess wrong.
+ *   [owntube]   OwnTube's own concept with no upstream equivalent. Not a gap.
+ *
+ * Field-existence claims below were checked against the Invidious source rather
+ * than sampled — `grep 'json.field "<name>"' src/invidious/` — because a sample
+ * proves presence but never absence.
+ *
+ * Phases 3.1-3.5 moved audio-track language/labels, trending `liveNow`, the
+ * Shorts flag and `publishedAt` out of [inferred]. What remains there is mostly
+ * the multi-shape pickers (Phase 3.7) and thumbnail URL construction.
+ */
+
 export const searchVideosInputSchema = z.object({
   q: z.string().min(1).max(500),
   limit: z.number().int().min(1).max(50).optional(),
   continuation: z.string().max(4096).optional(),
-  /** ISO 3166-1 alpha-2 — Invidious search; optional hint for Piped. */
+  /** ISO 3166-1 alpha-2, passed through to Invidious search. */
   region: z.string().length(2).optional(),
 });
 
@@ -25,41 +50,93 @@ export const recommendationReasonSchema = z.object({
 export type RecommendationReason = z.infer<typeof recommendationReasonSchema>;
 
 export const unifiedVideoSchema = z.object({
+  /** [upstream] Invidious `videoId`. */
   videoId: z.string(),
+  /** [upstream] Invidious `title`. */
   title: z.string(),
+  /** [upstream] Invidious `authorId`. */
   channelId: z.string().optional(),
+  /** [upstream] Invidious `author`. */
   channelName: z.string().optional(),
-  /** Channel / uploader avatar from upstream (absolute URL). */
+  /**
+   * [derived] Best entry picked out of Invidious `authorThumbnails[]` by size.
+   * The list is upstream's; the choice is ours.
+   */
   channelAvatarUrl: z.string().optional(),
+  /**
+   * [inferred] Starts from Invidious `videoThumbnails[]` but is then *rewritten*
+   * to a constructed `i.ytimg.com` URL for a higher resolution than upstream
+   * offered (`preferHighResVideoThumbnailUrl`). That guesses a URL shape YouTube
+   * has never promised, which is why the image route needs a 5-step fallback
+   * chain. Not closable upstream — it is a deliberate quality trade.
+   */
   thumbnailUrl: z.string().optional(),
+  /**
+   * [derived] Invidious `lengthSeconds`, suppressed for active livestreams so
+   * cards do not render "0:00" (`normalizeDurationForLive`). Note upstream
+   * *fabricates* this for Shorts — see `isShort`.
+   */
   durationSeconds: z.number().optional(),
+  /**
+   * [inferred] `pickViewCount` tries `views`, `viewCount`, `view_count`. Only
+   * `viewCount` exists (5 serialisation sites); the other two are emitted at
+   * zero. Phase 3.7.
+   */
   viewCount: z.number().optional(),
+  /**
+   * [upstream] Invidious `publishedText`, e.g. "3 days ago". Localised by the
+   * instance, so OwnTube sends `hl` (see `proxy/http.ts`) — without it this
+   * deployment answered in Arabic.
+   */
   publishedText: z.string().optional(),
-  /** Unix seconds when known from upstream (Invidious `published`, Piped `uploaded`, …). */
+  /**
+   * [upstream] Invidious `published`, falling back to `premiereTimestamp` for
+   * scheduled premieres.
+   *
+   * Precise on `/api/v1/videos`; **coarse on list endpoints**, where Invidious
+   * derives it from `publishedText` itself (`decode_date`). So every "1 month
+   * ago" row shares one instant while true dates span four weeks — measured up
+   * to 756h off. An upstream limitation, not an OwnTube guess: YouTube does not
+   * put exact dates in list renderers.
+   */
   publishedAt: z.number().optional(),
-  /** Active live broadcast (Piped `livestream`, Invidious `liveNow`). */
+  /**
+   * [upstream] Invidious `liveNow`. `pickLiveFlagsFromUpstream` still checks
+   * `livestream` / `live` / `duration === -1` alongside it — dead Piped shapes
+   * that outlived Phase 1. Phase 3.7.
+   */
   isLive: z.boolean().optional(),
-  /** Scheduled premiere not started yet (Invidious `isUpcoming`). */
+  /** [upstream] Invidious `isUpcoming`. */
   isUpcoming: z.boolean().optional(),
   /**
-   * YouTube served this as a Short (Invidious `isShort`). Read from upstream,
-   * not inferred — and it cannot be inferred, because YouTube stopped reporting
-   * a real duration for Shorts and Invidious substitutes an approximate 60s, so
-   * a genuine 60-second upload is indistinguishable by length. Absent on
-   * payloads cached before this field existed.
+   * [upstream] Invidious `isShort` (added by the fork, Phase 3.3). It cannot be
+   * inferred: YouTube stopped reporting a real duration for Shorts and the
+   * parsers substitute an approximate 60s, so a genuine 60-second upload is
+   * indistinguishable by length. Length and `#shorts`-in-title remain as
+   * fallbacks only for payloads cached before this field existed.
    */
   isShort: z.boolean().optional(),
-  /** Why this row was recommended (personalized feed only). */
+  /** [owntube] Why this row was recommended (personalized feed only). */
   recommendationReason: recommendationReasonSchema.optional(),
 });
 
 export type UnifiedVideo = z.infer<typeof unifiedVideoSchema>;
 
 export const unifiedChannelSchema = z.object({
+  /** [upstream] Invidious `authorId` / `channelId`. */
   channelId: z.string(),
+  /** [upstream] Invidious `author` / `name`. */
   name: z.string(),
+  /** [derived] Picked from Invidious `authorThumbnails[]` / `channelThumbnails[]`. */
   avatarUrl: z.string().optional(),
+  /**
+   * [inferred] `pickChannelSubscriberCount` tries five numeric keys plus a text
+   * parser. Only `subCount` exists (2 serialisation sites); `subscriberCount`,
+   * `uploaderSubscriberCount`, `uploaderSubCount` and `authorSubCount` are all
+   * emitted at zero. Phase 3.7.
+   */
   subscriberCount: z.number().optional(),
+  /** [upstream] Invidious `description`. */
   description: z.string().optional(),
 });
 
@@ -114,11 +191,17 @@ export const streamSourceSchema = z.object({
   url: z.string().url(),
   mimeType: z.string().optional(),
   quality: z.string().optional(),
-  /** Bitrate in bits per second (Invidious/Piped `bitrate`). */
+  /**
+   * [inferred] `readPositiveNumberField(stream, ["bitrate", "averageBitrate"])`.
+   * Phase 3.7 — confirm which of the two Invidious actually emits.
+   */
   bitrate: z.number().finite().nonnegative().optional(),
-  /** Frames per second when upstream provides it. */
+  /** [inferred] `readPositiveNumberField(stream, ["fps", "frameRate"])`. Phase 3.7. */
   fps: z.number().positive().optional(),
-  /** Video height in pixels when upstream provides it (0 = no video plane). */
+  /**
+   * [inferred] `readStreamHeightPx` — reads `height`, else parses it out of
+   * `size` ("1920x1080") or `resolution` ("1080p"). Phase 3.7.
+   */
   height: z.number().finite().nonnegative().optional(),
   /**
    * BCP-47 language tag of this audio track, read from Invidious
@@ -140,12 +223,13 @@ export const streamSourceSchema = z.object({
    */
   audioIsOriginal: z.boolean().optional(),
   /**
-   * True when this URL is video-only (YouTube/Invidious adaptive) and must not
-   * be used alone in a single &lt;video src&gt; — no muxed audio.
+   * [derived] True when this URL is video-only (adaptive) and must not be used
+   * alone in a single &lt;video src&gt; — no muxed audio. Follows from which
+   * upstream list the stream came out of, not from a field.
    */
   videoOnly: z.boolean().optional(),
   /**
-   * True when upstream provided this adaptive stream's init/index byte ranges,
+   * [derived] True when upstream provided this adaptive stream's init/index byte ranges,
    * i.e. it can back a synthesized byte-range DASH/HLS manifest. Some videos
    * (incomplete Invidious extraction) return adaptive streams without them —
    * `/dash` and `/hls` 502 for those, so playback must fall back to the native
@@ -154,7 +238,7 @@ export const streamSourceSchema = z.object({
   indexed: z.boolean().optional(),
 });
 
-/** A subtitle/caption track advertised by upstream (Invidious `captions[]`). */
+/** [upstream] A subtitle/caption track from Invidious `captions[]`. */
 export const captionTrackSchema = z.object({
   /** Human label, e.g. "English" or "English (auto-generated)". */
   label: z.string(),
@@ -172,17 +256,28 @@ export const videoDetailSchema = z.object({
   channelName: z.string().optional(),
   channelAvatarUrl: z.string().optional(),
   channelSubscriberCount: z.number().optional(),
-  /** Piped `/streams` may embed `relatedStreams` on the same payload. */
+  /**
+   * [upstream] Invidious `recommendedVideos` on the detail payload, or a
+   * separate `/related` fetch. (The old note here referred to Piped, deleted in
+   * Phase 1.)
+   */
   relatedVideos: z.array(unifiedVideoSchema).optional(),
   storyboard: videoStoryboardSchema.optional(),
   thumbnailUrl: z.string().optional(),
   durationSeconds: z.number().int().optional(),
   viewCount: z.number().optional(),
   publishedText: z.string().optional(),
-  /** Unix seconds when known from upstream (Invidious `published`, Piped `uploadDate`, …). */
+  /**
+   * [upstream] Invidious `published`. Precise here, unlike the list endpoints —
+   * the detail payload carries a real date from the player microformat.
+   */
   publishedAt: z.number().optional(),
+  /** [upstream] Invidious `liveNow`. */
   isLive: z.boolean().optional(),
-  /** Ended livestream YouTube hasn't converted to VOD yet: no byte-range formats. */
+  /**
+   * [upstream] Invidious `isPostLiveDvr`. Ended livestream YouTube hasn't
+   * converted to VOD yet: no byte-range formats, so playback goes via `/dvr`.
+   */
   isPostLiveDvr: z.boolean().optional(),
   isUpcoming: z.boolean().optional(),
   hlsUrl: z.string().url().optional(),
@@ -192,7 +287,11 @@ export const videoDetailSchema = z.object({
   /** Subtitle/caption tracks (Invidious `captions[]`); empty/absent when none. */
   captions: z.array(captionTrackSchema).optional(),
   sourceUsed: z.enum(["invidious", "cache"]),
-  /** Piped `/streams` `proxyUrl` — used to validate same-origin media proxy targets. */
+  /**
+   * [derived] Origin that upstream media URLs resolve to, used to validate
+   * same-origin media proxy targets. (Was Piped's `proxyUrl`; since Phase 1 it
+   * is derived from the Invidious base URL.)
+   */
   mediaProxyBase: z.string().url().optional(),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
@@ -249,7 +348,7 @@ export const videoCommentsResultSchema = z.object({
 
 export type VideoCommentsResult = z.infer<typeof videoCommentsResultSchema>;
 
-/** Invidious `type` on `/api/v1/trending` (Piped often accepts the same query param). */
+/** [upstream] Invidious `type` on `/api/v1/trending`. */
 export const trendingVideoCategorySchema = z
   .enum(["music", "gaming", "movies"])
   .optional();

@@ -135,9 +135,27 @@ phases will be debugging blind.
         (added with Phase 3.1, which deleted the fallback that hid its absence)
       Each of these was broken at some point and found only by accident. This
       catches upstream *behaviour* drift, which the provenance check cannot see.
-- [ ] **Record the contract** (still outstanding). `proxy.types.ts` is already the schema; add a short
-      note per field that OwnTube *infers* rather than reads, so the inference
-      surface is visible and shrinks measurably in Phase 3.
+- [x] **Record the contract** — **DONE**. `proxy.types.ts` now tags every field
+      with where its value comes from, using four categories:
+      `[upstream]` (read from an Invidious field), `[derived]` (computed
+      deterministically — a selection from a list, a normalisation),
+      `[inferred]` (**the surface to shrink** — OwnTube guessing where upstream
+      gives no answer, and the only category that can break silently), and
+      `[owntube]` (our own concept, not a gap).
+
+      Existence claims were checked against the Invidious source, not sampled:
+      `grep 'json.field "<name>"' src/invidious/`. That immediately turned up
+      Phase 3.7's shopping list — `pickViewCount` tries `views`, `viewCount`,
+      `view_count` and only `viewCount` exists (5 sites, other two zero);
+      `pickChannelSubscriberCount` tries five numeric keys and only `subCount`
+      exists (2 sites, other four zero).
+
+      What is left in `[inferred]` after 3.1-3.5: the multi-shape pickers
+      (`viewCount`, `subscriberCount`, `bitrate`, `fps`, `height` — all Phase
+      3.7) and `thumbnailUrl`, which is a deliberate quality trade rather than a
+      gap: it rewrites upstream's URL into a constructed `i.ytimg.com` one for
+      higher resolution, which is why the image route carries a 5-step fallback.
+      Also removed four stale Piped references left behind by Phase 1.
 
 ## Phase 1 — Delete Piped — **DONE** (`06231e7`, `590a02e`, `fd9ac84`)
 
@@ -691,9 +709,8 @@ Phases 0, 1 and 2 are done. Remaining, in order:
    upstream, so it needs a reproducing channel before anything else.
 7. **Phase 3.7** — multi-shape pickers, plus the dead Piped branches still in
    `pickLiveFlagsFromUpstream`.
-8. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
-   Phase 3's progress is measurable. Cheap now that 3.1-3.5 have established what
-   upstream actually emits.
+8. ~~Phase 0's last box~~ — **Done**; `proxy.types.ts` now tags provenance per
+   field. See Phase 0 above.
 9. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a
    compatibility alias because the prefix is referenced by six web modules plus
    the TV and iOS clients.
