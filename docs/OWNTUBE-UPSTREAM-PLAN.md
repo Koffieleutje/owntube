@@ -12,7 +12,7 @@ Status: **not started — plan only.** Written 2026-07-30.
 | 4 — `comments` | **not started** | |
 | 5 — `videos` | **not started** | composes companion `/player` |
 | 6 — cutover | **not started** | fork goes 8 patches → 0 |
-| 7 — SABR connector | **spiked** — see `spikes/sabr-dash/` | conversion proven; seek is the open problem |
+| 7 — SABR connector | **spiked** — see `spikes/sabr-dash/` | conversion and seek proven; attestation is the open problem |
 
 This plan is a sibling of `INVIDIOUS-BOUNDARY-PLAN.md`, which shrank the boundary
 from OwnTube's side. This one proposes removing the far side of it.
@@ -151,10 +151,20 @@ What the spike settled:
 - **It plays.** ffmpeg's DASH demuxer decodes the output: 5,326 video frames and
   9,177 audio frames with zero warnings, A/V agreeing within 0.02s, seeking to
   120s clean, and a real frame extracted at 150s.
-- **Seeking works** with a 35-line patch to `googlevideo`
-  (`spikes/sabr-dash/googlevideo-seek.patch`), which fixes a genuine upstream bug:
-  the requested start position is reset to 0 on the first loop iteration, before
-  any format is initialized.
+- **Seeking works** with a patch to `googlevideo`
+  (`spikes/sabr-dash/googlevideo-seek.patch`), which fixes three genuine upstream
+  bugs: the requested start position is reset to 0 before any format is
+  initialized; `bufferedRanges` advertises only the most recent delta instead of
+  everything consumed; and millisecond ticks are labelled with the media
+  timescale, understating every range by ~24x.
+- **Long videos need a po_token, short ones do not.** A 213s video converts
+  complete; videos of 25 minutes and up stop after ~60s of media with
+  `attestation required`. **yt-dlp fails identically on the same videos**, so this
+  is server policy rather than a converter defect — but it means stage 7 depends
+  on minting a token the server accepts, which is currently unsolved here (a token
+  we attach is rejected, not ignored). invidious-companion mints working tokens on
+  this host today, so this is a solvable integration problem, and it is another
+  reason the companion cannot simply be dropped.
 
 `SabrStream` cannot seek **as shipped**, and four attempts from outside the
 library all failed. The fix had to be inside it, and is now in
