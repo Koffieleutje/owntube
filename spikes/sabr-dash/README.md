@@ -94,6 +94,18 @@ carries the seek fix, the cumulative `bufferedRanges` fix, the timescale fix,
 and these). Regression: 213s conversion 0 timeline mismatches, seek works at
 30/60/120/180s, the youtubei.js path still completes on short videos.
 
+**Verified through the demo server** (the converter itself, not just the test
+harness): the 25-minute video prepares in 16s (288 video + 155 audio segments,
+video tfdt reaching 1534.7s), the 52-minute one in 25s (609 + 313), captions
+return real VTT, and the manifest advertises the full duration.
+
+**Trade-off found: the raw ANDROID_VR response lists only the original audio
+track** (22 formats, 1 track) where the youtubei.js-blended response listed
+every dub (104 formats, 20+ tracks). Multi-language dubs are therefore
+unavailable on this path — `track-probe.ts` measures it. If dubs matter, the
+session layer needs a second look (a different exempt client, or an attested
+WEB session).
+
 **Consequences for the converter design:**
 
 - The player response must be fetched with a clean per-client context, not

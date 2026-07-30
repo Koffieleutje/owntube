@@ -1,26 +1,25 @@
 /**
  * Session helpers shared by the CLI spike and the demo server.
  *
- * A "session" is the player response plus the deciphered SABR streaming URL and
- * ustreamer config. These must stay together: pairing a captured stream state
- * with a freshly created session fails with
- * `sabr.media_serving_enforcement_id_error`.
+ * A "session" is the player response plus the SABR streaming URL and ustreamer
+ * config. These must stay together: pairing a captured stream state with a
+ * freshly created session fails with `sabr.media_serving_enforcement_id_error`.
+ *
+ * The player response is fetched with a **clean per-client innertube call**, not
+ * through a shared youtubei.js session. This is load-bearing, not style: a
+ * player response obtained via `getBasicInfo(id, client)` carries the WEB
+ * session it was created under, and the GVS classifies the resulting streaming
+ * session as suspect — it serves ~60 seconds of media, then stops and demands
+ * attestation. The same videos stream to completion when the player call
+ * presents one coherent client identity. No po_token is involved either way;
+ * ANDROID_VR is exempt (see the README's "Long videos: SOLVED").
+ *
+ * youtubei.js is still used for one thing: a throwaway bootstrap session to
+ * obtain a visitorData, without which the player call answers LOGIN_REQUIRED.
  */
-import { JSDOM } from 'jsdom';
-import { BG, type BgConfig } from 'bgutils-js';
-import { Constants, Innertube, Platform, UniversalCache, type Types } from 'youtubei.js';
+import { Innertube } from 'youtubei.js';
 import { SabrStream } from 'googlevideo/sabr-stream';
 import { buildSabrFormat, EnabledTrackTypes } from 'googlevideo/utils';
-
-Platform.shim.eval = async (
-  data: Types.BuildScriptResult,
-  env: Record<string, Types.VMPrimative>,
-) => {
-  const props = [];
-  if (env.n) props.push(`n: exportedVars.nFunction("${env.n}")`);
-  if (env.sig) props.push(`sig: exportedVars.sigFunction("${env.sig}")`);
-  return new Function(`${data.output}\nreturn { ${props.join(', ')} }`)();
-};
 
 export interface CaptionTrack {
   languageCode: string;
@@ -44,66 +43,105 @@ export interface Session {
   formats: any[];
   url: string;
   ustreamer: string;
-  clientInfo: { clientName: number; clientVersion: string };
+  clientInfo: Record<string, unknown>;
+  userAgent: string;
   captions: CaptionTrack[];
   audioTracks: AudioTrack[];
-  /** Minted lazily — see README: not required from a residential IP. */
-  poToken?: string;
-  innertube: Innertube;
 }
 
-let cachedPoToken: { token: string; at: number } | null = null;
+/**
+ * The one client this spike speaks as. Everything — the player call's context,
+ * its user-agent header, and the ClientInfo echoed inside every SABR request —
+ * comes from this single definition, because a session whose parts disagree
+ * about who it is gets cut off after ~60s of media.
+ */
+const CLIENT = {
+  name: 'ANDROID_VR',
+  id: 28,
+  version: '1.65.10',
+  userAgent:
+    'com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+  context: {
+    clientName: 'ANDROID_VR',
+    clientVersion: '1.65.10',
+    deviceMake: 'Oculus',
+    deviceModel: 'Quest 3',
+    androidSdkVersion: 32,
+    osName: 'Android',
+    osVersion: '12L',
+    hl: 'en',
+    gl: 'US',
+  },
+  clientInfo: {
+    clientName: 28,
+    clientVersion: '1.65.10',
+    deviceMake: 'Oculus',
+    deviceModel: 'Quest 3',
+    osName: 'Android',
+    osVersion: '12L',
+    androidSdkVersion: 32,
+  },
+};
 
-/** BotGuard attestation. Only called when the server actually objects. */
-export async function mintPoToken(binding: string, force = false): Promise<string> {
-  if (!force && cachedPoToken && Date.now() - cachedPoToken.at < 10 * 60_000) {
-    return cachedPoToken.token;
-  }
-  const dom = new JSDOM();
-  Object.assign(globalThis, { window: dom.window, document: dom.window.document });
-  const cfg: BgConfig = {
-    fetch: (i: any, x?: RequestInit) => fetch(i, x),
-    globalObj: globalThis,
-    identifier: binding,
-    requestKey: 'O43z0dpjhgX20SCx4KAo',
-  };
-  const challenge = await BG.Challenge.create(cfg);
-  if (!challenge) throw new Error('no BotGuard challenge');
-  new Function(challenge.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue!)();
-  const res = await BG.PoToken.generate({
-    program: challenge.program,
-    globalName: challenge.globalName,
-    bgConfig: cfg,
+/**
+ * visitorData from a throwaway session, cached process-wide. Only the id itself
+ * is reused — the player call below shares nothing else with the session that
+ * produced it.
+ */
+let cachedVisitorData: string | null = null;
+async function getVisitorData(): Promise<string> {
+  if (cachedVisitorData) return cachedVisitorData;
+  const bootstrap = await Innertube.create({ retrieve_player: false });
+  const vd = bootstrap.session.context.client.visitorData;
+  if (!vd) throw new Error('no visitorData from bootstrap session');
+  cachedVisitorData = vd;
+  return vd;
+}
+
+export async function openSession(videoId: string): Promise<Session> {
+  const visitorData = await getVisitorData();
+
+  const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'user-agent': CLIENT.userAgent,
+      'x-youtube-client-name': String(CLIENT.id),
+      'x-youtube-client-version': CLIENT.version,
+      'x-goog-visitor-id': visitorData,
+    },
+    body: JSON.stringify({
+      context: { client: { ...CLIENT.context, visitorData } },
+      videoId,
+      contentCheckOk: true,
+      racyCheckOk: true,
+    }),
   });
-  cachedPoToken = { token: res.poToken!, at: Date.now() };
-  return res.poToken!;
-}
+  const player: any = await res.json();
 
-export async function openSession(videoId: string, client = 'WEB'): Promise<Session> {
-  const innertube = await Innertube.create({ cache: new UniversalCache(true) });
-  const info: any = await innertube.getBasicInfo(videoId, client as any);
-
-  // Attest up front. A default-track pull needs no po_token from a residential
-  // IP, but selecting a *non-default* audio track (a dubbed language) makes the
-  // server escalate `streamProtectionStatus` to 2 and stop sending media — and by
-  // then the stream has already failed, too late to attach one reactively.
-  // Attestation costs ~260ms and is cached process-wide, so pay it once.
-  let poToken: string | undefined;
-  try {
-    poToken = await mintPoToken(innertube.session.context.client.visitorData || videoId);
-  } catch {
-    // Non-fatal: the default track still works without one.
+  const status = player?.playabilityStatus?.status;
+  if (status !== 'OK') {
+    throw new Error(`${videoId}: playability ${status}: ${player?.playabilityStatus?.reason ?? ''}`);
   }
 
-  const url = await innertube.session.player?.decipher(
-    info.streaming_data?.server_abr_streaming_url,
-  );
+  // ANDROID_VR streaming URLs need no deciphering (no JS player involved).
+  const url = player?.streamingData?.serverAbrStreamingUrl;
   const ustreamer =
-    info.player_config?.media_common_config?.media_ustreamer_request_config
-      ?.video_playback_ustreamer_config;
+    player?.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig
+      ?.videoPlaybackUstreamerConfig;
   if (!url || !ustreamer) throw new Error(`${videoId}: no SABR streaming url / ustreamer config`);
 
-  const formats = (info.streaming_data?.adaptive_formats ?? []).map(buildSabrFormat);
+  // buildSabrFormat reads the raw camelCase player JSON directly; only drc and
+  // the audio-track id need aliasing to its snake_case fallbacks.
+  const formats = (player.streamingData.adaptiveFormats ?? []).map((f: any) =>
+    buildSabrFormat({
+      ...f,
+      is_drc: f.isDrc,
+      audio_track: f.audioTrack
+        ? { id: f.audioTrack.id, audio_is_default: f.audioTrack.audioIsDefault }
+        : undefined,
+    } as any),
+  );
 
   // One entry per distinct audio track, keyed the way YouTube keys them.
   const seen = new Map<string, AudioTrack>();
@@ -121,28 +159,22 @@ export async function openSession(videoId: string, client = 'WEB'): Promise<Sess
 
   return {
     videoId,
-    title: info.basic_info?.title ?? videoId,
-    durationSec: info.basic_info?.duration ?? 0,
+    title: player?.videoDetails?.title ?? videoId,
+    durationSec: parseInt(player?.videoDetails?.lengthSeconds ?? '0'),
     formats,
     url,
     ustreamer,
-    clientInfo: {
-      clientName: parseInt(
-        Constants.CLIENT_NAME_IDS[
-          innertube.session.context.client.clientName as keyof typeof Constants.CLIENT_NAME_IDS
-        ],
-      ),
-      clientVersion: innertube.session.context.client.clientVersion,
-    },
-    captions: (info.captions?.caption_tracks ?? []).map((c: any) => ({
-      languageCode: c.language_code,
-      name: c.name?.text ?? c.language_code,
+    clientInfo: CLIENT.clientInfo,
+    userAgent: CLIENT.userAgent,
+    captions: (
+      player?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? []
+    ).map((c: any) => ({
+      languageCode: c.languageCode,
+      name: c.name?.simpleText ?? c.name?.runs?.[0]?.text ?? c.languageCode,
       kind: c.kind,
-      baseUrl: c.base_url,
+      baseUrl: c.baseUrl,
     })),
     audioTracks: [...seen.values()],
-    poToken,
-    innertube,
   };
 }
 
@@ -151,12 +183,8 @@ export interface PullSelection {
   height?: number | null;
   /** Audio track id, when pulling audio. */
   audioTrackId?: string;
-  /** Seek position; needs the googlevideo-seek patch. */
+  /** Seek position; needs the googlevideo patch. */
   startAtMs?: number;
-  /**
-   * Low when restarting across stalls: the default of 10 costs ~60s of retries
-   * before a stall is even reported, and a long video needs many restarts.
-   */
   maxRetries?: number;
 }
 
@@ -175,33 +203,23 @@ export async function pullTrack(
     formats: session.formats,
     serverAbrStreamingUrl: session.url,
     videoPlaybackUstreamerConfig: session.ustreamer,
-    ...(session.poToken ? { poToken: session.poToken } : {}),
-    clientInfo: session.clientInfo,
-  });
-
-  // The server escalates attestation *mid-stream*, not only at session start.
-  // On a 1541s video it serves ~57s, then answers every request with
-  // [PLAYBACK_START_POLICY, STREAM_PROTECTION_STATUS=2, REQUEST_IDENTIFIER,
-  // REQUEST_CANCELLATION_POLICY, NEXT_REQUEST_POLICY] and no media at all.
-  //
-  // A token minted at session open does not satisfy that — it has to be
-  // re-minted. An earlier version of this handler only acted when no token was
-  // held yet, so once one existed it did nothing, which is why the stall looked
-  // unrecoverable.
-  stream.on('streamProtectionStatusUpdate', async (status: any) => {
-    if ((status?.status ?? 0) < 2) return;
-    try {
-      session.poToken = await mintPoToken(session.videoId, true);
-      stream.setPoToken(session.poToken);
-    } catch {
-      // Leave the old token in place; the retry may still succeed.
-    }
+    clientInfo: session.clientInfo as any,
+    // Node's fetch announces itself as "node"; present the client we claim to be.
+    fetch: (input: any, init?: any) =>
+      fetch(input, {
+        ...init,
+        headers: { ...(init?.headers ?? {}), 'user-agent': session.userAgent },
+      }),
   });
 
   const isMp4 = (f: any) => (f.mimeType ?? '').includes('mp4');
   const audioFor = (fs: any[]) => {
     const audio = fs.filter((f) => isMp4(f) && !f.width);
-    if (!sel.audioTrackId) return audio[0];
+    if (!sel.audioTrackId) {
+      // The default track, explicitly: taking the first entry picks whichever
+      // dub the server lists first.
+      return audio.find((f) => !f.isDubbed && !f.isDrc) ?? audio.find((f) => !f.isDubbed) ?? audio[0];
+    }
     return (
       audio.find((f) => (f.audioTrackId ?? f.language ?? 'default') === sel.audioTrackId) ?? audio[0]
     );
@@ -237,16 +255,11 @@ export async function pullTrack(
 /**
  * Pull a whole track, restarting across stalls.
  *
- * A single `SabrStream` does not survive a long video: on a 1541s video it
- * delivers ~12 segments, then the server stops sending media and the library
- * burns its ten retries and gives up. Stock googlevideo 4.1.1 behaves
- * identically, so this is not something the seek patch introduced — but the seek
- * patch is what lets us recover, because we can open a fresh session positioned
- * at the last segment we received.
- *
- * yt-dlp survives the same video (its suite has `test_vod_stall` and
- * `test_reload`), which is what suggested restart-on-stall rather than
- * retry-in-place.
+ * With the session fix a single pass normally completes even on hour-long
+ * videos, so this is a safety net rather than the workhorse it used to be: a
+ * transient stall (yt-dlp hits them on occasion too) costs one restart instead
+ * of the whole pull, because the seek patch lets a fresh session open at the
+ * last segment received.
  *
  * Yields fMP4 bytes as one continuous stream: the init segment from the first
  * pass only, then media from each pass in order.
@@ -256,7 +269,7 @@ export async function pullTrackResilient(
   sel: PullSelection,
   opts: { maxRestarts?: number; onProgress?: (m: string) => void } = {},
 ): Promise<ReadableStream<Uint8Array>> {
-  const maxRestarts = opts.maxRestarts ?? 12;
+  const maxRestarts = opts.maxRestarts ?? 3;
   const log = opts.onProgress ?? (() => {});
 
   return new ReadableStream<Uint8Array>({
@@ -269,7 +282,7 @@ export async function pullTrackResilient(
       for (let attempt = 0; attempt <= maxRestarts; attempt++) {
         const session = await openSession(videoId);
         durationSec = session.durationSec;
-        const { stream } = await pullTrack(session, { ...sel, startAtMs, maxRetries: sel.maxRetries ?? 1 });
+        const { stream } = await pullTrack(session, { ...sel, startAtMs, maxRetries: sel.maxRetries ?? 3 });
 
         let buf = Buffer.alloc(0);
         let inInit = !sentInit;
@@ -343,16 +356,13 @@ export async function pullTrackResilient(
  * Captions cannot be fetched directly from a plain server.
  *
  * Google IP-blocks the `timedtext` `base_url`: every request returns HTTP 200
- * with **zero bytes** and `content-type: text/html`, and it does so regardless of
- * `fmt`, of an attached po_token, or of client. youtubei.js' `getTranscript()`
- * fails too. Measured on 2026-07-30 across vtt/srv3/json3 with and without a
- * token.
+ * with **zero bytes** and `content-type: text/html`, regardless of `fmt` or
+ * client. Measured on 2026-07-30 across vtt/srv3/json3.
  *
  * This is the same block OwnTube already works around by routing captions
- * through invidious-companion, which holds a po_token — so rather than
- * re-solving it, delegate to that working endpoint. Set `CAPTIONS_PROXY` to an
- * OwnTube media origin; unset, this tries direct and will almost certainly get
- * an empty body.
+ * through invidious-companion — so rather than re-solving it, delegate to that
+ * working endpoint. Set `CAPTIONS_PROXY` to an OwnTube media origin; unset,
+ * this tries direct and will almost certainly get an empty body.
  *
  * Worth noting for the plan: it means captions are a reason the companion cannot
  * simply be dropped.
