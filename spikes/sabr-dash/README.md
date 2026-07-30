@@ -53,12 +53,10 @@ through invidious-companion.
 
 **Captions are therefore a reason the companion cannot simply be dropped.**
 
-### Known limitation: long videos need attestation
+### Known limitation: long videos stop at ~12 fragments
 
-Short videos convert end to end. `dQw4w9WgXcQ` (213s) pulls **complete** —
-240 MB, 38 fragments, no interruption. Videos of ~25 minutes and up stop after
-about **60 seconds of media** with `Cannot proceed with stream: attestation
-required`:
+Short videos convert end to end — `dQw4w9WgXcQ` (213s) pulls complete, 240 MB,
+38 fragments. Videos of ~25 minutes and up stop after about 60 seconds of media:
 
 | video | duration | result |
 |---|---|---|
@@ -67,127 +65,93 @@ required`:
 | `Li8SgZcbSOI` | 1484s | stops at ~14 fragments |
 | `Y07j3hXAI-g` | 3116s | stops at ~12 fragments |
 
-**yt-dlp fails on these too, at the identical point.** Running the reference
-implementation against `0e3GPea1Tyg` with the same SABR format stops at
-799,770 bytes — the same ~12 fragments we get — with *"Stream stalled; no
-activity detected in 3 consecutive requests"*. So this is not a defect in our
-converter or in `googlevideo`; it is what YouTube serves an unattested client.
-The policy looks deliberate: stream a short video freely, preview a long one for
-about a minute, then attest.
-
-`streamProtectionStatus` is the signal, and its values are
-`1 = OK`, `2 = ATTESTATION_PENDING`, `3 = ATTESTATION_REQUIRED`. With a token
-attached we reach **3**, which in yt-dlp's mapping means the token was seen and
-judged **invalid** rather than missing. Minting is the open problem, not the
-protocol — and invidious-companion already mints tokens this deployment streams
-DASH with every day, so a valid token is demonstrably obtainable on this host.
-
-#### Corrections
-
-Four claims in earlier versions of this file were wrong. They are recorded
-because each one sent the investigation somewhere useless.
-
-- **"yt-dlp downloads the same video completely (75 MB), so it is solvable."**
-  The premise of the whole hunt, and false. That 75 MB `.webm` came from a
-  *non-SABR* HTTPS download; yt-dlp only picks SABR formats under
-  `--extractor-args youtube:formats=duplicate`. Forced down the SABR path,
-  yt-dlp fails exactly where we do.
-- **"The server escalates attestation mid-stream, and the cause is the 13 UMP
-  parts googlevideo ignores."** yt-dlp ignores those same parts — its
-  `_IGNORED_PARTS` tuple lists `REQUEST_IDENTIFIER`,
-  `REQUEST_CANCELLATION_POLICY` and `PLAYBACK_START_POLICY` explicitly, and it
-  excludes them from a debug log rather than acting on them.
-- **"Not the client — WEB / ANDROID / IOS / TV / ANDROID_VR all stall the
-  same."** They all stalled because they were all WEB.
-  `getBasicInfo(id, client)` fetches the player response as that client but does
-  **not** mutate `session.context.client`, so the `clientInfo` handed to the SABR
-  server said `clientName: 1` every time while carrying another client's
-  ustreamer config. Naming the client properly changed throughput from 3.1 MB in
-  61s to 22 MB in 7s.
-- **"A ~60s grace window applies to every session."** It does not; a 213s video
-  streams to the end.
-
-#### Two real bugs found along the way
-
-Both are fixed in `googlevideo-seek.patch` and both are genuine upstream defects,
-independent of attestation.
-
-- **`bufferedRanges` was a delta, not a buffer.** `buildBufferedRanges` built its
-  ranges from `lastMediaHeaders` and then cleared it, so each request described
-  only what had arrived since the previous one — segments 1-4, then 5-7, then
-  8-11, each *replacing* its predecessor. yt-dlp sends every consumed range for
-  the lifetime of the session. Now so do we, merged by yt-dlp's rule: extend the
-  range ending at `sequenceNumber - 1`, otherwise open a new one, which keeps the
-  gap a seek leaves as a gap.
-- **Millisecond ticks were labelled with the media timescale.** The range carried
-  `startTicks`/`durationTicks` in milliseconds but quoted the media header's
-  `timescale` (commonly 24000), understating every buffered range by ~24x. ms
-  ticks now say `timescale: 1000`, as yt-dlp's do.
-
-A third change tightens the playback position: it was the *sum* of downloaded
-segment durations, which drifts a few ms past the end of the buffered range and
-leaves the client claiming to play content it has not admitted to holding. It is
-now the range end exactly.
-
-None of the three fixes the attestation cut-off — verified — but the seek,
-resume and timeline checks all still pass, and the 213s conversion is unchanged
-at 0 timeline mismatches.
-
-#### Why our token is rejected
-
-`minter.ts` reimplements invidious-companion's minting faithfully — the same
-`getAttestationChallenge` → `BotGuardClient.snapshot` → `GenerateIT` →
-`WebPoMinter` chain, the same JSDOM-with-a-youtube.com-origin, the same browser
-user agent on the Innertube session. YouTube still refuses:
+**This is our bug, not YouTube policy.** yt-dlp downloads `0e3GPea1Tyg` in full
+over SABR — 288/288 fragments, 17.4 MB, in 4 seconds — from this host, with the
+same client (ANDROID_VR) and the same itag (160), minutes before and after our
+attempt fails. Its own state line ends `pot:N`: **no po_token at all**.
 
 ```
-GenerateIT 200 [null, 43200, null, "Mk-65iJYmfX6R7qlDD4rlvOT7pTD..."]
-BGError: Failed to create WebPoMinter: No integrity token provided
+[sabr:stream] All enabled formats have reached their last expected segment
+              at player time 1541208 ms, assuming end of vod.
+[SABR State] v:0e3GPea1Tyg c:ANDROID_VR t:1541208 rn:146 act:Y pot:N
+             cr:[251:0-9007199254740991, 160:1-288 (0-1541208)]
 ```
 
-Index 0 — the integrity token — is `null`, leaving only the low-trust websafe
-fallback at index 3. **The companion mints and validates successfully on this
-same host, in the same minute**, so this is not IP reputation and not the
-(harmless) missing-canvas warning both share:
+yt-dlp does stall on this video occasionally — one run in three did — but it
+succeeds far more often than not, while we fail every time.
+
+#### What the failure looks like
+
+The error is `Cannot proceed with stream: attestation required`, which is what
+sent the earlier investigation after po_tokens. Two findings say attestation is
+a symptom rather than the cause:
+
+1. **yt-dlp needs no token for this video** (`pot:N` above). ANDROID_VR is
+   exempt, and it still gets all 288 fragments.
+2. **The demand is provoked by our own request.** googlevideo always names the
+   audio track in `preferredAudioFormatIds`, even when that track is being
+   discarded for a video-only pull. yt-dlp sends an **empty** preferred list for
+   a discarded track. Suppressing ours changes the failure from `attestation
+   required` to an ordinary stall — so the server is reacting to being asked to
+   serve a track we intend to throw away.
+
+That change is **not** committed: with the audio track no longer served, the
+end-of-stream completeness check trips on the discarded format
+(`Format 251:: Missing segments: [1..22]`), so it needs the discard path taught
+that a suppressed track has nothing to await. It is the strongest lead here.
+
+#### Diffed against a working request
+
+At the exact fragment we die on, yt-dlp's request is:
 
 ```
-[INFO] Validating PO token with video: sBWSEVRwgMo
-[INFO] Successfully validated PO token with video: sBWSEVRwgMo
-[INFO] Successfully generated PO token
+player_time_ms=63273
+buffered_ranges=[
+  itag 251 (discarded): 0 .. 9007199254740991, segments 0..9007199254740991
+  itag 160:             0 .. 63273 ms,         segments 1..12
+]
 ```
 
-Eliminated as causes, each by measurement:
+Ours matches this — same player time (63272), same video range, same cumulative
+shape — once the `bufferedRanges` and timescale fixes below are applied. The
+remaining differences are the discarded track's dummy range (we write
+`startSegmentIndex` = MAX_INT32 where yt-dlp writes 0) and `ClientAbrState`
+fields we never set (`drc_enabled`, `enable_voice_boost`, and
+`media_capabilities`, which yt-dlp sends for ANDROID/IOS/ANDROID_VR).
 
-| suspect | test | result |
-|---|---|---|
-| IP reputation | companion minted a valid token 84s before our attempt | not the IP |
-| flaky attestation | `mint-retry-test.ts`, fresh session each time | **0/9**, deterministic |
-| Node vs Deno | same code run under `denoland/deno` | rejected in both |
-| bgutils version | 3.1.3, then 3.2.0 (what the companion pins) | rejected in both |
-| jsdom version | 25.0.1, then 26.1.0 (what the companion pins) | rejected in both |
-| missing canvas | companion logs the same error and succeeds | benign, as it says |
-| user agent / origin / navigator | matched to the companion | still rejected |
-| proxy or IPv6 rotation | companion has neither configured | same egress as us |
+**Setting those did not help, and made things worse**: with them the 213s video
+regressed to 0 bytes and `Player response reload requested by server`. They are
+reverted. Recorded so the next attempt does not repeat them blind.
 
-Still untested: the companion pins a **Deno fork of youtubei.js**
-(`YouTube.js@v17.0.1-deno` from jsdelivr) rather than the npm package, pins
-`player_id`, and takes its snapshot inside a Web Worker. One of those is the
-remaining difference.
+#### Attestation does work from this host
+
+Worth separating from the above, because the earlier write-up got it wrong.
+Running Brainicism's `bgutil-ytdlp-pot-provider` container here mints a real
+integrity token first try:
+
+```
+Using challenge from /att/get
+Generated IntegrityToken: {"integrityToken":"ULSw64xpJGoe...","estimatedTtlSecs":43200}
+```
+
+So the spike's own minter (`minter.ts`) is simply broken, and the difference is
+visible in that log line: the provider takes its challenge from
+**`https://www.youtube.com/att/get`**, while `minter.ts` follows the companion in
+asking Innertube via `getAttestationChallenge`. Not chased further, because no
+token is needed to fix the actual bug.
+
+To bring the provider back up:
+
+```bash
+docker start bgutil-pot   # or: docker run -d --name bgutil-pot -p 127.0.0.1:4416:4416 \
+                          #       brainicism/bgutil-ytdlp-pot-provider
+```
 
 #### Next step
 
-**Don't reimplement BotGuard — source the token from the companion.** It already
-mints a validated token every few minutes and holds the `WebPoMinter` needed to
-bind one to any video id. Exposing that to the converter is a far smaller change
-than reproducing attestation, and it fits the boundary this plan already
-assumes: the companion stays AGPL behind HTTP, nothing is copied.
-
-That reframes the companion fork. Its first job is not to host the converter but
-to expose the attested session — one route returning a content-bound token for a
-video id, signed with `withCompanionCheck()` since `SERVER_VERIFY_REQUESTS=true`.
-
-Until that exists, treat this converter as **proven for short VOD and unproven
-beyond about a minute of any long video**.
+Suppress the discarded track from `preferredAudioFormatIds` **and** exempt it
+from the end-of-stream segment check. That is a contained change in
+`SabrStream`, and it is the only lead that has moved the failure so far.
 
 ## What it proves
 
