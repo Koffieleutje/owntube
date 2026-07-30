@@ -6,6 +6,37 @@ import {
 
 export const FETCH_TIMEOUT_MS = 20_000;
 
+/**
+ * Language for Invidious' human-readable strings (`publishedText`, view-count
+ * text). Without it this deployment was answering in **Arabic** — "1 السنة منذ"
+ * rather than "1 year ago" — on every list endpoint, and those strings are shown
+ * to the user (comments, the upcoming-live panel, taste onboarding).
+ *
+ * Invidious picks a locale per request and no `default_locale` is configured, so
+ * asking explicitly is the fix that does not depend on instance configuration —
+ * which matters because `INVIDIOUS_BASE_URL` may list several instances.
+ */
+const UPSTREAM_LOCALE = process.env.INVIDIOUS_LOCALE ?? "en-US";
+
+/**
+ * Add `hl` to Invidious API requests. Scoped to `/api/v1/` paths so nothing else
+ * routed through this helper is touched, and it never overrides an `hl` a caller
+ * set deliberately.
+ */
+function withUpstreamLocale(url: string): string {
+  if (!UPSTREAM_LOCALE) return url;
+  try {
+    const u = new URL(url);
+    if (!u.pathname.startsWith("/api/v1/")) return url;
+    if (u.searchParams.has("hl")) return url;
+    u.searchParams.set("hl", UPSTREAM_LOCALE);
+    return u.toString();
+  } catch {
+    // Not an absolute URL; leave it alone rather than guess.
+    return url;
+  }
+}
+
 type FetchJsonOptions = {
   /**
    * Some upstreams (notably Invidious `/api/v1/videos/{id}/related`) return 2xx with a
@@ -22,7 +53,10 @@ export async function fetchJson(
 ): Promise<unknown> {
   const startedAt = Date.now();
   try {
-    const { status, ok, text } = await upstreamGetText(url, FETCH_TIMEOUT_MS);
+    const { status, ok, text } = await upstreamGetText(
+      withUpstreamLocale(url),
+      FETCH_TIMEOUT_MS,
+    );
     const trimmed = text.trim();
     if (!ok) {
       const hint = trimmed.slice(0, 240);
