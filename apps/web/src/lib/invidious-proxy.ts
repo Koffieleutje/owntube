@@ -4,7 +4,6 @@ import {
 } from "@/lib/invidious-playback-url";
 import { toMediaOriginUrl } from "@/lib/media-origin";
 import type { PlayableVariant } from "@/lib/pick-playback";
-import type { VideoDetail } from "@/server/services/proxy.types";
 
 function invidiousBaseUrl(): string {
   return process.env.INVIDIOUS_BASE_URL?.trim().replace(/\/+$/, "") ?? "";
@@ -53,15 +52,11 @@ export function getAppOriginFromRequestHeaders(
 }
 
 /**
- * Piped URLs skip this proxy. Invidious media uses several path prefixes;
- * newer HLS lives under `/api/manifest/...` (not only `/api/v1/...`).
+ * Invidious media uses several path prefixes; newer HLS lives under
+ * `/api/manifest/...` (not only `/api/v1/...`).
  */
-export function shouldUseInvidiousProxyForUrl(
-  detail: VideoDetail,
-  mediaUrl: string,
-): boolean {
+export function shouldUseInvidiousProxyForUrl(mediaUrl: string): boolean {
   if (!isInvidiousProxyAvailable()) return false;
-  if (detail.sourceUsed === "piped") return false;
   if (!mediaUrl) return false;
   try {
     const path = new URL(mediaUrl).pathname;
@@ -419,11 +414,10 @@ export function toProxiedOrDirectPlayback(
   rawPlayback: string,
   appOrigin: string,
   requestHost: string,
-  detail: VideoDetail,
 ): string {
   if (!rawPlayback) return rawPlayback;
   const playback = rawPlayback;
-  if (shouldUseInvidiousProxyForUrl(detail, playback)) {
+  if (shouldUseInvidiousProxyForUrl(playback)) {
     return toInvidiousProxyUrl(playback, appOrigin);
   }
   if (shouldUseYouTubeHopProxyForUrl(rawPlayback)) {
@@ -443,10 +437,9 @@ export function toProxiedOrDirectPoster(
   rawPoster: string | undefined,
   appOrigin: string,
   requestHost: string,
-  detail: VideoDetail,
 ): string | undefined {
   if (!rawPoster) return undefined;
-  if (shouldUseInvidiousProxyForUrl(detail, rawPoster)) {
+  if (shouldUseInvidiousProxyForUrl(rawPoster)) {
     return toInvidiousProxyUrl(rawPoster, appOrigin);
   }
   const rewritten = requestHost
@@ -471,29 +464,18 @@ export function toProxiedOrDirectVariants(
   variants: PlayableVariant[],
   appOrigin: string,
   requestHost: string,
-  detail: VideoDetail,
 ): ProxiedPlayableVariant[] {
   return variants.map((v) => {
     if (v.t === "split") {
       const audioTracks = v.audioOptions.map((o) => ({
         label: o.label,
-        src: toProxiedOrDirectPlayback(o.url, appOrigin, requestHost, detail),
+        src: toProxiedOrDirectPlayback(o.url, appOrigin, requestHost),
       }));
       return {
         t: "split",
         label: v.label,
-        video: toProxiedOrDirectPlayback(
-          v.videoUrl,
-          appOrigin,
-          requestHost,
-          detail,
-        ),
-        audio: toProxiedOrDirectPlayback(
-          v.audioUrl,
-          appOrigin,
-          requestHost,
-          detail,
-        ),
+        video: toProxiedOrDirectPlayback(v.videoUrl, appOrigin, requestHost),
+        audio: toProxiedOrDirectPlayback(v.audioUrl, appOrigin, requestHost),
         audioTracks,
         defaultAudioIndex: v.defaultAudioIndex ?? 0,
       };
@@ -501,7 +483,7 @@ export function toProxiedOrDirectVariants(
     return {
       t: "muxed",
       label: v.label,
-      src: toProxiedOrDirectPlayback(v.url, appOrigin, requestHost, detail),
+      src: toProxiedOrDirectPlayback(v.url, appOrigin, requestHost),
     };
   });
 }

@@ -3,9 +3,7 @@ import { preferHighResVideoThumbnailUrl } from "@/lib/video-thumbnail-url";
 import type { VideoStoryboard } from "@/server/services/proxy.types";
 
 /** Cache rows store the real upstream name (`invidious`), never `"cache"`. */
-export function liveUpstreamSource(
-  label: "piped" | "invidious" | "cache",
-): "piped" | "invidious" {
+export function liveUpstreamSource(label: "invidious" | "cache"): "invidious" {
   if (label === "cache") {
     throw new Error("proxy: write path received cache source label");
   }

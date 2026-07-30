@@ -710,91 +710,90 @@ export async function fetchChannelPage(
         }
       }
     } else {
-    for (const invidiousBase of invidiousBases) {
-      if (invidiousPortCollidesWithNextApp(invidiousBase)) {
-        errors.push("invidious:port collision with Next.js");
-        continue;
-      }
-      try {
-        if (input.continuation) {
-          acquireUpstreamSlot();
-          const json = await fetchJson(
-            buildInvidiousChannelVideosUrl(
-              invidiousBase,
+      for (const invidiousBase of invidiousBases) {
+        if (invidiousPortCollidesWithNextApp(invidiousBase)) {
+          errors.push("invidious:port collision with Next.js");
+          continue;
+        }
+        try {
+          if (input.continuation) {
+            acquireUpstreamSlot();
+            const json = await fetchJson(
+              buildInvidiousChannelVideosUrl(
+                invidiousBase,
+                input.channelId,
+                input.continuation,
+              ),
+              { source: "invidious", baseUrl: invidiousBase },
+            );
+            resolved = parseInvidiousChannelVideosContinuation(
+              json,
               input.channelId,
-              input.continuation,
-            ),
-            { source: "invidious", baseUrl: invidiousBase },
-          );
-          resolved = parseInvidiousChannelVideosContinuation(
-            json,
-            input.channelId,
-            invidiousBase,
-          );
-          if (resolved && resolved.videos.length === 0) {
-            const fallbackVideos = await tryInvidiousChannelVideoFallbacks(
               invidiousBase,
-              input.channelId,
+            );
+            if (resolved && resolved.videos.length === 0) {
+              const fallbackVideos = await tryInvidiousChannelVideoFallbacks(
+                invidiousBase,
+                input.channelId,
+                input.channelId,
+              );
+              if (fallbackVideos.length > 0) {
+                resolved = { ...resolved, videos: fallbackVideos };
+              }
+            }
+          } else {
+            acquireUpstreamSlot();
+            acquireUpstreamSlot();
+            const metaUrl = buildInvidiousChannelMetaUrl(
+              invidiousBase,
               input.channelId,
             );
-            if (fallbackVideos.length > 0) {
-              resolved = { ...resolved, videos: fallbackVideos };
-            }
-          }
-        } else {
-          acquireUpstreamSlot();
-          acquireUpstreamSlot();
-          const metaUrl = buildInvidiousChannelMetaUrl(
-            invidiousBase,
-            input.channelId,
-          );
-          const videosUrl = buildInvidiousChannelVideosUrl(
-            invidiousBase,
-            input.channelId,
-          );
-          const [metaJson, videosJson] = await Promise.all([
-            fetchJson(metaUrl, {
-              source: "invidious",
-              baseUrl: invidiousBase,
-            }),
-            fetchJson(videosUrl, {
-              source: "invidious",
-              baseUrl: invidiousBase,
-            }),
-          ]);
-          resolved = parseInvidiousChannelCombined(
-            metaJson,
-            videosJson,
-            input.channelId,
-            invidiousBase,
-          );
-          if (resolved && resolved.videos.length === 0) {
-            const channelLabel =
-              resolved.name && resolved.name !== "Channel"
-                ? resolved.name
-                : typeof (metaJson as Record<string, unknown>).author ===
-                    "string"
-                  ? ((metaJson as Record<string, unknown>).author as string)
-                  : input.channelId;
-            const fallbackVideos = await tryInvidiousChannelVideoFallbacks(
+            const videosUrl = buildInvidiousChannelVideosUrl(
               invidiousBase,
               input.channelId,
-              channelLabel,
             );
-            if (fallbackVideos.length > 0) {
-              resolved = { ...resolved, videos: fallbackVideos };
+            const [metaJson, videosJson] = await Promise.all([
+              fetchJson(metaUrl, {
+                source: "invidious",
+                baseUrl: invidiousBase,
+              }),
+              fetchJson(videosUrl, {
+                source: "invidious",
+                baseUrl: invidiousBase,
+              }),
+            ]);
+            resolved = parseInvidiousChannelCombined(
+              metaJson,
+              videosJson,
+              input.channelId,
+              invidiousBase,
+            );
+            if (resolved && resolved.videos.length === 0) {
+              const channelLabel =
+                resolved.name && resolved.name !== "Channel"
+                  ? resolved.name
+                  : typeof (metaJson as Record<string, unknown>).author ===
+                      "string"
+                    ? ((metaJson as Record<string, unknown>).author as string)
+                    : input.channelId;
+              const fallbackVideos = await tryInvidiousChannelVideoFallbacks(
+                invidiousBase,
+                input.channelId,
+                channelLabel,
+              );
+              if (fallbackVideos.length > 0) {
+                resolved = { ...resolved, videos: fallbackVideos };
+              }
             }
           }
+          if (resolved) {
+            usedInvidiousBase = invidiousBase;
+            break;
+          }
+        } catch (e) {
+          recordUpstreamFailure(e, "invidious", errors, invidiousBase);
         }
-        if (resolved) {
-          usedInvidiousBase = invidiousBase;
-          break;
-        }
-      } catch (e) {
-        recordUpstreamFailure(e, "invidious", errors, invidiousBase);
       }
-    }
-  
     }
 
     if (!resolved) {

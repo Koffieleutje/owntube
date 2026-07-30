@@ -2,10 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import {
-  ACCOUNT_LINKS,
-  ASSIGNABLE_NAV,
-} from "@/components/shell/nav-config";
+import { ACCOUNT_LINKS, ASSIGNABLE_NAV } from "@/components/shell/nav-config";
 import { Sheet } from "@/components/ui/sheet";
 import { DEFAULT_BOTTOM_NAV_KEYS } from "@/lib/bottom-nav";
 import { trpc } from "@/trpc/react";

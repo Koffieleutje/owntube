@@ -232,7 +232,7 @@ async function fetchUnwatchedGenericShorts(
       : input.continuation;
   const merged: UnifiedVideo[] = [];
   const seen = new Set<string>();
-  let sourceUsed: ShortsFeedResult["sourceUsed"] = "piped";
+  let sourceUsed: ShortsFeedResult["sourceUsed"] = "invidious";
   let warning: string | undefined;
   let stale: boolean | undefined;
   let upstreamUnavailable: UpstreamUnavailableError | null = null;
@@ -379,11 +379,11 @@ async function fetchShortsShelfFeed(
   if (videos.length >= limit) {
     return {
       videos: videos.slice(0, limit),
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     };
   }
 
-  let sourceUsed: ShortsFeedResult["sourceUsed"] = "piped";
+  let sourceUsed: ShortsFeedResult["sourceUsed"] = "invidious";
   let warning: string | undefined;
   let stale: boolean | undefined;
   let continuation: string | undefined;
@@ -464,7 +464,7 @@ async function fetchShortsShelfFeed(
     };
   } catch (e) {
     if (videos.length > 0) {
-      return { videos: videos.slice(0, limit), sourceUsed: "piped" };
+      return { videos: videos.slice(0, limit), sourceUsed: "invidious" };
     }
     throw e;
   }
@@ -562,7 +562,7 @@ export async function fetchShortsFeedForViewer(
       videos,
       continuation: nextCursor ?? undefined,
       sourceUsed:
-        personalized.videos.length > 0 ? "piped" : upstream.sourceUsed,
+        personalized.videos.length > 0 ? "invidious" : upstream.sourceUsed,
       warning:
         videos.length === 0
           ? (upstream.warning ?? ALL_SHORTS_SEEN_WARNING)
@@ -593,7 +593,7 @@ export async function fetchShortsFeedForViewer(
         videos,
         continuation: nextRecCursor ?? upstream.continuation ?? "rec:refresh",
         sourceUsed:
-          personalized.videos.length > 0 ? "piped" : upstream.sourceUsed,
+          personalized.videos.length > 0 ? "invidious" : upstream.sourceUsed,
         warning: upstream.warning,
         stale: upstream.stale,
       };
@@ -618,7 +618,7 @@ export async function fetchShortsFeedForViewer(
       return {
         videos: refreshed.personalized.videos.slice(0, limit),
         continuation: refreshedCursor,
-        sourceUsed: "piped",
+        sourceUsed: "invidious",
       };
     }
 
@@ -653,7 +653,7 @@ export async function fetchShortsFeedForViewer(
     return {
       videos: [],
       continuation: nextRecCursor,
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     };
   }
 
@@ -676,7 +676,7 @@ export async function fetchShortsFeedForViewer(
     return {
       videos: personalized.videos.slice(0, limit),
       continuation: nextRecCursor ?? "rec:refresh",
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     };
   }
 

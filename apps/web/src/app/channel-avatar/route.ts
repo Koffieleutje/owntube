@@ -46,7 +46,11 @@ export async function GET(request: Request) {
     });
 
   // Disk asset cache (serve-stale-and-revalidate); pass-through on refusal.
-  const asset = await getCachedAsset(target.toString(), "avatar", fetchUpstream);
+  const asset = await getCachedAsset(
+    target.toString(),
+    "avatar",
+    fetchUpstream,
+  );
   if (asset) {
     return new Response(new Uint8Array(asset.body), {
       status: 200,

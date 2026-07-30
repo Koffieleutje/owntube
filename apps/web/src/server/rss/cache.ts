@@ -235,7 +235,12 @@ export async function refreshLongFormWindow(
             oldestPublishedAt: live.oldestPublishedAt,
             newestPublishedAt: live.newestPublishedAt,
           }
-        : { ids: [], oldestPublishedAt: null, newestPublishedAt: null, missing: true },
+        : {
+            ids: [],
+            oldestPublishedAt: null,
+            newestPublishedAt: null,
+            missing: true,
+          },
       "rss",
     );
     return live;

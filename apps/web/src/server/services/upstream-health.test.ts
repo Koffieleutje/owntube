@@ -13,12 +13,12 @@ describe("upstream health", () => {
   });
 
   it("keeps a healthy preferred instance first", () => {
-    recordUpstreamSuccess("piped", "https://one.example", 120);
-    recordUpstreamSuccess("piped", "https://two.example", 80);
+    recordUpstreamSuccess("invidious", "https://one.example", 120);
+    recordUpstreamSuccess("invidious", "https://two.example", 80);
 
     expect(
       orderUpstreamCandidates(
-        "piped",
+        "invidious",
         ["https://one.example", "https://two.example"],
         "https://one.example",
       ),
@@ -45,11 +45,11 @@ describe("upstream health", () => {
   });
 
   it("retries cooled-down instances when every candidate is cooled down", () => {
-    recordUpstreamFailure("piped", "https://one.example", new Error("502"));
-    recordUpstreamFailure("piped", "https://two.example", new Error("503"));
+    recordUpstreamFailure("invidious", "https://one.example", new Error("502"));
+    recordUpstreamFailure("invidious", "https://two.example", new Error("503"));
 
     expect(
-      orderUpstreamCandidates("piped", [
+      orderUpstreamCandidates("invidious", [
         "https://one.example",
         "https://two.example",
       ]),

@@ -44,7 +44,7 @@ export type CacheKind =
   | "sponsorblock"
   | "home";
 
-export type CacheSource = "piped" | "invidious" | "youtube" | "sponsorblock";
+export type CacheSource = "invidious" | "youtube" | "sponsorblock";
 
 export function nowUnix(): number {
   return Math.floor(Date.now() / 1000);

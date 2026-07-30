@@ -74,7 +74,7 @@ export function ChannelVideosSection({
                   channelId,
                   videos: initialVideos,
                   continuation: initialContinuation ?? null,
-                  sourceUsed: sourceUsed as "piped" | "invidious" | "cache",
+                  sourceUsed: sourceUsed as "invidious" | "cache",
                   stale,
                 },
               ],

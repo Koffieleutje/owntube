@@ -16,6 +16,23 @@ function base(over: Partial<VideoDetail>): VideoDetail {
   };
 }
 
+/**
+ * A detail whose adaptive rows carry no byte-range indexes, so the synthesized
+ * `/hls` manifest cannot be built and playback legitimately falls through to the
+ * progressive/split builder — the path these tests exercise. (Previously they
+ * reached it via the Piped-only branch, which no longer exists.)
+ */
+function noIndexBase(over: Partial<VideoDetail>): VideoDetail {
+  const d = base(over);
+  const stamp = <T extends { indexed?: boolean }>(rows: T[]): T[] =>
+    rows.map((r) => ({ indexed: false, ...r }));
+  return {
+    ...d,
+    videoSources: stamp(d.videoSources),
+    audioSources: stamp(d.audioSources),
+  };
+}
+
 describe("buildWatchPlayback", () => {
   it("forces HLS for live streams even when progressive exists", () => {
     const w = buildWatchPlayback(
@@ -149,12 +166,12 @@ describe("buildWatchPlayback", () => {
     });
   });
 
-  it("infers ≥2 audio languages from xtags and keeps the Piped split picker", () => {
+  it("infers ≥2 audio languages from xtags and keeps the split picker", () => {
     const w = buildWatchPlayback(
-      base({
-        // Multi-language Piped keeps the split (language picker) even with an
+      noIndexBase({
+        // Multi-language keeps the split (language picker) even with an
         // HLS URL; Invidious adaptive would instead route to generated HLS.
-        sourceUsed: "piped",
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         hlsUrl: "https://h.example/playlist.m3u8",
         videoSources: [
@@ -192,10 +209,10 @@ describe("buildWatchPlayback", () => {
 
   it("defaults to original audio even when it is not the first adaptive row", () => {
     const w = buildWatchPlayback(
-      base({
-        // Split construction is Piped-only now; Invidious adaptive routes to
+      noIndexBase({
+        // Invidious adaptive routes to
         // the generated HLS manifest (see the routing tests above).
-        sourceUsed: "piped",
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -271,8 +288,8 @@ describe("buildWatchPlayback", () => {
 
   it("drops muxed rows with audio MIME when a real video split exists", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -306,7 +323,7 @@ describe("buildWatchPlayback", () => {
     }
   });
 
-  it("keeps height=0 legacy muxed (Piped itag 18) alongside other muxed rows", () => {
+  it("keeps height=0 legacy muxed (itag 18) alongside other muxed rows", () => {
     const w = buildWatchPlayback(
       base({
         videoSources: [
@@ -421,8 +438,8 @@ describe("buildWatchPlayback", () => {
 
   it("uses quality-only split row label; audio submenu shows language name without bitrate noise", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -508,8 +525,8 @@ describe("buildWatchPlayback", () => {
 
   it("keeps a single split per quality label (highest bitrate)", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -556,8 +573,8 @@ describe("buildWatchPlayback", () => {
 
   it("lists muxed and split variants when both exist (full quality menu)", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -604,8 +621,8 @@ describe("buildWatchPlayback", () => {
 
   it("lists one split row per video-only quality", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -641,8 +658,8 @@ describe("buildWatchPlayback", () => {
 
   it("collapses multiple bitrate-only audio rows without language metadata into one split track", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -678,8 +695,8 @@ describe("buildWatchPlayback", () => {
 
   it("uses split when there is no muxed stream", () => {
     const w = buildWatchPlayback(
-      base({
-        sourceUsed: "piped",
+      noIndexBase({
+        sourceUsed: "invidious",
         mediaProxyBase: "https://g.example",
         videoSources: [
           {
@@ -753,10 +770,10 @@ describe("buildWatchPlayback", () => {
   });
 });
 
-describe("buildWatchPlayback — Piped split vs HLS", () => {
-  const pipedSplit = (over: Partial<VideoDetail>): VideoDetail =>
-    base({
-      sourceUsed: "piped",
+describe("buildWatchPlayback — split vs HLS (un-indexed adaptive)", () => {
+  const unindexedSplit = (over: Partial<VideoDetail>): VideoDetail =>
+    noIndexBase({
+      sourceUsed: "invidious",
       videoSources: [
         {
           url: "https://piped.example/videoplayback?itag=137",
@@ -777,9 +794,9 @@ describe("buildWatchPlayback — Piped split vs HLS", () => {
       ...over,
     });
 
-  it("prefers HLS over split for single-language Piped VOD (avoids A/V desync)", () => {
+  it("prefers HLS over split for single-language VOD (avoids A/V desync)", () => {
     const w = buildWatchPlayback(
-      pipedSplit({ hlsUrl: "https://h.example/playlist.m3u8" }),
+      unindexedSplit({ hlsUrl: "https://h.example/playlist.m3u8" }),
     );
     expect(w).toEqual({
       kind: "hls",
@@ -788,9 +805,9 @@ describe("buildWatchPlayback — Piped split vs HLS", () => {
     });
   });
 
-  it("keeps progressive split for multi-language Piped VOD (HLS drops the picker)", () => {
+  it("keeps progressive split for multi-language VOD (HLS drops the picker)", () => {
     const w = buildWatchPlayback(
-      pipedSplit({
+      unindexedSplit({
         hlsUrl: "https://h.example/playlist.m3u8",
         audioSources: [
           {
@@ -816,8 +833,8 @@ describe("buildWatchPlayback — Piped split vs HLS", () => {
     }
   });
 
-  it("falls back to progressive split for Piped VOD without an HLS URL", () => {
-    const w = buildWatchPlayback(pipedSplit({}));
+  it("falls back to progressive split for VOD without an HLS URL", () => {
+    const w = buildWatchPlayback(unindexedSplit({}));
     expect(w.kind).toBe("progressive");
     if (w.kind === "progressive") {
       expect(w.variants[0]?.t).toBe("split");
@@ -828,7 +845,7 @@ describe("buildWatchPlayback — Piped split vs HLS", () => {
 describe("pickPlaybackForVidstack (compat)", () => {
   it("returns first progressive url", () => {
     const r = pickPlaybackForVidstack(
-      base({
+      noIndexBase({
         videoSources: [
           { url: "https://g.example/360.mp4", quality: "360p" },
           { url: "https://g.example/1080.mp4", quality: "1080p" },

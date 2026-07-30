@@ -37,7 +37,6 @@ export function buildClientWatchPlayback(
             rawPlayback.url,
             mediaOrigin,
             requestHost,
-            detail,
           ),
           dvr: detail.isPostLiveDvr === true,
         }
@@ -48,7 +47,6 @@ export function buildClientWatchPlayback(
               rawPlayback.variants,
               mediaOrigin,
               requestHost,
-              detail,
             ),
           }
         : null;
@@ -56,7 +54,6 @@ export function buildClientWatchPlayback(
     detail.thumbnailUrl,
     mediaOrigin,
     requestHost,
-    detail,
   );
   return {
     payload: videoPayload,

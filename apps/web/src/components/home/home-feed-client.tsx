@@ -312,7 +312,10 @@ export function HomeFeedClient({ region, isAuthed }: HomeFeedClientProps) {
       ) : null}
 
       {isLoadingMore ? (
-        <ul className="ot-video-grid ot-video-grid--large mx-[-16px] w-[calc(100%_+_2rem)] sm:mx-0 sm:w-full" aria-hidden>
+        <ul
+          className="ot-video-grid ot-video-grid--large mx-[-16px] w-[calc(100%_+_2rem)] sm:mx-0 sm:w-full"
+          aria-hidden
+        >
           {LOAD_MORE_SKELETON_KEYS.slice(0, LOAD_MORE_SKELETON_COUNT).map(
             (k) => (
               <li key={`skeleton-${k}`} className="space-y-3">

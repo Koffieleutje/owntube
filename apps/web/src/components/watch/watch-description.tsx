@@ -62,7 +62,10 @@ export function WatchDescription({
   const lineOccurrences = new Map<string, number>();
   return (
     <div className="rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
-      <DescriptionMeta viewsLabel={viewsLabel} publishedLabel={publishedLabel} />
+      <DescriptionMeta
+        viewsLabel={viewsLabel}
+        publishedLabel={publishedLabel}
+      />
       <div className="space-y-2 text-sm leading-relaxed text-[hsl(var(--muted-foreground))]">
         {lines.map((line) => {
           const lineKey = keyForDescriptionLine(line, lineOccurrences);

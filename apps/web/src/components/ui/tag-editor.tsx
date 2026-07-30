@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { normalizeChannelTag } from "@/lib/channel-tag";
 import { cn } from "@/lib/utils";
@@ -141,7 +147,10 @@ export function TagEditor({
     if (pos.top + h > window.innerHeight - MARGIN) {
       const r = btn.getBoundingClientRect();
       const above = r.top - GAP - h;
-      const next = above >= MARGIN ? above : Math.max(MARGIN, window.innerHeight - h - MARGIN);
+      const next =
+        above >= MARGIN
+          ? above
+          : Math.max(MARGIN, window.innerHeight - h - MARGIN);
       if (Math.abs(next - pos.top) > 0.5) setPos({ top: next, left: pos.left });
     }
   }, [open, pos]);

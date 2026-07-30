@@ -16,7 +16,7 @@ const UPSTREAM_RATE_LIMIT_NOTE = "rate limit";
 /** Record a primary/fallback failure; never abort before the sibling upstream is tried. */
 export function recordUpstreamFailure(
   e: unknown,
-  label: "piped" | "invidious",
+  label: "invidious",
   errors: string[],
   baseUrl?: string,
   latencyMs?: number,
@@ -43,15 +43,11 @@ export function upstreamFailureMessage(
   fallbackMessage: string,
 ): string {
   if (errors.length === 0) return fallbackMessage;
-  const sources = [...new Set(errors.map((entry) => entry.split(":")[0]))]
-    .filter(Boolean)
-    .map((source) => (source === "piped" ? "Piped" : "Invidious"));
   const lastDetail = cleanUpstreamErrorDetail(
     errors[errors.length - 1]?.replace(/^[^:]+:/, "") ?? "",
   );
-  const sourceText = sources.length > 0 ? ` (${sources.join(" and ")})` : "";
   const detailText = lastDetail ? ` Last error: ${lastDetail}` : "";
-  return `Video source instances are unavailable${sourceText}. Check instance health in Settings or try again later.${detailText}`;
+  return `Invidious is unavailable. Check instance health in Settings or try again later.${detailText}`;
 }
 
 export function rethrowIfInvidiousUpcoming(

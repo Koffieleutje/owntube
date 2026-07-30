@@ -94,7 +94,9 @@ describe("chunked videoplayback proxying", () => {
 
     const res = await GET(mediaRequest(`bytes=0-${size - 1}`), routeContext);
     expect(res.status).toBe(206);
-    expect(res.headers.get("content-range")).toBe(`bytes 0-${size - 1}/${size}`);
+    expect(res.headers.get("content-range")).toBe(
+      `bytes 0-${size - 1}/${size}`,
+    );
     expect(res.headers.get("content-length")).toBe(String(size));
 
     const body = new Uint8Array(await res.arrayBuffer());

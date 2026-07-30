@@ -63,7 +63,7 @@ function sourceLooksLikeVideoPane(s: VideoStreamSource): boolean {
     Number.isFinite(s.height) &&
     s.height <= 0
   ) {
-    // Piped legacy muxed itag 18 often reports height: 0 — still has video.
+    // Legacy muxed itag 18 often reports height: 0 — still has video.
     if (!streamIsVideoOnly(s)) {
       if (mt.startsWith("video/") || (s.quality && !/audio/i.test(s.quality))) {
         return true;
@@ -414,7 +414,7 @@ function dropMuxedWhenSplitMatchesResolution(
   detail?: VideoDetail,
 ): MuxedVariant[] {
   if (muxed.length === 0 || splits.length === 0) return muxed;
-  if (detail?.sourceUsed === "piped" || detail?.sourceUsed === "cache") {
+  if (detail?.sourceUsed === "cache") {
     return muxed;
   }
   const splitRungs = new Set<string>();
@@ -566,8 +566,6 @@ export function buildWatchPlayback(
     return { kind: "none", onlyDashOrUnsupported: false };
   }
 
-  const isPipedLike = detail.sourceUsed === "piped";
-
   const buildMerged = (keep: (s: VideoStreamSource) => boolean) => {
     let muxed = collectMuxed(detail, keep);
     const splits = buildAllSplitVariants(detail, keep);
@@ -583,8 +581,8 @@ export function buildWatchPlayback(
     // *progressive* URLs — those 403 when the proxy fetches them from the server
     // IP, which made muxed shorts fail to start (manual tap) or get skipped. The
     // generated HLS also autoplays muted and lets hls.js start low and ramp up on
-    // its own. Prefer it for any non-Piped short that exposes adaptive streams.
-    if (canSynthesizeManifest(detail) && !isPipedLike) {
+    // its own. Prefer it for any short that exposes adaptive streams.
+    if (canSynthesizeManifest(detail)) {
       return {
         kind: "hls",
         url: `/hls/${detail.videoId}/master.m3u8`,
@@ -598,8 +596,8 @@ export function buildWatchPlayback(
         return { kind: "hls", url: hls, onlyDashOrUnsupported: false };
       }
     }
-    // Progressive fallback (Piped, whose muxed URLs are companion-hosted and
-    // reliable, or a source with no adaptive streams): front muxed for a fast
+    // Progressive fallback (a source with no adaptive streams): front muxed
+    // for a fast
     // single-file start, then split.
     let merged = buildMerged(sourceLooksLikeVideoPane);
     if (merged.length === 0) {
@@ -649,31 +647,11 @@ export function buildWatchPlayback(
     merged = buildMerged(() => true);
   }
 
-  // Single-language Piped: prefer HLS (one muxed stream) over progressive. The
-  // progressive list's HD rungs are video-only "split" variants paired with a
-  // separate <audio> element, which drift out of sync over time. HLS avoids the
-  // split path entirely. We only fall back to progressive when there are ≥2
-  // audio languages (HLS drops the language picker) or no HLS URL exists.
-  if (isPipedLike && merged.length > 0) {
-    if (detail.hlsUrl && !preferSplitForLanguages) {
-      return { kind: "hls", url: detail.hlsUrl, onlyDashOrUnsupported: false };
-    }
-    const variants = preferPlaybackDefault(
-      buildFullQualitySelectorList(merged),
-    );
-    return {
-      kind: "progressive",
-      variants,
-      onlyDashOrUnsupported: false,
-    };
-  }
-
   // Synthesize a byte-range HLS manifest from the adaptive fMP4 streams and
   // play it as HLS — native on iOS (the only robust path there; MSE engines
   // like dash.js stall/freeze) and hls.js everywhere else. Replaces both the
   // split video+audio path and Invidious's native `hlsUrl`. Any adaptive
   // video-only stream (or `dashUrl`) signals the adaptive streams exist; only
-  // Piped is excluded (no Invidious adaptive streams).
   //
   // Also used for MULTI-LANGUAGE videos: the alternative (progressive *split*)
   // offers an in-player language picker, but its single-huge-progressive-file
@@ -688,7 +666,7 @@ export function buildWatchPlayback(
   // fetched from the server IP. Native `hlsUrl` stays as the fallback for videos
   // with no adaptive streams — or whose adaptive streams lack the byte-range
   // indexes the synthesized manifest is built from (those 502).
-  if (canSynthesizeManifest(detail) && !isPipedLike) {
+  if (canSynthesizeManifest(detail)) {
     return {
       kind: "hls",
       url: `/hls/${detail.videoId}/master.m3u8`,

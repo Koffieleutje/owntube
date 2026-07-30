@@ -36,7 +36,11 @@ describe("asset cache", () => {
     expect(first?.contentType).toBe("image/png");
     expect(Buffer.compare(first?.body ?? Buffer.alloc(0), PNG)).toBe(0);
 
-    const second = await getCachedAsset("vi/x/maxres.jpg", "thumbnail", fetcher);
+    const second = await getCachedAsset(
+      "vi/x/maxres.jpg",
+      "thumbnail",
+      fetcher,
+    );
     expect(second?.contentType).toBe("image/png");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -56,7 +60,9 @@ describe("asset cache", () => {
 
   it("returns null on upstream failure with no prior entry", async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 502 }));
-    expect(await getCachedAsset("vi/y/maxres.jpg", "thumbnail", fetcher)).toBeNull();
+    expect(
+      await getCachedAsset("vi/y/maxres.jpg", "thumbnail", fetcher),
+    ).toBeNull();
   });
 
   it("shares one upstream fetch across concurrent readers", async () => {

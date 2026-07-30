@@ -1,10 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ASSIGNABLE_NAV,
-  navItemByKey,
-} from "@/components/shell/nav-config";
+import { ASSIGNABLE_NAV, navItemByKey } from "@/components/shell/nav-config";
 import { DragHandleIcon, XIcon } from "@/components/videos/video-action-icons";
 import { useRowDrag } from "@/components/videos/use-row-drag";
 import {
@@ -116,7 +113,9 @@ export function BottomNavEditor() {
                 disabled={!canRemove}
                 onClick={() => save(bar.filter((k) => k !== key))}
                 className="flex h-7 w-7 items-center justify-center rounded-full text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-30"
-                title={canRemove ? "Remove from tab bar" : "Keep at least one tab"}
+                title={
+                  canRemove ? "Remove from tab bar" : "Keep at least one tab"
+                }
                 aria-label={`Remove ${item.label} from tab bar`}
               >
                 <XIcon className="h-4 w-4" />
@@ -149,7 +148,9 @@ export function BottomNavEditor() {
                   disabled={!canAdd}
                   onClick={() => save([...bar, item.key])}
                   className="rounded-full border border-[hsl(var(--border))] px-2.5 py-1 text-xs font-semibold text-[hsl(var(--foreground))] transition hover:bg-[hsl(var(--muted))] disabled:opacity-30"
-                  title={canAdd ? "Add to tab bar" : `Up to ${MAX_BOTTOM_NAV} tabs`}
+                  title={
+                    canAdd ? "Add to tab bar" : `Up to ${MAX_BOTTOM_NAV} tabs`
+                  }
                 >
                   Add
                 </button>

@@ -171,36 +171,21 @@ export function cardPreviewPlaybackFromDetail(
 
   const directMuxed = findPreviewMuxedUrl(detail);
   if (directMuxed) {
-    const src = toProxiedOrDirectPlayback(
-      directMuxed,
-      appOrigin,
-      requestHost,
-      detail,
-    );
+    const src = toProxiedOrDirectPlayback(directMuxed, appOrigin, requestHost);
     if (!isYouTubeHopSrc(src)) return { kind: "muxed", src };
     ytHopFallback = { kind: "muxed", src };
   }
 
   const silentVideo = findPreviewVideoOnlyUrl(detail);
   if (silentVideo) {
-    const src = toProxiedOrDirectPlayback(
-      silentVideo,
-      appOrigin,
-      requestHost,
-      detail,
-    );
+    const src = toProxiedOrDirectPlayback(silentVideo, appOrigin, requestHost);
     if (!isYouTubeHopSrc(src)) return { kind: "muxed", src };
     ytHopFallback ??= { kind: "muxed", src };
   }
 
   const raw = buildWatchPlayback(detail);
   if (raw.kind === "hls") {
-    const src = toProxiedOrDirectPlayback(
-      raw.url,
-      appOrigin,
-      requestHost,
-      detail,
-    );
+    const src = toProxiedOrDirectPlayback(raw.url, appOrigin, requestHost);
     return { kind: "hls", src };
   }
   if (raw.kind === "progressive") {
@@ -208,7 +193,6 @@ export function cardPreviewPlaybackFromDetail(
       raw.variants,
       appOrigin,
       requestHost,
-      detail,
     );
     const pick = pickPreviewProxiedVariant(variants);
     if (pick?.t === "muxed") {

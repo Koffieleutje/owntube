@@ -9,10 +9,7 @@ import {
 import { httpBatchLink, splitLink } from "@trpc/client";
 import { useEffect, useState } from "react";
 import superjson from "superjson";
-import {
-  restoreQueryCache,
-  startQueryCachePersist,
-} from "@/lib/query-persist";
+import { restoreQueryCache, startQueryCachePersist } from "@/lib/query-persist";
 import { PlayerProvider } from "@/components/player/player-context";
 import { QueueSync } from "@/components/queue/queue-sync";
 import { FaviconSync } from "@/components/settings/favicon-sync";

@@ -8,7 +8,7 @@ function base(over: Partial<VideoDetail>): VideoDetail {
     title: "t",
     audioSources: [],
     videoSources: [],
-    sourceUsed: "piped",
+    sourceUsed: "invidious",
     mediaProxyBase: "http://192.168.1.11:8092",
     ...over,
   };
@@ -104,12 +104,15 @@ describe("cardPreviewPlaybackFromDetail", () => {
   });
 
   it("falls back to split when no single-url preview exists", () => {
+    // No byte-range indexes, so buildWatchPlayback cannot synthesize /hls and
+    // the preview legitimately falls through to the split builder.
     const detail = base({
       videoSources: [
         {
           url: "http://192.168.1.11:8092/videoplayback?itag=137",
           quality: "1080p",
           videoOnly: true,
+          indexed: false,
           mimeType: 'video/mp4; codecs="avc1.640028"',
           height: 1080,
         },
@@ -119,6 +122,7 @@ describe("cardPreviewPlaybackFromDetail", () => {
           url: "http://192.168.1.11:8092/videoplayback?itag=140",
           quality: "medium",
           mimeType: "audio/mp4",
+          indexed: false,
         },
       ],
     });

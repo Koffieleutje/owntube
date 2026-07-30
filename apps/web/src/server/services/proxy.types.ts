@@ -61,7 +61,7 @@ export const searchVideosResultSchema = z.object({
   videos: z.array(unifiedVideoSchema),
   channels: z.array(unifiedChannelSchema).optional(),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
 });
@@ -70,12 +70,12 @@ export const cachedSearchPayloadSchema = z.object({
   videos: z.array(unifiedVideoSchema),
   channels: z.array(unifiedChannelSchema).optional(),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious"]),
+  sourceUsed: z.enum(["invidious"]),
 });
 
 export type SearchVideosResult = z.infer<typeof searchVideosResultSchema>;
 
-export const upstreamPlaybackSourceSchema = z.enum(["piped", "invidious"]);
+export const upstreamPlaybackSourceSchema = z.enum(["invidious"]);
 
 export type UpstreamPlaybackSource = z.infer<
   typeof upstreamPlaybackSourceSchema
@@ -168,7 +168,7 @@ export const videoDetailSchema = z.object({
   videoSources: z.array(streamSourceSchema),
   /** Subtitle/caption tracks (Invidious `captions[]`); empty/absent when none. */
   captions: z.array(captionTrackSchema).optional(),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   /** Piped `/streams` `proxyUrl` — used to validate same-origin media proxy targets. */
   mediaProxyBase: z.string().url().optional(),
   warning: z.string().optional(),
@@ -179,7 +179,7 @@ export type VideoDetail = z.infer<typeof videoDetailSchema>;
 
 export const relatedVideosResultSchema = z.object({
   videos: z.array(unifiedVideoSchema),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
 });
@@ -220,7 +220,7 @@ export const videoCommentsResultSchema = z.object({
   disabled: z.boolean().optional(),
   continuation: z.string().nullable().optional(),
   commentCount: z.number().int().nonnegative().optional(),
-  sourceUsed: z.enum(["piped", "invidious"]),
+  sourceUsed: z.enum(["invidious"]),
   warning: z.string().optional(),
 });
 
@@ -241,7 +241,7 @@ export type TrendingInput = z.infer<typeof trendingInputSchema>;
 
 export const trendingVideosResultSchema = z.object({
   videos: z.array(unifiedVideoSchema),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
 });
@@ -269,7 +269,7 @@ export type ShortsFeedInput = z.infer<typeof shortsFeedInputSchema>;
 export const shortsFeedResultSchema = z.object({
   videos: z.array(unifiedVideoSchema),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
 });
@@ -279,12 +279,12 @@ export type ShortsFeedResult = z.infer<typeof shortsFeedResultSchema>;
 export const cachedShortsFeedPayloadSchema = z.object({
   videos: z.array(unifiedVideoSchema),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious"]),
+  sourceUsed: z.enum(["invidious"]),
 });
 
 export const cachedTrendingPayloadSchema = z.object({
   videos: z.array(unifiedVideoSchema),
-  sourceUsed: z.enum(["piped", "invidious"]),
+  sourceUsed: z.enum(["invidious"]),
 });
 
 export const channelTabSchema = z.enum(["videos", "shorts"]);
@@ -309,7 +309,7 @@ export const channelPageResultSchema = z.object({
   subscriberCount: z.number().optional(),
   videos: z.array(unifiedVideoSchema),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious", "cache"]),
+  sourceUsed: z.enum(["invidious", "cache"]),
   warning: z.string().optional(),
   stale: z.boolean().optional(),
 });
@@ -325,5 +325,5 @@ export const cachedChannelPayloadSchema = z.object({
   subscriberCount: z.number().optional(),
   videos: z.array(unifiedVideoSchema),
   continuation: z.string().nullable().optional(),
-  sourceUsed: z.enum(["piped", "invidious"]),
+  sourceUsed: z.enum(["invidious"]),
 });

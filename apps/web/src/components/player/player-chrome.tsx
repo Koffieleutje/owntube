@@ -394,9 +394,7 @@ export function PlayerChrome({
             // In fullscreen add the top safe-area inset so the title/actions row
             // clears the device status icons (e.g. iPad clock/battery); the
             // gradient grows to match. Non-fullscreen keeps the compact pt-2.
-            fsActive
-              ? "pt-[calc(env(safe-area-inset-top)+0.5rem)]"
-              : "pt-2",
+            fsActive ? "pt-[calc(env(safe-area-inset-top)+0.5rem)]" : "pt-2",
             chromeShown ? "opacity-100" : "opacity-0",
           )}
           style={{
@@ -509,7 +507,9 @@ export function PlayerChrome({
               "px-3 pt-12 sm:px-4",
               // In fullscreen lift the scrubber above the home indicator /
               // rounded corners; inline keeps the compact pb-2.
-              fsActive ? "pb-[calc(0.5rem+env(safe-area-inset-bottom))]" : "pb-2",
+              fsActive
+                ? "pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+                : "pb-2",
             )}
           >
             <ProgressBar

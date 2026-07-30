@@ -206,8 +206,7 @@ export function useNativeAdapter(opts: {
   // idempotent for the HLS-VOD case.
   useEffect(() => {
     const v = videoRef.current;
-    const ms =
-      typeof navigator !== "undefined" ? navigator.mediaSession : null;
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : null;
     if (!v || !ms) return;
     const syncPlaybackState = () => {
       ms.playbackState = v.paused ? "paused" : "playing";

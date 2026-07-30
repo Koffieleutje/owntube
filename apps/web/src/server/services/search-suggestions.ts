@@ -129,7 +129,6 @@ export async function fetchSearchQuerySuggestions(
     }
   }
 
-
   return searchSuggestionsResultSchema.parse({
     suggestions: [],
     sourceUsed: null,

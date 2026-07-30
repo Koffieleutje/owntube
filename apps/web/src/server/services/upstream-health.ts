@@ -1,4 +1,4 @@
-export type UpstreamSourceKind = "piped" | "invidious";
+export type UpstreamSourceKind = "invidious";
 
 export type UpstreamHealthStatus =
   | "healthy"

@@ -12,7 +12,7 @@ type FetchJsonOptions = {
    * completely empty body instead of `[]` when there are no related items.
    */
   emptyBodyAs?: unknown;
-  source?: "piped" | "invidious";
+  source?: "invidious";
   baseUrl?: string;
 };
 

@@ -72,7 +72,8 @@ export function PlayerHost() {
       cancelIdleCallback?: (id: number) => void;
     };
     const schedule =
-      w.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500));
+      w.requestIdleCallback ??
+      ((cb: () => void) => window.setTimeout(cb, 1500));
     const cancel = w.cancelIdleCallback ?? window.clearTimeout;
     const id = schedule(() => {
       void import("@/components/player/video-player");
@@ -469,8 +470,7 @@ export function PlayerHost() {
   useEffect(() => {
     if (mode !== "full" || !isIosLike) return;
     const id = requestAnimationFrame(() => {
-      const v =
-        containerRef.current?.querySelector<HTMLVideoElement>("video");
+      const v = containerRef.current?.querySelector<HTMLVideoElement>("video");
       if (!v || !v.paused || v.readyState < 2) return;
       try {
         v.currentTime = Math.max(0, v.currentTime - 0.05);

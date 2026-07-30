@@ -100,7 +100,10 @@ function formatRelativeFromNow(secondsSinceEpoch: number): string | null {
 export function formatPublishedAbsoluteLabel(
   publishedAt: number | undefined,
 ): string | null {
-  if (typeof publishedAt !== "number" || !isPlausiblePublishedUnix(publishedAt)) {
+  if (
+    typeof publishedAt !== "number" ||
+    !isPlausiblePublishedUnix(publishedAt)
+  ) {
     return null;
   }
   const d = new Date(Math.floor(publishedAt) * 1000);

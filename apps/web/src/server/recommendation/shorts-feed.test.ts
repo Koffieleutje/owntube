@@ -113,7 +113,7 @@ describe("fetchShortsFeedForViewer generic recycle", () => {
         },
       ],
       continuation: undefined,
-      sourceUsed: "piped" as const,
+      sourceUsed: "invidious" as const,
     });
 
     const result = await fetchShortsFeedForViewer(
@@ -132,7 +132,7 @@ describe("fetchShortsFeedForViewer generic recycle", () => {
     vi.spyOn(proxy, "fetchShortsFeed").mockResolvedValue({
       videos: [],
       continuation: undefined,
-      sourceUsed: "piped" as const,
+      sourceUsed: "invidious" as const,
     });
 
     const result = await fetchShortsFeedForViewer(
@@ -186,7 +186,7 @@ describe("fetchShortsFeedForViewer shelf purpose", () => {
     vi.spyOn(proxy, "fetchShortsFeed").mockResolvedValue({
       videos: upstream,
       continuation: undefined,
-      sourceUsed: "piped" as const,
+      sourceUsed: "invidious" as const,
     });
 
     const result = await fetchShortsFeedForViewer(
@@ -223,7 +223,7 @@ describe("fetchShortsFeedForViewer shelf purpose", () => {
             durationSeconds: 42,
           },
         ],
-        sourceUsed: "piped" as const,
+        sourceUsed: "invidious" as const,
       });
 
     const result = await fetchShortsFeedForViewer(

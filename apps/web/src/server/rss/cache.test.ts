@@ -42,7 +42,9 @@ describe("rss cache", () => {
 
   it("blocks on the live fetch only for a never-seen channel, then reads SQLite", async () => {
     const { db, sqlite } = createTestDb();
-    const fetchFn = stubFetchXml([rssXml("vid00000001", "2026-07-01T00:00:00Z")]);
+    const fetchFn = stubFetchXml([
+      rssXml("vid00000001", "2026-07-01T00:00:00Z"),
+    ]);
 
     const first = await getChannelRssEntries(db, CHANNEL);
     expect(first).toHaveLength(1);
@@ -63,7 +65,9 @@ describe("rss cache", () => {
     // Expire the row.
     db.update(videoCache).set({ expiresAt: 1 }).run();
     clearRssInFlight();
-    const fetchFn = stubFetchXml([rssXml("vid00000002", "2026-07-02T00:00:00Z")]);
+    const fetchFn = stubFetchXml([
+      rssXml("vid00000002", "2026-07-02T00:00:00Z"),
+    ]);
 
     const served = await getChannelRssEntries(db, CHANNEL);
     expect(served[0]?.videoId).toBe("vid00000001"); // stale answer, no blocking
@@ -83,7 +87,10 @@ describe("rss cache", () => {
     await refreshChannelRss(db, CHANNEL);
     clearRssInFlight();
 
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
     const entries = await refreshChannelRss(db, CHANNEL);
     expect(entries[0]?.videoId).toBe("vid00000001");
     sqlite.close();
@@ -91,7 +98,7 @@ describe("rss cache", () => {
 
   it("caches an absent long-form window instead of refetching each read", async () => {
     const { db, sqlite } = createTestDb();
-    const fetchFn = stubFetchXml(["<?xml version=\"1.0\"?><feed></feed>"]);
+    const fetchFn = stubFetchXml(['<?xml version="1.0"?><feed></feed>']);
 
     expect(await getLongFormWindow(db, CHANNEL)).toBeNull();
     expect(await getLongFormWindow(db, CHANNEL)).toBeNull();
@@ -101,7 +108,9 @@ describe("rss cache", () => {
 
   it("shares one upstream fetch across concurrent readers", async () => {
     const { db, sqlite } = createTestDb();
-    const fetchFn = stubFetchXml([rssXml("vid00000001", "2026-07-01T00:00:00Z")]);
+    const fetchFn = stubFetchXml([
+      rssXml("vid00000001", "2026-07-01T00:00:00Z"),
+    ]);
 
     const [a, b, c] = await Promise.all([
       getChannelRssEntries(db, CHANNEL),

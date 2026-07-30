@@ -50,7 +50,7 @@ describe("collectRelatedVideoCandidates", () => {
             durationSeconds: 120,
           },
         ],
-        sourceUsed: "piped" as const,
+        sourceUsed: "invidious" as const,
       }));
 
     const seeds = [
@@ -77,7 +77,7 @@ describe("collectRelatedVideoCandidates", () => {
         { videoId: "watched", title: "Watched" },
         { videoId: "fresh", title: "Fresh" },
       ],
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     });
 
     const tagged = await collectRelatedVideoCandidates(
@@ -100,7 +100,7 @@ describe("collectRelatedVideoCandidates", () => {
         { videoId: "long", title: "Long", durationSeconds: 600 },
         { videoId: "short", title: "Clip #shorts", durationSeconds: 30 },
       ],
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     });
 
     const tagged = await collectRelatedVideoCandidates(
@@ -142,7 +142,7 @@ describe("expandScoredPoolWithRelatedCandidates", () => {
   it("merges and boosts new related rows", async () => {
     vi.spyOn(proxy, "fetchRelatedVideos").mockResolvedValue({
       videos: [{ videoId: "new-related", title: "New related topic" }],
-      sourceUsed: "piped",
+      sourceUsed: "invidious",
     });
 
     const scored: ScoredVideo[] = [

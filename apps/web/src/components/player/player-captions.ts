@@ -173,7 +173,9 @@ export function usePlayerCaptions(
           continue;
         }
         const mode: TextTrackMode =
-          wantLabel !== null && tt.label === wantLabel ? activeMode : "disabled";
+          wantLabel !== null && tt.label === wantLabel
+            ? activeMode
+            : "disabled";
         if (tt.mode !== mode) tt.mode = mode;
       }
     };

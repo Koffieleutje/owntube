@@ -100,7 +100,10 @@ export function useShortsNativeAutoplay(
     for (const e of readyEvents) el.addEventListener(e, tryPlay);
 
     tryPlay();
-    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 10_000);
+    const stopPoll = window.setTimeout(
+      () => window.clearInterval(poll),
+      10_000,
+    );
 
     return () => {
       startedOnce = true;

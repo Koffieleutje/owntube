@@ -85,7 +85,9 @@ export default async function HomePage() {
   const settings =
     ctx.userId != null ? getUserSettings(ctx.db, ctx.userId) : null;
   const blocks: HomeBlock[] = settings?.homeBlocks ?? DEFAULT_HOME_BLOCKS;
-  const region = normalizeTrendingRegionStored(settings?.trendingRegion ?? "US");
+  const region = normalizeTrendingRegionStored(
+    settings?.trendingRegion ?? "US",
+  );
 
   await Promise.allSettled([
     helpers.settings.get.prefetch(),

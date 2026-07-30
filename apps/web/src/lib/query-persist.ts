@@ -52,7 +52,8 @@ function idbGet(db: IDBDatabase): Promise<Snapshot | null> {
   return new Promise((resolve) => {
     try {
       const req = db.transaction(STORE, "readonly").objectStore(STORE).get(KEY);
-      req.onsuccess = () => resolve((req.result as Snapshot | undefined) ?? null);
+      req.onsuccess = () =>
+        resolve((req.result as Snapshot | undefined) ?? null);
       req.onerror = () => resolve(null);
     } catch {
       resolve(null);

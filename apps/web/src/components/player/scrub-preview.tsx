@@ -88,7 +88,11 @@ function ScrubPreviewVisual({
       return (
         <div
           className="relative shrink-0 overflow-hidden rounded-md bg-zinc-950 shadow-lg ring-1 ring-white/20"
-          style={{ width, aspectRatio: aspect, ...spritePercentBackground(frame) }}
+          style={{
+            width,
+            aspectRatio: aspect,
+            ...spritePercentBackground(frame),
+          }}
           aria-hidden
         >
           {/* biome-ignore lint/performance/noImgElement: probe storyboard sheet load */}

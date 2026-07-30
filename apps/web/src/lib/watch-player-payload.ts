@@ -34,19 +34,13 @@ export function buildVideoPlayerPayloadFromDetail(
     return {
       payload: {
         mode: "hls",
-        src: toProxiedOrDirectPlayback(
-          rawPlayback.url,
-          appOrigin,
-          requestHost,
-          detail,
-        ),
+        src: toProxiedOrDirectPlayback(rawPlayback.url, appOrigin, requestHost),
         dvr: detail.isPostLiveDvr === true,
       },
       poster: toProxiedOrDirectPoster(
         detail.thumbnailUrl,
         appOrigin,
         requestHost,
-        detail,
       ),
       onlyDashOrUnsupported,
     };
@@ -56,7 +50,6 @@ export function buildVideoPlayerPayloadFromDetail(
       rawPlayback.variants,
       appOrigin,
       requestHost,
-      detail,
     );
     return {
       payload: {
@@ -67,7 +60,6 @@ export function buildVideoPlayerPayloadFromDetail(
         detail.thumbnailUrl,
         appOrigin,
         requestHost,
-        detail,
       ),
       onlyDashOrUnsupported,
     };
@@ -78,7 +70,6 @@ export function buildVideoPlayerPayloadFromDetail(
       detail.thumbnailUrl,
       appOrigin,
       requestHost,
-      detail,
     ),
     onlyDashOrUnsupported,
   };

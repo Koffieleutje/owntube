@@ -253,7 +253,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
               rawPlayback.url,
               mediaOrigin,
               requestHost,
-              detail,
             ),
             dvr: detail.isPostLiveDvr === true,
           }
@@ -264,7 +263,6 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
                 rawPlayback.variants,
                 mediaOrigin,
                 requestHost,
-                detail,
               ),
             }
           : null
@@ -282,12 +280,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
     : undefined;
   const poster =
     detail &&
-    toProxiedOrDirectPoster(
-      detail.thumbnailUrl,
-      mediaOrigin,
-      requestHost,
-      detail,
-    );
+    toProxiedOrDirectPoster(detail.thumbnailUrl, mediaOrigin, requestHost);
   const chapters = parseChaptersFromDescription(
     detail?.description,
     detail?.durationSeconds,
