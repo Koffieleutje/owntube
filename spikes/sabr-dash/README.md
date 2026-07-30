@@ -53,96 +53,91 @@ through invidious-companion.
 
 **Captions are therefore a reason the companion cannot simply be dropped.**
 
-### Known limitation: long videos stall part-way
+### Known limitation: long videos need attestation
 
-**Correction.** An earlier version of this file blamed container/format selection
-(“mp4 fails, webm works”). That was wrong, and the mistake is worth recording:
-every one of those comparisons aborted the read after 200–400 KB, so they only
-ever exercised the first few seconds. Re-probing each itag individually shows
-**all six 360p/240p formats work** — mp4/avc1, mp4/av01 and webm/vp9 alike.
+Short videos convert end to end. `dQw4w9WgXcQ` (213s) pulls **complete** —
+240 MB, 38 fragments, no interruption. Videos of ~25 minutes and up stop after
+about **60 seconds of media** with `Cannot proceed with stream: attestation
+required`:
 
-The real fault is duration. On `0e3GPea1Tyg` (**1541s**, not the 213s of the
-other demo video) the stream advances `0 → 19.5s → 36.5s → 57.2s` and then the
-server returns empty responses forever:
-
-```
-[DEBUG] Received SABR context update (type: 5, sendByDefault: true)
-[DEBUG] Respecting server backoff policy: waiting 4000ms before request
-[DEBUG] Starting new segment fetch at playback position: 57187ms
-[WARN]  Segment fetch attempt 1/3 failed - No media parts or protocol updates received
-```
-
-Established about it:
-
-- **Not our fork.** Stock `googlevideo@4.1.1` fails identically at the same point.
-- **Not a missing po_token.** One is attached, bound either way — though see the
-  root cause below: the server *escalates* the attestation requirement mid-stream,
-  and re-minting on that signal does not clear it.
-- **Not the client.** WEB / ANDROID / IOS / TV / ANDROID_VR all stall the same.
-- **Not fixed by restarting.** Reopening a session at the stall point (using the
-  seek patch) yields exactly one more segment, then stalls again — 13 passes,
-  still 57s.
-- **Not fixed by honouring the backoff harder.** Re-reading
-  `nextRequestPolicy.backoffTimeMs` on every retry, the way yt-dlp's
-  `_check_vod_ad_wait` does, changes nothing; the server sends no new policy at
-  the stall.
-- **yt-dlp downloads the same video completely** (75 MB), so it is solvable.
-
-### Root cause
-
-googlevideo drops unknown UMP parts silently — the dispatcher is
-`if (handler) handler(part)` with no `else` — so the interesting half of the
-server's answer was invisible. Logging every part received makes the stall
-response identical on every retry:
-
-```
-STALL DIAGNOSTIC: protectionStatus=2 parts=[47,58,52,53,35]
-```
-
-Decoded against yt-dlp's `UMPPartId`:
-
-| id | part | googlevideo |
+| video | duration | result |
 |---|---|---|
-| 47 | `PLAYBACK_START_POLICY` | **ignored** |
-| **58** | **`STREAM_PROTECTION_STATUS`** | handled → **status 2** |
-| 52 | `REQUEST_IDENTIFIER` | **ignored** |
-| 53 | `REQUEST_CANCELLATION_POLICY` | **ignored** |
-| 35 | `NEXT_REQUEST_POLICY` | handled |
+| `dQw4w9WgXcQ` | 213s | **complete**, 38 fragments |
+| `0e3GPea1Tyg` | 1541s | stops at ~12 fragments (~63s) |
+| `Li8SgZcbSOI` | 1484s | stops at ~14 fragments |
+| `Y07j3hXAI-g` | 3116s | stops at ~12 fragments |
 
-No media, no cuepoint, no `SABR_SEEK`, no redirect. **The server escalates
-attestation mid-stream**: a session that has been served happily for 57s is told
-its protection status is now 2, and `SabrStream` treats that as fatal
-(`status >= 2` with no media part → throw).
+**yt-dlp fails on these too, at the identical point.** Running the reference
+implementation against `0e3GPea1Tyg` with the same SABR format stops at
+799,770 bytes — the same ~12 fragments we get — with *"Stream stalled; no
+activity detected in 3 consecutive requests"*. So this is not a defect in our
+converter or in `googlevideo`; it is what YouTube serves an unattested client.
+The policy looks deliberate: stream a short video freely, preview a long one for
+about a minute, then attest.
 
-What does **not** clear it: re-minting a fresh po_token on the escalation signal
-(tried, forced past the cache, both bindings), and no client avoids it — WEB,
-ANDROID, IOS, TV and ANDROID_VR all stop at the same 57s.
+`streamProtectionStatus` is the signal, and its values are
+`1 = OK`, `2 = ATTESTATION_PENDING`, `3 = ATTESTATION_REQUIRED`. With a token
+attached we reach **3**, which in yt-dlp's mapping means the token was seen and
+judged **invalid** rather than missing. Minting is the open problem, not the
+protocol — and invidious-companion already mints tokens this deployment streams
+DASH with every day, so a valid token is demonstrably obtainable on this host.
 
-The remaining asymmetry with yt-dlp is that **it handles 13 UMP parts googlevideo
-ignores**, three of which are in the very response that stalls us
-(`PLAYBACK_START_POLICY`, `REQUEST_IDENTIFIER`, `REQUEST_CANCELLATION_POLICY`):
+#### Corrections
 
-```
-ALLOWED_CACHED_FORMATS  CUEPOINT_LIST  LIVE_METADATA  PAUSE_BW_SAMPLING_HINT
-PLAYBACK_START_POLICY   PREWARM_CONNECTION  REQUEST_CANCELLATION_POLICY
-REQUEST_IDENTIFIER      REQUEST_PIPELINING  SABR_SEEK  SELECTABLE_FORMATS
-SNACKBAR_MESSAGE        START_BW_SAMPLING_HINT
-```
+Four claims in earlier versions of this file were wrong. They are recorded
+because each one sent the investigation somewhere useless.
 
-A client that never acknowledges request identity or cancellation state
-plausibly reads as unattested once the server decides to escalate. That is a
-hypothesis, not a demonstrated cause — but it is the only structural difference
-left between us and an implementation that succeeds on this exact video.
+- **"yt-dlp downloads the same video completely (75 MB), so it is solvable."**
+  The premise of the whole hunt, and false. That 75 MB `.webm` came from a
+  *non-SABR* HTTPS download; yt-dlp only picks SABR formats under
+  `--extractor-args youtube:formats=duplicate`. Forced down the SABR path,
+  yt-dlp fails exactly where we do.
+- **"The server escalates attestation mid-stream, and the cause is the 13 UMP
+  parts googlevideo ignores."** yt-dlp ignores those same parts — its
+  `_IGNORED_PARTS` tuple lists `REQUEST_IDENTIFIER`,
+  `REQUEST_CANCELLATION_POLICY` and `PLAYBACK_START_POLICY` explicitly, and it
+  excludes them from a debug log rather than acting on them.
+- **"Not the client — WEB / ANDROID / IOS / TV / ANDROID_VR all stall the
+  same."** They all stalled because they were all WEB.
+  `getBasicInfo(id, client)` fetches the player response as that client but does
+  **not** mutate `session.context.client`, so the `clientInfo` handed to the SABR
+  server said `clientName: 1` every time while carrying another client's
+  ustreamer config. Naming the client properly changed throughput from 3.1 MB in
+  61s to 22 MB in 7s.
+- **"A ~60s grace window applies to every session."** It does not; a 213s video
+  streams to the end.
 
-### Next step
+#### Two real bugs found along the way
 
-Implement handlers for those parts and echo their state back in the following
-request, mirroring yt-dlp's processor. That is a targeted change to one known
-file rather than more black-box probing.
+Both are fixed in `googlevideo-seek.patch` and both are genuine upstream defects,
+independent of attestation.
 
-So the converter is proven on short VOD and **not yet usable for long videos**.
-That is the blocker to close before wiring it into anything — almost every real
-video is longer than 57s.
+- **`bufferedRanges` was a delta, not a buffer.** `buildBufferedRanges` built its
+  ranges from `lastMediaHeaders` and then cleared it, so each request described
+  only what had arrived since the previous one — segments 1-4, then 5-7, then
+  8-11, each *replacing* its predecessor. yt-dlp sends every consumed range for
+  the lifetime of the session. Now so do we, merged by yt-dlp's rule: extend the
+  range ending at `sequenceNumber - 1`, otherwise open a new one, which keeps the
+  gap a seek leaves as a gap.
+- **Millisecond ticks were labelled with the media timescale.** The range carried
+  `startTicks`/`durationTicks` in milliseconds but quoted the media header's
+  `timescale` (commonly 24000), understating every buffered range by ~24x. ms
+  ticks now say `timescale: 1000`, as yt-dlp's do.
+
+A third change tightens the playback position: it was the *sum* of downloaded
+segment durations, which drifts a few ms past the end of the buffered range and
+leaves the client claiming to play content it has not admitted to holding. It is
+now the range end exactly.
+
+None of the three fixes the attestation cut-off — verified — but the seek,
+resume and timeline checks all still pass, and the 213s conversion is unchanged
+at 0 timeline mismatches.
+
+#### Next step
+
+Get a po_token the server accepts, then re-test. Until that is done, treat this
+converter as **proven for short VOD and unproven beyond about a minute of any
+long video**.
 
 ## What it proves
 

@@ -1,8 +1,78 @@
 diff --git a/src/core/SabrStream.ts b/src/core/SabrStream.ts
-index f1fef22..9d2bd57 100644
+index f1fef22..8e32249 100644
 --- a/src/core/SabrStream.ts
 +++ b/src/core/SabrStream.ts
-@@ -358,7 +358,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -58,6 +58,19 @@ export interface InitializedFormat {
+   formatInitializationMetadata: FormatInitializationMetadata;
+   downloadedSegments: Map<number, Segment>;
+   lastMediaHeaders: MediaHeader[];
++  /**
++   * Every range of this format the client has taken delivery of, cumulatively,
++   * for the lifetime of the session.
++   *
++   * This is what `bufferedRanges` in the request is built from, and it has to be
++   * the whole history rather than the most recent delta: the server decides what
++   * to send next by subtracting what the client says it holds from what it needs,
++   * so a client that keeps forgetting eventually describes a buffer that cannot
++   * be reconciled with its own playback position, and the server answers with no
++   * media at all. Disjoint ranges are kept separate, which is also how a seek is
++   * expressed.
++   */
++  consumedRanges: BufferedRange[];
+ }
+ 
+ export interface SabrStreamState {
+@@ -67,13 +80,15 @@ export interface SabrStreamState {
+   activeSabrContexts: number[];
+   sabrContextUpdates: Array<[ number, SabrContextUpdate ]>;
+   formatToDiscard?: string;
+-  cachedBufferedRanges: BufferedRange[];
++  /** Synthetic ranges standing in for content skipped by `startAtMs`. */
++  seededBufferedRanges: BufferedRange[];
+   nextRequestPolicy?: NextRequestPolicy;
+   initializedFormats: Array<{
+     formatKey: string;
+     formatInitializationMetadata: FormatInitializationMetadata;
+     downloadedSegments: Array<[ number, Segment ]>;
+     lastMediaHeaders: MediaHeader[];
++    consumedRanges?: BufferedRange[];
+   }>;
+ }
+ 
+@@ -141,7 +156,12 @@ export class SabrStream extends EventEmitterLike {
+   private partialSegmentQueue = new Map<number, Segment>();
+   private requestNumber = 0;
+   private durationMs = Infinity;
+-  private cachedBufferedRanges: BufferedRange[] | undefined;
++  /**
++   * Synthetic ranges covering content `startAtMs` skipped past. They are not
++   * consumed from the server, so no format owns them, but they must be quoted
++   * on every request or the server has no reason to start where we asked.
++   */
++  private seededBufferedRanges: BufferedRange[] = [];
+   private formatToDiscard?: string;
+   private mediaHeadersProcessed = false;
+   private mainFormat?: InitializedFormat;
+@@ -305,7 +325,8 @@ export class SabrStream extends EventEmitterLike {
+         formatKey,
+         formatInitializationMetadata: format.formatInitializationMetadata,
+         downloadedSegments: Array.from(format.downloadedSegments.entries()),
+-        lastMediaHeaders: format.lastMediaHeaders
++        lastMediaHeaders: format.lastMediaHeaders,
++        consumedRanges: format.consumedRanges
+       });
+     }
+ 
+@@ -315,7 +336,7 @@ export class SabrStream extends EventEmitterLike {
+       activeSabrContexts: Array.from(this.activeSabrContextTypes),
+       sabrContextUpdates: Array.from(this.sabrContexts.entries()),
+       formatToDiscard: this.formatToDiscard,
+-      cachedBufferedRanges: this.cachedBufferedRanges || [],
++      seededBufferedRanges: this.seededBufferedRanges,
+       nextRequestPolicy: this.nextRequestPolicy,
+       initializedFormats,
+       playerTimeMs
+@@ -358,7 +379,10 @@ export class SabrStream extends EventEmitterLike {
        this._errored = false;
        this._aborted = false;
  
@@ -14,13 +84,13 @@ index f1fef22..9d2bd57 100644
  
        if (options.state && this.restoreState(videoFormat, audioFormat, options.state)) {
          playerTimeMs = options.state.playerTimeMs || 0;
-@@ -367,6 +370,20 @@ export class SabrStream extends EventEmitterLike {
+@@ -367,6 +391,20 @@ export class SabrStream extends EventEmitterLike {
        const maxRetries = options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
        const enabledTrackTypesBitfield = options.enabledTrackTypes ?? EnabledTrackTypes.VIDEO_AND_AUDIO;
  
 +      if (options.startAtMs && !options.state) {
 +        const seekMs = options.startAtMs;
-+        this.cachedBufferedRanges = [ videoFormat, audioFormat ]
++        this.seededBufferedRanges = [ videoFormat, audioFormat ]
 +          .filter(Boolean)
 +          .map((f) => ({
 +            formatId: { itag: f.itag, lastModified: f.lastModified, xtags: f.xtags },
@@ -35,7 +105,7 @@ index f1fef22..9d2bd57 100644
        const abrState: Record<string, any> = {
          playerTimeMs,
          audioTrackId: audioFormat.audioTrackId,
-@@ -400,7 +417,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -400,7 +438,10 @@ export class SabrStream extends EventEmitterLike {
          if (this.mainFormat)
            this.validateAndCorrectDuration(this.mainFormat.formatInitializationMetadata);
  
@@ -43,11 +113,57 @@ index f1fef22..9d2bd57 100644
 +        // Fall back to the requested start position rather than 0: on the first
 +        // iteration no format is initialized yet, and resetting here discards
 +        // both `startAtMs` and a restored state's position.
-+        abrState.playerTimeMs = this.mainFormat ? getTotalDownloadedDuration(this.mainFormat) : playerTimeMs;
++        abrState.playerTimeMs = this.getConsumedPlayerTimeMs() ?? playerTimeMs;
  
          const { shouldStop } = this.checkForStall({
            playerTimeMs: abrState.playerTimeMs,
-@@ -615,6 +635,7 @@ export class SabrStream extends EventEmitterLike {
+@@ -465,7 +506,7 @@ export class SabrStream extends EventEmitterLike {
+     const expectedAudioFormatKey = FormatKeyUtils.fromFormat(audioFormat) || '';
+ 
+     for (const format of state.initializedFormats) {
+-      const { formatKey, formatInitializationMetadata, downloadedSegments, lastMediaHeaders } = format;
++      const { formatKey, formatInitializationMetadata, downloadedSegments, lastMediaHeaders, consumedRanges } = format;
+ 
+       if (formatKey !== expectedVideoFormatKey && formatKey !== expectedAudioFormatKey) {
+         this.logger.warn(TAG, `State contains an unexpected format key "${formatKey}". It will be ignored.`);
+@@ -475,7 +516,8 @@ export class SabrStream extends EventEmitterLike {
+       this.initializedFormatsMap.set(formatKey, {
+         formatInitializationMetadata,
+         downloadedSegments: new Map(downloadedSegments),
+-        lastMediaHeaders: lastMediaHeaders || []
++        lastMediaHeaders: lastMediaHeaders || [],
++        consumedRanges: consumedRanges || []
+       });
+     }
+ 
+@@ -490,7 +532,7 @@ export class SabrStream extends EventEmitterLike {
+     this.activeSabrContextTypes = new Set(state.activeSabrContexts || []);
+     this.sabrContexts = new Map(state.sabrContextUpdates || []);
+     this.formatToDiscard = state.formatToDiscard;
+-    this.cachedBufferedRanges = state.cachedBufferedRanges || [];
++    this.seededBufferedRanges = state.seededBufferedRanges || [];
+     this.nextRequestPolicy = state.nextRequestPolicy;
+ 
+     return true;
+@@ -601,12 +643,12 @@ export class SabrStream extends EventEmitterLike {
+     const initializedVideoFormat = this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(selectedVideoFormat) || '');
+     const initializedAudioFormat = this.initializedFormatsMap.get(FormatKeyUtils.fromFormat(selectedAudioFormat) || '');
+ 
+-    // Cache buffered ranges in case the request fails, allowing retries to use the same values.
+-    if (!this.cachedBufferedRanges?.length) {
+-      this.cachedBufferedRanges = this.buildBufferedRanges(initializedVideoFormat, initializedAudioFormat);
+-    }
++    // Rebuild every request. `buildBufferedRanges` folds new headers into the
++    // cumulative state and clears them, so a retry naturally re-sends what the
++    // failed attempt sent without needing a separate cache.
++    const bufferedRanges = this.buildBufferedRanges(initializedVideoFormat, initializedAudioFormat);
+ 
+-    const requestBody = this.buildRequestBody(abrState, selectedAudioFormat, selectedVideoFormat);
++    const requestBody = this.buildRequestBody(abrState, selectedAudioFormat, selectedVideoFormat, bufferedRanges);
+ 
+     this.mediaHeadersProcessed = false;
+     const response = await this.makeStreamingRequest(requestBody);
+@@ -615,6 +657,7 @@ export class SabrStream extends EventEmitterLike {
      if (!processedParts.length) {
        throw new Error('No valid parts received from server.');
      } else if ((this.streamProtectionStatus?.status || 0) >= 2 && !processedParts.includes(UMPPartId.MEDIA)) {
@@ -55,27 +171,176 @@ index f1fef22..9d2bd57 100644
        throw new Error('No media parts or protocol updates received from server.');
      }
  
-@@ -695,6 +716,10 @@ export class SabrStream extends EventEmitterLike {
+@@ -628,17 +671,22 @@ export class SabrStream extends EventEmitterLike {
+   }
+ 
+   /**
+-   * Constructs an array of `BufferedRange` objects from initialized formats.
++   * Folds any newly received media headers into each format's cumulative
++   * `consumedRanges`, then returns the full buffered state to advertise.
++   *
++   * Calling this twice in a row is a no-op the second time: the headers it
++   * consumes are cleared as it goes, so a retry re-sends exactly what the failed
++   * attempt sent.
++   *
+    * @param initializedVideoFormat - The initialized video format, if available.
+    * @param initializedAudioFormat - The initialized audio format, if available.
+-   * @returns An array of `BufferedRange` objects.
++   * @returns Every `BufferedRange` the client currently holds.
+    * @private
+    */
+   private buildBufferedRanges(
+     initializedVideoFormat?: InitializedFormat,
+     initializedAudioFormat?: InitializedFormat
+   ): BufferedRange[] {
+-    const bufferedRanges: BufferedRange[] = [];
+     const formats = [ initializedVideoFormat, initializedAudioFormat ];
+ 
+     for (const initializedFormat of formats) {
+@@ -650,29 +698,90 @@ export class SabrStream extends EventEmitterLike {
+         // Skip formats marked for discarding; a dummy range will be created for them later.
+         FormatKeyUtils.fromFormatInitializationMetadata(initializedFormat.formatInitializationMetadata) === this.formatToDiscard
+       ) {
++        initializedFormat.lastMediaHeaders = [];
+         continue;
+       }
+ 
+-      const mediaHeaders = initializedFormat.lastMediaHeaders;
+-      const durationMs = mediaHeaders.reduce((sum, header) => sum + (parseInt(header.durationMs || '0')), 0);
++      for (const header of initializedFormat.lastMediaHeaders) {
++        this.recordConsumedSegment(initializedFormat, header);
++      }
++
++      initializedFormat.lastMediaHeaders = [];
++    }
++
++    return [
++      ...this.seededBufferedRanges,
++      ...formats.flatMap((format) => format?.consumedRanges ?? [])
++    ];
++  }
++
++  /**
++   * The playback position to advertise: the end of the buffered range the player
++   * is currently inside.
++   *
++   * Summing segment durations instead drifts a few milliseconds ahead of the
++   * range end, which puts the advertised position outside the advertised buffer
++   * — a client claiming to play content it has not admitted to holding.
++   *
++   * @returns The position in ms, or undefined if nothing is buffered yet.
++   * @private
++   */
++  private getConsumedPlayerTimeMs(): number | undefined {
++    if (!this.mainFormat?.consumedRanges.length)
++      return undefined;
++
++    const ends = this.mainFormat.consumedRanges.map(
++      (range) => parseInt(range.startTimeMs || '0') + parseInt(range.durationMs || '0')
++    );
+ 
+-      bufferedRanges.push({
++    return Math.max(...ends);
++  }
++
++  /**
++   * Extends the range this segment continues, or opens a new one if it does not
++   * continue any — which is how a gap left by a seek stays a gap.
++   * @private
++   */
++  private recordConsumedSegment(initializedFormat: InitializedFormat, header: MediaHeader): void {
++    const sequenceNumber = header.sequenceNumber || 1;
++    const startMs = parseInt(header.startMs || '0');
++    const durationMs = parseInt(header.durationMs || '0');
++
++    if (initializedFormat.consumedRanges.some(
++      (range) => sequenceNumber >= (range.startSegmentIndex || 1) && sequenceNumber <= (range.endSegmentIndex || 1)
++    )) {
++      return;
++    }
++
++    const contiguous = initializedFormat.consumedRanges.find(
++      (range) => range.endSegmentIndex === sequenceNumber - 1
++    );
++
++    if (!contiguous) {
++      initializedFormat.consumedRanges.push({
+         durationMs: durationMs.toString(),
+         formatId: initializedFormat.formatInitializationMetadata.formatId,
+-        startTimeMs: String(mediaHeaders[0].startMs || '0'),
+-        startSegmentIndex: mediaHeaders[0].sequenceNumber || 1,
+-        endSegmentIndex: mediaHeaders[mediaHeaders.length - 1].sequenceNumber || 1,
++        startTimeMs: startMs.toString(),
++        startSegmentIndex: sequenceNumber,
++        endSegmentIndex: sequenceNumber,
+         timeRange: {
+           durationTicks: durationMs.toString(),
+-          startTicks: mediaHeaders[0].startMs,
+-          timescale: mediaHeaders[0].timeRange?.timescale
++          startTicks: startMs.toString(),
++          // The ticks above are milliseconds, so the timescale must say so. The
++          // media header's own timescale describes the media (commonly 24000);
++          // quoting it here understated every buffered range by ~24x.
++          timescale: 1000
+         }
+       });
+-
+-      initializedFormat.lastMediaHeaders = [];
++      return;
+     }
+ 
+-    return bufferedRanges;
++    const extendedMs = startMs - parseInt(contiguous.startTimeMs || '0') + durationMs;
++    contiguous.endSegmentIndex = sequenceNumber;
++    contiguous.durationMs = extendedMs.toString();
++    if (contiguous.timeRange) {
++      contiguous.timeRange.durationTicks = extendedMs.toString();
++    }
+   }
+ 
+   /**
+@@ -687,14 +796,19 @@ export class SabrStream extends EventEmitterLike {
+   private buildRequestBody(
+     abrState: ClientAbrState,
+     selectedAudioFormat: SabrFormat,
+-    selectedVideoFormat: SabrFormat
++    selectedVideoFormat: SabrFormat,
++    bufferedRanges: BufferedRange[]
+   ): Uint8Array {
+     if (!this.videoPlaybackUstreamerConfig)
+       throw new Error('Video playback ustreamer config must be set before starting.');
+     if (!this.clientInfo)
        throw new Error('Client info must be set before starting.');
  
-     const bufferedRanges = this.cachedBufferedRanges || [];
+-    const bufferedRanges = this.cachedBufferedRanges || [];
++
 +    }
      const { sabrContexts, unsentSabrContexts } = this.prepareSabrContexts();
  
      const { selectedFormatIds, updatedBufferedRanges } = this.prepareFormatSelections(
-@@ -874,6 +899,11 @@ export class SabrStream extends EventEmitterLike {
+@@ -874,6 +988,11 @@ export class SabrStream extends EventEmitterLike {
          const handler = this.umpPartHandlers.get(part.type);
          if (handler) {
            handler(part);
 +        } else {
-+          // Unhandled UMP parts are silently dropped. Some of them are
-+          // instructions (SABR_SEEK, CUEPOINT_LIST), so ignoring them can
-+          // deadlock a stream. Log them so that is visible.
-+          this.logger.warn(TAG, `UNHANDLED UMP part type=${part.type} size=${part.size ?? part.data?.length ?? '?'}`);
++          // Unhandled parts are dropped. Most are advisory, but a few are
++          // instructions (SABR_SEEK, CUEPOINT_LIST), so make the drop visible
++          // rather than silent — diagnosing a stall without this is guesswork.
++          this.logger.debug(TAG, `Unhandled UMP part type=${part.type} size=${part.size}`);
          }
        });
      }
-@@ -920,8 +950,16 @@ export class SabrStream extends EventEmitterLike {
+@@ -903,9 +1022,6 @@ export class SabrStream extends EventEmitterLike {
+     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+       try {
+         await fetchFn();
+-        if (this.mediaHeadersProcessed) {
+-          this.cachedBufferedRanges = undefined;
+-        }
+         return true;
+       } catch (e) {
+         const error = e as Error;
+@@ -920,8 +1036,16 @@ export class SabrStream extends EventEmitterLike {
            break;
          }
  
@@ -94,6 +359,37 @@ index f1fef22..9d2bd57 100644
          await wait(retryBackoffMs);
        } finally {
          this.partialSegmentQueue.clear();
+@@ -964,7 +1088,8 @@ export class SabrStream extends EventEmitterLike {
+     const initializedFormat: InitializedFormat = {
+       formatInitializationMetadata: formatInitMetadata,
+       downloadedSegments: new Map<number, Segment>(),
+-      lastMediaHeaders: []
++      lastMediaHeaders: [],
++      consumedRanges: []
+     };
+ 
+     this.initializedFormatsMap.set(formatIdKey, initializedFormat);
+@@ -1209,6 +1334,11 @@ export class SabrStream extends EventEmitterLike {
+       segment.bufferedChunks = [];
+ 
+       initializedFormat.lastMediaHeaders.push(segment.mediaHeader);
++
++      // Fold on arrival, not when the next request is built: the playback
++      // position is read from these ranges before that happens, and a position
++      // derived from stale ranges lags a whole request behind.
++      this.recordConsumedSegment(initializedFormat, segment.mediaHeader);
+       initializedFormat.downloadedSegments.set(segment.segmentNumber, segment);
+       this.partialSegmentQueue.delete(headerId);
+     }
+@@ -1312,7 +1442,7 @@ export class SabrStream extends EventEmitterLike {
+     this.nextRequestPolicy = undefined;
+     this.mainFormat = undefined;
+     this.requestNumber = 0;
+-    this.cachedBufferedRanges = undefined;
++    this.seededBufferedRanges = [];
+     this.mediaHeadersProcessed = false;
+     this.streamProtectionStatus = undefined;
+     this.formatToDiscard = undefined;
 diff --git a/src/types/sabrStreamTypes.ts b/src/types/sabrStreamTypes.ts
 index 796980e..bb61bcd 100644
 --- a/src/types/sabrStreamTypes.ts
