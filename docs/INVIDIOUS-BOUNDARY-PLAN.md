@@ -1,6 +1,6 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: **Phases 0-2 and 3.1-3.4 shipped; 3.5-3.7, 4 and 5 outstanding.** Last
+Status: **Phases 0-2 and 3.1-3.5 shipped; 3.6-3.7, 4 and 5 outstanding.** Last
 updated 2026-07-30.
 
 | phase | state | commits |
@@ -14,7 +14,8 @@ updated 2026-07-30.
 | 3.2 — trending `liveNow` | **done** | `5ec55a1` + Invidious `02099ffe` |
 | 3.3 — Shorts flag | **done** | `e5c9d36`, `70d449f` + Invidious `57b16ba9` |
 | 3.4 — members-only | **done (deleted, not closed)** | `0596008`, `daf0050` |
-| 3.5-3.7 — remaining data gaps | **not started** | — |
+| 3.5 — `publishedAt` | **done** | `9bb0cec`, `d7ff553` |
+| 3.6-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
 | 5 — restructure media routes | **not started** | — |
 
@@ -495,12 +496,56 @@ the first clause was false. A filter that *hides* things deserves more suspicion
 than one that labels them, because its false positives are unobservable by
 construction: measure what it removes, not just what it keeps.
 
-### 3.5-3.7 — remaining gaps
+### 3.5 — `publishedAt` — **DONE** (`9bb0cec`, `d7ff553`)
+
+Two defects, and they were entangled: fixing the visible one alone would have
+activated the invisible one.
+
+**Two of the four candidate fields do not exist.** The chain tried `published`,
+`publishedAt`, `timestamp`, `premiereTimestamp`. Proven from Invidious' source
+rather than a corpus: `published` is emitted at 6 serialisation sites,
+`premiereTimestamp` at 2, and `publishedAt` / `timestamp` at **zero** — Piped
+shapes that outlived Piped. Over 455 live rows, `published` was present on all
+455 and the other two on none. `premiereTimestamp` is **kept**: premieres have no
+`published` yet, and no upcoming video could be found to test against, so it is
+not something to delete on a hunch.
+
+**`reconcilePublishedAtWithText` degraded good data.** It overrode the numeric
+timestamp whenever a relative string ("3 months ago") disagreed by more than two
+hours, on the theory that some instances send a bad timestamp. But prose is
+coarse by nature, so disagreement is the normal case, not a symptom:
+
+| over 455 live rows | |
+|---|---|
+| median gap, exact timestamp vs text estimate | **24 hours** |
+| maximum gap | **167 days** |
+| rows crossing the 2-hour override threshold | **249 / 455 (55%)** |
+
+It was rounding every date to whatever bucket YouTube's prose used and collapsing
+same-bucket videos into ties for feed ordering. Removed rather than retuned — no
+threshold separates "instance sent a bad timestamp" from "prose is less precise
+than a timestamp", because the second is true of every row.
+
+**`publishedText` was arriving in Arabic.** "1 السنة منذ", not "1 year ago", on
+every list endpoint — and it is shown to the user (comments, upcoming-live panel,
+taste onboarding). Invidious resolves a locale per request and the instance sets
+no `default_locale`. Fixed by sending `hl` from `fetchJson`, the choke point all
+21 Invidious API calls share; `INVIDIOUS_LOCALE` overrides.
+
+**The sequencing is the interesting part.** `reconcilePublishedAtWithText` was
+inert here *only* because Arabic text failed to parse — the parser knows English
+and French. Landing the locale fix first would have looked like a clean win and
+silently switched on a function that rewrites 55% of timestamps. The removal had
+to land first. Worth carrying forward: when a component is dead, establish *why*
+before fixing anything nearby, because "dead" and "dead for an accidental reason"
+behave very differently under change.
+
+### 3.6-3.7 — remaining gaps
 4. ~~**Members-only / paid.**~~ Resolved by deletion — see 3.4 above. Kept here
    because the item as written was wrong: it assumed upstream had the data.
-5. **`publishedAt`.** Four candidate fields plus
-   `reconcilePublishedAtWithText`, which lets the human string arbitrate the
-   numeric timestamp. Emit one trustworthy value.
+5. ~~**`publishedAt`.**~~ Done — see 3.5 above. Note the item's framing was
+   half wrong: two of the four fields never existed, and the reconciliation was
+   not arbitrating, it was degrading.
 6. **Channel `/videos` parse-error placeholders.** `channel.ts:371` falls back to
    regex-parsing the RSS feed. This is a reliability bug, not a shape gap — worth
    an upstream issue with a reproducer.
@@ -604,8 +649,8 @@ Phases 0, 1 and 2 are done. Remaining, in order:
 3. ~~Phase 3.3 — shorts flag.~~ **Done** — see 3.3 above.
 4. ~~Phase 3.4 — members-only flag.~~ **Done by deletion** — the gap was not
    real; see 3.4 above.
-5. **Phase 3.5-3.7** — `publishedAt`, channel parse-error placeholders,
-   multi-shape pickers.
+5. ~~Phase 3.5 — `publishedAt`.~~ **Done** — see 3.5 above.
+6. **Phase 3.6-3.7** — channel parse-error placeholders, multi-shape pickers.
 4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
    Phase 3's progress is measurable.
 5. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a

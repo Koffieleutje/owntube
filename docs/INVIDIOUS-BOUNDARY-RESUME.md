@@ -7,31 +7,32 @@ in git, so it does not depend on any prior conversation.
 
 Continue the OwnTube ↔ Invidious boundary work. Read `docs/INVIDIOUS-BOUNDARY-PLAN.md`
 first — it has the full analysis, the phase-by-phase plan, a status table, and an
-"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1-3.4** are shipped;
-**start at Phase 3.5**.
+"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1-3.5** are shipped;
+**start at Phase 3.6**.
 
-## Phase 3.5 — the task
+## Phase 3.6 — the task
 
-`publishedAt` has four candidate upstream fields (`published`, `publishedAt`,
-`timestamp`, `premiereTimestamp`) plus `reconcilePublishedAtWithText`, which lets
-a human-readable string ("3 days ago") arbitrate a numeric timestamp. Establish
-which field Invidious actually populates, in which endpoints, and whether the
-reconciliation is still correcting anything real — then collapse to one
-trustworthy value.
+`channel.ts:371` falls back to regex-parsing the RSS feed when Invidious returns
+parse-error placeholders for a channel's `/videos`. This is a **reliability bug
+upstream, not a shape gap** — the fix is an upstream issue with a reproducer, and
+possibly a patch, rather than a new field.
 
-Measure before changing: 3.4's item turned out to be guarding against something
-that never arrives, and the fix was deletion. Check `reconcilePublishedAtWithText`
-the same way — instrument it over a real corpus and see how often it actually
-overrides, and whether the override is right when it does.
+Start by finding a channel that reproduces it. `ProblematicTimelineItem` is what
+Invidious emits when a parser throws (see `BaseParser#parse` in
+`yt_backend/extractors.cr`, which catches and returns a placeholder), so a
+reproducer is a channel whose `/videos` yields those. Then decide whether the
+throw is fixable in the parser or genuinely needs the RSS fallback.
 
-Then 3.6 (channel `/videos` parse-error placeholders — a reliability bug, worth
-an upstream issue with a reproducer) and 3.7 (multi-shape pickers:
-`pickViewCount`, `pickChannelSubscriberCount`, `readStreamHeightPx`,
-`readPositiveNumberField`, and duration scraped from `dur=`). Note `pickLiveFlags`
-in `lib/live-video.ts` still carries dead Piped branches (`raw.livestream`,
-`duration === -1 && uploaded === -1`) despite Phase 1 — 3.7 territory.
+Then 3.7: the multi-shape pickers (`pickViewCount`,
+`pickChannelSubscriberCount`, `readStreamHeightPx`, `readPositiveNumberField`)
+and duration scraped from `dur=` in `dash/generate.ts:56`. Phases 3.1 and 3.5
+both found that most alternatives in these chains do not exist upstream — prove
+which shapes Invidious actually emits (`grep 'json.field'` in its serialisers is
+faster and more reliable than sampling) and delete the rest. Also note
+`pickLiveFlagsFromUpstream` in `lib/live-video.ts` still carries dead Piped
+branches (`raw.livestream`, `duration === -1 && uploaded === -1`).
 
-## What Phases 3.1-3.4 established that is worth reusing
+## What Phases 3.1-3.5 established that is worth reusing
 
 - The upstream patch pattern: emit the field Invidious *already parses* for its
   own use, rebuild via `nedworks-rebuild.sh`, then delete OwnTube's guess. Phase
@@ -88,6 +89,22 @@ in `lib/live-video.ts` still carries dead Piped branches (`raw.livestream`,
 - **When you remove a guard, make the failure legible instead.** 3.4 paired the
   deletion with a real error message: paywalled videos now show YouTube's own
   reason rather than a generic "instance unavailable" wall.
+- **If something is dead, find out *why* before touching anything near it.**
+  3.5's `reconcilePublishedAtWithText` was inert only because this instance was
+  answering in Arabic and the parser knows English and French. Fixing the locale
+  first — an obvious, visible win — would have switched on a function that
+  rewrites 55% of timestamps with coarser estimates. Order the commits so no
+  intermediate state is worse than the start.
+- **Prove a field's existence from the serialiser, not a sample.**
+  `grep 'json.field "<name>"' src/invidious/` settles in one command what a
+  corpus only suggests. 3.5 used it to show `publishedAt` and `timestamp` are
+  emitted at zero sites, while keeping `premiereTimestamp` (2 sites) that a
+  sample of 455 rows had also shown as absent — because no premiere happened to
+  be in the sample. A corpus proves presence, not absence.
+- **Check what upstream is actually being asked for.** OwnTube sent no `hl`, so
+  Invidious answered in whatever locale it resolved — Arabic here — and
+  `publishedText` is user-visible. Request parameters are part of the contract
+  too, not just response fields.
 - **Formatting Crystal in this sandbox:** container writes to bind mounts are
   denied, so `crystal tool format <file>` silently no-ops while `--check` still
   reports a diff. Pipe instead:
