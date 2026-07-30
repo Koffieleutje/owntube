@@ -1,6 +1,6 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: **Phases 0-2, 3.1 and 3.2 shipped; 3.3-3.7, 4 and 5 outstanding.** Last
+Status: **Phases 0-2 and 3.1-3.3 shipped; 3.4-3.7, 4 and 5 outstanding.** Last
 updated 2026-07-30.
 
 | phase | state | commits |
@@ -12,7 +12,8 @@ updated 2026-07-30.
 | 2 — companion direct + internal | **done** | `ad8504f`, `6c2c9e3` |
 | 3.1 — `audioTrack` upstream | **done** | `71fa2f4`, `8181c80` + Invidious `94911a03` |
 | 3.2 — trending `liveNow` | **done** | `5ec55a1` + Invidious `02099ffe` |
-| 3.3-3.7 — remaining data gaps | **not started** | — |
+| 3.3 — Shorts flag | **done** | `e5c9d36`, `70d449f` + Invidious `57b16ba9` |
+| 3.4-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
 | 5 — restructure media routes | **not started** | — |
 
@@ -414,12 +415,44 @@ compiles and silently does nothing.
    `/api/v1/videos` reports `liveNow: true` for the same ids. Fix upstream.
 </details>
 
-### 3.3-3.7 — remaining gaps
+### 3.3 — Shorts flag — **DONE** (`e5c9d36`, `70d449f`; Invidious `57b16ba9`)
 
-3. **Shorts flag.** `short-video.ts` falls back to `#shorts` in the title. A
-   reliable upstream flag removes the heuristic. Note 3.2 does **not** unblock
-   this the way the original plan assumed — durations were never the problem, so
-   the Shorts heuristic needs its own answer.
+Same shape as 3.1 and 3.2: upstream knew and discarded it. **Three** parsers did:
+
+- `ShortsLockupViewModelParser` and `ReelItemRendererParser` only ever run on a
+  shorts renderer, so everything they emit is a Short *by construction*.
+- `VideoRendererParser` reads a thumbnail overlay whose text is the literal
+  `"SHORTS"` in place of a duration — and its own TODO asked for this fix:
+  "Add some sort of metadata for the type of video (normal, live, premiere,
+  shorts)".
+
+All three emitted `VideoBadges::None`. Added a `Shorts` badge (appended to the
+`@[Flags]` enum, not inserted — reordering would change the meaning of a stored
+badge set), set it in all three, and serialised it as `isShort`.
+
+**Why neither existing signal could work.** This is the part that makes the field
+necessary rather than merely convenient:
+
+- **Duration is fabricated.** YouTube stopped reporting a real duration for
+  Shorts, so the parsers substitute an approximate 60s. Measured: all 48 items on
+  a channel's Shorts tab report exactly `60`. A genuine 60-second upload is
+  therefore indistinguishable by length, and no threshold tuning fixes it.
+- **The `#shorts` title tag is SEO, not metadata.** Measured on a live search:
+  4 of 20 results carried the tag while running 8-27 minutes.
+
+Verified against a captured baseline — channel Shorts tab **0/48 → 48/48**
+flagged; the SEO-tagged long videos (356s, 756s) correctly `isShort: false`; and
+the channel *videos* tab 0/60, i.e. no false positives. Canary `shortsFlag` added
+(`70d449f`) asserting all shorts-tab items are flagged, deliberately not
+satisfied by duration since that is the signal being replaced.
+
+OwnTube consults `isShort` first but **keeps** the length and title rules as
+fallbacks rather than deleting them — unlike 3.1, where the fallback went. Two
+reasons: cached payloads predating the field, and the fact that the length rule
+is not made stricter when the flag is present, which would drop real Shorts from
+those cached rows.
+
+### 3.4-3.7 — remaining gaps
 4. **Members-only / paid.** Currently guessed from the title
    (`mapper:47`, `titleSuggestsMembersOnlyOrSubscriberOnly`).
 5. **`publishedAt`.** Four candidate fields plus
@@ -525,8 +558,9 @@ Phases 0, 1 and 2 are done. Remaining, in order:
 2. ~~Phase 3.2 — the trending list serialiser.~~ **Done** — it turned out to be
    `liveNow` in the *extractor*, not `lengthSeconds` in the serialiser; see 3.2
    above. `UPSTREAM_CHECK_KNOWN_FAILING` is now empty.
-3. **Phase 3.3-3.7** — shorts flag, members-only flag, `publishedAt`, channel
-   parse-error placeholders, multi-shape pickers.
+3. ~~Phase 3.3 — shorts flag.~~ **Done** — see 3.3 above.
+4. **Phase 3.4-3.7** — members-only flag, `publishedAt`, channel parse-error
+   placeholders, multi-shape pickers.
 4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
    Phase 3's progress is measurable.
 5. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a

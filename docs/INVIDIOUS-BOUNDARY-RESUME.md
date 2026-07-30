@@ -7,27 +7,26 @@ in git, so it does not depend on any prior conversation.
 
 Continue the OwnTube ↔ Invidious boundary work. Read `docs/INVIDIOUS-BOUNDARY-PLAN.md`
 first — it has the full analysis, the phase-by-phase plan, a status table, and an
-"Open items and honest gaps" section. Phases 0, 1, 2, **3.1 and 3.2** are shipped;
-**start at Phase 3.3**.
+"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1-3.3** are shipped;
+**start at Phase 3.4**.
 
-## Phase 3.3 — the task
+## Phase 3.4 — the task
 
-`short-video.ts` detects Shorts by looking for `#shorts` in the title. Find a
-reliable upstream signal and delete the heuristic.
+Members-only / paid videos are currently guessed from the title
+(`titleSuggestsMembersOnlyOrSubscriberOnly`, used in `mappers/invidious.ts` to
+drop rows). Find the real upstream signal and stop pattern-matching titles — a
+title heuristic both misses renamed videos and false-positives on any video whose
+title merely mentions membership.
 
-**Do not assume 3.2 unblocked this.** The original plan claimed Shorts detection
-was collateral damage from trending dropping `lengthSeconds`. That was a
-misdiagnosis — durations were never dropped (see 3.2 in the plan), so this needs
-its own answer rather than a re-measurement of the same thing.
+`isUpstreamMembersOrPaidOnly` in `server/services/proxy/normalize.ts` already
+reads *something* from upstream; start by establishing what it actually receives
+versus what YouTube sends, the same way 3.2 and 3.3 were established (below).
 
-Worth knowing before you start: `videoRenderer` already encodes Shorts in the
-thumbnail overlay — `thumbnailOverlayTimeStatusRenderer.text == "SHORTS"`, which
-Invidious' extractor special-cases by approximating the length to 60s
-(`extractors.cr`, the `length_seconds` branch). That is a signal being *read and
-then thrown away*, which is the same shape as 3.1 and 3.2 and the most likely
-place to start.
+Then 3.5 `publishedAt` (four candidate fields plus `reconcilePublishedAtWithText`,
+which lets a human string arbitrate a numeric timestamp), 3.6 channel
+`/videos` parse-error placeholders, 3.7 the multi-shape pickers.
 
-## What Phase 3.1 established that is worth reusing
+## What Phases 3.1-3.3 established that is worth reusing
 
 - The upstream patch pattern: emit the field Invidious *already parses* for its
   own use, rebuild via `nedworks-rebuild.sh`, then delete OwnTube's guess. Phase
@@ -56,8 +55,29 @@ place to start.
   on the live marker having moved from `videoRenderer.badges` to
   `thumbnailOverlays[].thumbnailOverlayTimeStatusRenderer.style`. Guessing field
   names here compiles and silently does nothing. `POST
-  https://www.youtube.com/youtubei/v1/browse` with a WEB client context works
-  from the owntube container; the companion only proxies `/youtubei/v1/player`.
+  https://www.youtube.com/youtubei/v1/browse` (or `/search`) with a WEB client
+  context works from the owntube container; the companion only proxies
+  `/youtubei/v1/player`.
+- **The recurring pattern is "upstream parses it, then throws it away."** All
+  three phases were that. Grep the extractors for what a parser *reads* and does
+  not put on the struct — 3.3's fix was three parsers hardcoding
+  `badges: VideoBadges::None` right after proving the item was a Short, one of
+  them with a TODO asking for exactly the fix.
+- **Ask whether the old signal could ever have worked.** For 3.3 the answer was
+  no, and that is the argument for the field: duration is *fabricated* for Shorts
+  (all 48 items on a shorts tab report exactly 60s) and the `#shorts` tag is SEO
+  (4 of 20 search results carried it while running 8-27 minutes). A heuristic
+  that cannot work is worth more urgency than one that is merely ugly.
+- **Keep the fallback when cached payloads can predate the field.** 3.1 deleted
+  its fallback; 3.3 kept the length/title rules for exactly that reason. Decide
+  per field, and say which in the commit.
+- **Formatting Crystal in this sandbox:** container writes to bind mounts are
+  denied, so `crystal tool format <file>` silently no-ops while `--check` still
+  reports a diff. Pipe instead:
+  `docker run --rm -i crystallang/crystal:1.14.0-alpine crystal tool format - < file`.
+  Also note the formatter aligns consecutive `key: value` pairs in a hash
+  literal, so a comment inserted *inside* one breaks the alignment group — put
+  explanatory comments above the constructor call.
 
 ## Non-negotiables (learned the hard way this session)
 
@@ -112,7 +132,7 @@ when one step went wrong. Split by concern; each commit independently green.
   asking** — it was restored once that day on the assumption it had lapsed by
   accident, and that was wrong. Run it by hand instead when you need it:
   `docker exec owntube node_modules/.bin/tsx /path/to/check-upstream.ts`, or
-  `pnpm check:upstream` in `apps/web`. It should report **6 PASS + 1 SKIP**
+  `pnpm check:upstream` in `apps/web`. It should report **7 PASS + 1 SKIP**
   (`listDuration` skips when every sampled trending item is live) and **no KNOWN
   failures** — `UPSTREAM_CHECK_KNOWN_FAILING` is empty since 3.2. Worth running
   after any Invidious rebuild, since nothing is watching provenance continuously
