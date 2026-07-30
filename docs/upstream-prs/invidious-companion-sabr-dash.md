@@ -92,6 +92,8 @@ tested against `brainicism/bgutil-ytdlp-pot-provider`.
 | `SABR_MAX_HEIGHT` | 1080 | ceiling on advertised renditions |
 | `SABR_CACHE_MB` | 512 | byte budget for prepared media |
 | `SABR_SEGMENT_WAIT_MS` | 30000 | how long a segment request waits |
+| `SABR_DISK_CACHE_DIR` | *(unset)* | persistent cache; unset ⇒ memory only |
+| `SABR_DISK_CACHE_MB` | 4096 | disk budget, LRU-evicted |
 
 ## Test evidence
 
@@ -112,31 +114,58 @@ tested against `brainicism/bgutil-ytdlp-pot-provider`.
   400; valid `check` → 200 and embedded in every segment URL.
 - ffmpeg decodes served bytes cleanly (h264, full 1541.2s duration).
 
+## Manifests come from the segment index, not from a pull
+
+The init segment carries a `sidx` box listing every segment's duration, so the
+timeline is built from the first few kilobytes of a track rather than from
+`tfdt` values observed across a completed pull. Tracks are awaited only as far
+as their index, and the seed video and all requested audio tracks are indexed
+concurrently.
+
+| | before | after |
+|---|---|---|
+| 25-min video, 2 dubs, cold | 36.6s | **5.1s** |
+| same, after a restart (disk cache) | n/a | **1.1s** (126ms to index) |
+| segment from warm cache | n/a | **10ms** |
+
+`sidx` also makes the last segment's duration exact; it used to be estimated
+from the container duration.
+
+## Persistence
+
+Opt-in via `SABR_DISK_CACHE_DIR`. Completed tracks are written atomically (temp
+directory + rename, so a crash cannot leave a half-written track that later
+looks complete) and loaded on the next start. Least-recently-used videos are
+evicted past `SABR_DISK_CACHE_MB`.
+
+Track metadata (codecs, bandwidth, dimensions) is persisted alongside the
+segments rather than reconstructed — reconstruction works for video but not for
+audio, and produced `codecs=""` / `bandwidth="0"` on cached dubs before this was
+fixed. The manifest is now byte-identical cold vs warm.
+
+**Review note — this needs a permission change.** The cache directory must be in
+the compiled binary's `--allow-write` list; `deno.json` is updated for
+`/var/tmp/sabr-cache`. Writes fail loudly but non-fatally if it is not.
+
 ## Remaining limitations
 
-- **Seed warm-up.** The first manifest still waits for one height plus the
-  requested audio tracks (~15–35s for a 25-minute video, depending on how many
-  audio tracks were asked for). Removing it entirely needs the manifest to be
-  built from an index rather than from a completed pull — the timeline
-  currently comes from observed `tfdt` values.
-- **Audio tracks are pulled eagerly** when named in `?audio=`, unlike video
-  renditions. They could use the same lazy path; they are not on it yet because
-  each track needs its own timeline in the manifest, and that timeline comes
-  from the pull.
-- **In-process cache.** Bounded now, but lost on restart. A shared or persistent
-  cache is separate work.
+- **Only completed tracks are cached.** A partially pulled track is abandoned on
+  restart and refills in the background. Resuming a half-filled track from disk
+  means reconciling it with a live pull, which buys little.
+- **The cache is per-process on disk**, not shared between companion instances.
 - **Captions** still route through the existing companion caption path (the
   `timedtext` base_url is IP-blocked); unchanged here.
 
 ## Files
 
 ```
-src/lib/sabr/session.ts      clean per-client player call + track pulling
-src/lib/sabr/segmenter.ts    fMP4 -> init + numbered segments (in memory)
+src/lib/sabr/session.ts      WEB+pot / ANDROID_VR sessions + track pulling
+src/lib/sabr/segmenter.ts    fMP4 -> init + segments, sidx parsing, progressive
+src/lib/sabr/diskStore.ts    optional persistent cache
 src/routes/sabrRoutes.ts     manifest + segment routes, verifyRequest-gated
 vendor/googlevideo/          patched MIT library, mapped via gv/ in deno.json
 src/routes/index.ts          + app.route("/sabr", sabrRoutes)
-deno.json                    + gv/ and @bufbuild/protobuf/wire import maps
+deno.json                    + gv/ import map, + sabr-cache in --allow-write
 ```
 
 ## Question for maintainers before productionising
