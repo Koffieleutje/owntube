@@ -27,6 +27,14 @@
  *                  reporting a real duration for them and the parsers
  *                  substitute an approximate 60s, so length cannot separate a
  *                  Short from a genuine 60-second upload.
+ *  - `sabrExposure` the share of *non-live* videos that no longer carry
+ *                  `init`/`index` byte ranges. YouTube is migrating to SABR,
+ *                  which addresses media by player time rather than byte range;
+ *                  an SABR-only video cannot back OwnTube's synthesized DASH/HLS
+ *                  at all. This is an early-warning counter, not a defect: at
+ *                  the time of writing it is 0%. When it starts climbing there
+ *                  is lead time to act instead of discovering it as broken
+ *                  playback. See docs/OWNTUBE-UPSTREAM-PLAN.md stage 7.
  *  - `listDuration` that *non-live* list items carry a real duration. It only
  *                  covers non-live items on purpose — trending is the
  *                  livestreams feed now, and `lengthSeconds: 0` is correct for
@@ -78,6 +86,16 @@ const TREND_REGION = process.env.UPSTREAM_CHECK_REGION ?? "NL";
 
 /** How many trending items to cross-check against the detail endpoint. */
 const SAMPLE_SIZE = Number(process.env.UPSTREAM_CHECK_SAMPLE_SIZE ?? "6");
+
+/**
+ * Share of non-live videos allowed to lack byte ranges before `sabrExposure`
+ * fails. Not zero: a single video with incomplete extraction should not page
+ * anyone. Measured 0/23 on 2026-07-30, so anything approaching this threshold is
+ * a real trend rather than noise.
+ */
+const SABR_EXPOSURE_FAIL_RATIO = Number(
+  process.env.UPSTREAM_CHECK_SABR_FAIL_RATIO ?? "0.25",
+);
 
 const TIMEOUT_MS = 20_000;
 
@@ -311,6 +329,85 @@ async function checkShortsFlag(): Promise<Result> {
 }
 
 /**
+ * How many non-live videos have stopped carrying `init`/`index` byte ranges.
+ *
+ * OwnTube synthesizes its own DASH and HLS from those ranges, so a video without
+ * them cannot be played by the current architecture — `/dash` and `/hls` 502 and
+ * playback falls back. YouTube's SABR rollout is the reason this would change,
+ * since SABR addresses media by player time instead.
+ *
+ * Live streams are excluded because they are legitimately segment-addressed and
+ * never carry byte ranges; counting them would peg this at ~100% and tell us
+ * nothing. That exclusion depends on `liveNow` being correct on list items,
+ * which is what `listLiveFlag` guards.
+ */
+async function checkSabrExposure(): Promise<Result> {
+  // Deliberately NOT trending: trending is the livestreams feed since YouTube
+  // removed the aggregated trending page, so it is ~100% live and yields no
+  // measurable sample. `popular` is broad VOD; the channel uploads tab tops it
+  // up if an instance has popular disabled.
+  const popular = (await getJson("/api/v1/popular").catch(() => [])) as {
+    videoId?: string;
+  }[];
+  const ids = (Array.isArray(popular) ? popular : [])
+    .map((v) => v.videoId)
+    .filter((id): id is string => Boolean(id));
+
+  if (ids.length < SAMPLE_SIZE) {
+    const page = (await getJson(
+      `/api/v1/channels/${encodeURIComponent(SHORTS_CHANNEL_ID)}/videos`,
+    ).catch(() => ({}))) as { videos?: { videoId?: string }[] };
+    for (const v of page.videos ?? []) {
+      if (v.videoId && !ids.includes(v.videoId)) ids.push(v.videoId);
+    }
+  }
+  ids.splice(SAMPLE_SIZE * 2);
+
+  let nonLive = 0;
+  let withoutRanges = 0;
+  const bare: string[] = [];
+  for (const id of ids) {
+    const detail = (await getJson(
+      `/api/v1/videos/${encodeURIComponent(id)}`,
+    ).catch(() => null)) as {
+      liveNow?: boolean;
+      adaptiveFormats?: { init?: string; index?: string }[];
+    } | null;
+    if (!detail || detail.liveNow === true) continue;
+    const formats = detail.adaptiveFormats ?? [];
+    if (formats.length === 0) continue;
+    nonLive++;
+    if (!formats.some((f) => f.init && f.index)) {
+      withoutRanges++;
+      bare.push(id);
+    }
+  }
+
+  if (nonLive === 0) {
+    return {
+      name: "sabrExposure",
+      ok: true,
+      skipped: true,
+      detail:
+        "no non-live videos in the sample — cannot measure byte-range availability",
+    };
+  }
+  const ratio = withoutRanges / nonLive;
+  return {
+    name: "sabrExposure",
+    ok: ratio <= SABR_EXPOSURE_FAIL_RATIO,
+    detail:
+      withoutRanges === 0
+        ? `0/${nonLive} non-live videos lack byte ranges — no SABR exposure`
+        : `${withoutRanges}/${nonLive} non-live videos lack byte ranges (${Math.round(ratio * 100)}%)${
+            ratio > SABR_EXPOSURE_FAIL_RATIO
+              ? " — SABR migration is reaching us; see OWNTUBE-UPSTREAM-PLAN.md stage 7"
+              : ""
+          }: ${bare.slice(0, 3).join(", ")}`,
+  };
+}
+
+/**
  * Trending list items, checked against the detail endpoint for the same ids.
  *
  * Two distinct assertions, deliberately separated because they used to be
@@ -407,6 +504,7 @@ async function run(): Promise<void> {
     },
     { names: ["audioTracks"], run: checkAudioTracks },
     { names: ["shortsFlag"], run: checkShortsFlag },
+    { names: ["sabrExposure"], run: checkSabrExposure },
     {
       names: ["listLiveFlag", "listDuration"],
       run: checkTrendingListItems,
