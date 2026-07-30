@@ -101,3 +101,39 @@ test("items with chapters reference the JSON chapters endpoint", () => {
   const bare = renderRss(feed, "audio");
   assert.doesNotMatch(bare, /podcast:chapters url=/);
 });
+
+test("channel artwork falls back to the public icon when the feed has none", () => {
+  // A feed with no image of its own must still advertise cover art. Podcast
+  // platforms fetch artwork server-side — off the LAN, and without the feed's
+  // credentials — so a private URL leaves them storing the podcast with no
+  // image at all, which is exactly how the OwnTube logo went missing.
+  const { image: _dropped, ...noImage } = sample;
+  const xml = renderRss(noImage, "video", {
+    selfUrl: "https://owntube.example.org/queue.rss",
+  });
+  assert.ok(
+    xml.includes('<itunes:image href="https://owntube.example.org/icon.png"/>'),
+  );
+  assert.ok(xml.includes("<url>https://owntube.example.org/icon.png</url>"));
+});
+
+test("a feed's own artwork still wins over the fallback", () => {
+  const xml = renderRss(sample, "video", {
+    selfUrl: "https://owntube.example.org/queue.rss",
+  });
+  assert.ok(
+    xml.includes(
+      '<itunes:image href="https://owntube-media.home.nedworks.org/thumb.jpg"/>',
+    ),
+  );
+  assert.ok(!xml.includes("/icon.png"));
+});
+
+test("no self URL means no invented artwork", () => {
+  // The origin is the only thing that makes /icon.png addressable; without it a
+  // guessed URL would be worse than none.
+  const { image: _dropped, ...noImage } = sample;
+  const xml = renderRss(noImage, "video", {});
+  assert.ok(!xml.includes("/icon.png"));
+});
+

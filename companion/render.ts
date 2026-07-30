@@ -180,24 +180,31 @@ export function renderRss(
       `    <atom:link href="${xmlEscape(options.selfUrl)}" rel="self" type="application/rss+xml"/>`,
     );
   }
-  if (feed.image) {
-    head.push(`    <itunes:image href="${xmlEscape(feed.image)}"/>`);
-    head.push("    <image>");
-    head.push(`      <url>${xmlEscape(feed.image)}</url>`);
-    head.push(`      <title>${xmlEscape(title)}</title>`);
-    if (feed.link) head.push(`      <link>${xmlEscape(feed.link)}</link>`);
-    head.push("    </image>");
-  }
-  // Chapters JSON is served from this same host; derive the origin from the
-  // self URL so no extra configuration is needed.
-  let chaptersBase: string | undefined;
+  // Both the chapters JSON and the cover art are served from this same host, so
+  // derive the origin from the self URL and no extra configuration is needed.
+  let publicBase: string | undefined;
   if (options.selfUrl) {
     try {
-      chaptersBase = new URL(options.selfUrl).origin;
+      publicBase = new URL(options.selfUrl).origin;
     } catch {
       /* relative/odd self URL — items simply omit chapters */
     }
   }
+  // Fall back to the permanent /icon.png this server already publishes
+  // unauthenticated. Without a channel image a feed has no cover art at all:
+  // podcast platforms fetch artwork server-side, off the LAN and without the
+  // feed's credentials, so anything private is unreachable to them and they
+  // store the podcast with no image. That is why the OwnTube logo was missing.
+  const image = feed.image ?? (publicBase ? `${publicBase}/icon.png` : undefined);
+  if (image) {
+    head.push(`    <itunes:image href="${xmlEscape(image)}"/>`);
+    head.push("    <image>");
+    head.push(`      <url>${xmlEscape(image)}</url>`);
+    head.push(`      <title>${xmlEscape(title)}</title>`);
+    if (feed.link) head.push(`      <link>${xmlEscape(feed.link)}</link>`);
+    head.push("    </image>");
+  }
+  const chaptersBase = publicBase;
   const items = feed.items.map((it) => renderItem(it, variant, chaptersBase));
   return `${head.join("\n")}\n${items.join("\n")}\n  </channel>\n</rss>\n`;
 }
