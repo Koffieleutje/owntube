@@ -6,7 +6,7 @@
   "description": "Public RSS mirror for a LAN OwnTube — receives feed snapshots and renders podcast RSS",
   "scripts": {
     "start": "tsx server.ts",
-    "test": "tsx render.test.ts"
+    "test": "tsx render.test.ts && tsx ip-allow.test.ts && tsx store.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

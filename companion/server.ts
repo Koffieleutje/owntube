@@ -1,18 +1,21 @@
 /**
  * OwnTube companion — public RSS mirror.
  *
- *   POST /publish                          push feed snapshots (Bearer PUBLISH_SECRET)
+ *   POST /publish                          push feed snapshots + user credentials (Bearer PUBLISH_SECRET)
  *   GET  /rss/<kind>/<slug>.audio.xml      podcast RSS, audio enclosures (Basic Auth)
  *   GET  /rss/<kind>/<slug>.video.xml      podcast RSS, video enclosures (Basic Auth)
- *   GET  /                                 HTML index of all feeds       (Basic Auth)
- *   GET  /opml.xml                         OPML of all feeds             (Basic Auth)
+ *   GET  /                                 HTML index of your feeds      (Basic Auth)
+ *   GET  /opml.xml                         OPML of your feeds            (Basic Auth)
  *   GET  /health                           liveness (no auth)
  *
- * Feed metadata is public-behind-basic-auth; the `<enclosure>` media only
- * streams on the LAN (that origin is unreachable off-LAN), so putting the LAN
- * creds in a podcast app URL (https://user:pass@host/rss/...) is enough.
+ * Basic Auth is per user: the publisher pushes each account's username and the
+ * SHA-256 of its generated RSS password alongside the snapshots, and every
+ * feed route only serves the authenticated owner's feeds. Feed metadata is
+ * public-behind-basic-auth; the `<enclosure>` media only streams on the LAN
+ * (that origin is unreachable off-LAN), so putting the creds in a podcast app
+ * URL (https://user:pass@host/rss/...) is enough.
  */
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { promises as dns } from "node:dns";
 import http from "node:http";
 import { isIpAllowed } from "./ip-allow.ts";
@@ -22,13 +25,11 @@ import {
   type Variant,
   xmlEscape,
 } from "./render.ts";
-import { FeedStore } from "./store.ts";
+import { FeedStore, type UserCredential } from "./store.ts";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
 const PUBLISH_SECRET = process.env.PUBLISH_SECRET ?? "";
-const RSS_USER = process.env.RSS_USER ?? "";
-const RSS_PASS = process.env.RSS_PASS ?? "";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 // Optional IP allow-list for /publish — defense-in-depth atop the Bearer secret.
@@ -45,10 +46,8 @@ const PUBLISH_ALLOW_IPS = (process.env.PUBLISH_ALLOW_IPS ?? "")
 const IP_ALLOWLIST_ON =
   PUBLISH_ALLOW_HOSTS.length > 0 || PUBLISH_ALLOW_IPS.length > 0;
 
-if (!PUBLISH_SECRET || !RSS_USER || !RSS_PASS) {
-  process.stderr.write(
-    "companion: PUBLISH_SECRET, RSS_USER and RSS_PASS must be set\n",
-  );
+if (!PUBLISH_SECRET) {
+  process.stderr.write("companion: PUBLISH_SECRET must be set\n");
   process.exit(1);
 }
 
@@ -115,24 +114,31 @@ function checkBearer(req: http.IncomingMessage): boolean {
   return m ? safeEqual(m[1], PUBLISH_SECRET) : false;
 }
 
-function checkBasicAuth(req: http.IncomingMessage): boolean {
+const DUMMY_SHA256 = createHash("sha256")
+  .update("companion-dummy")
+  .digest("hex");
+
+/** The authenticated username, or null. Credentials come from the store
+ * (pushed by the publisher); unknown usernames are compared against a dummy
+ * digest so timing doesn't reveal which accounts exist. */
+function checkBasicAuth(req: http.IncomingMessage): string | null {
   const header = req.headers.authorization ?? "";
   const m = header.match(/^Basic\s+(.+)$/i);
-  if (!m) return false;
+  if (!m) return null;
   let decoded: string;
   try {
     decoded = Buffer.from(m[1], "base64").toString("utf8");
   } catch {
-    return false;
+    return null;
   }
   const idx = decoded.indexOf(":");
-  if (idx < 0) return false;
-  const user = decoded.slice(0, idx);
+  if (idx < 0) return null;
+  const username = decoded.slice(0, idx);
   const pass = decoded.slice(idx + 1);
-  // Evaluate both to keep timing independent of which half is wrong.
-  const userOk = safeEqual(user, RSS_USER);
-  const passOk = safeEqual(pass, RSS_PASS);
-  return userOk && passOk;
+  const user = store.getUser(username);
+  const digest = createHash("sha256").update(pass, "utf8").digest("hex");
+  const ok = safeEqual(digest, user?.passSha256 ?? DUMMY_SHA256);
+  return ok && user ? user.username : null;
 }
 
 function requireBasicAuth(res: http.ServerResponse): void {
@@ -166,10 +172,23 @@ function isFeedSnapshot(v: unknown): v is FeedSnapshot {
   const f = v as Record<string, unknown>;
   return (
     typeof f.kind === "string" &&
+    typeof f.owner === "string" &&
+    f.owner.length > 0 &&
     typeof f.slug === "string" &&
     typeof f.title === "string" &&
     typeof f.updatedAt === "number" &&
     Array.isArray(f.items)
+  );
+}
+
+function isUserCredential(v: unknown): v is UserCredential {
+  if (!v || typeof v !== "object") return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.username === "string" &&
+    c.username.length > 0 &&
+    typeof c.passSha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(c.passSha256)
   );
 }
 
@@ -221,12 +240,21 @@ async function handlePublish(
     return;
   }
   const feeds = (payload as { feeds?: unknown })?.feeds;
-  if (!Array.isArray(feeds) || !feeds.every(isFeedSnapshot)) {
+  const pubUsers = (payload as { users?: unknown })?.users;
+  if (
+    !Array.isArray(feeds) ||
+    !feeds.every(isFeedSnapshot) ||
+    !Array.isArray(pubUsers) ||
+    !pubUsers.every(isUserCredential)
+  ) {
     res.writeHead(400, { "content-type": "text/plain" });
-    res.end("expected { feeds: FeedSnapshot[] }\n");
+    res.end("expected { feeds: FeedSnapshot[], users: UserCredential[] }\n");
     return;
   }
-  const { upserted } = store.replaceAll(feeds as FeedSnapshot[]);
+  const { upserted } = store.replaceAll(
+    feeds as FeedSnapshot[],
+    pubUsers as UserCredential[],
+  );
   const items = (feeds as FeedSnapshot[]).reduce(
     (n, f) => n + f.items.length,
     0,
@@ -252,8 +280,8 @@ function feedUrl(kind: string, slug: string, variant: Variant): string {
   return `/rss/${encodeURIComponent(kind)}/${encodeURIComponent(slug)}.${variant}.xml`;
 }
 
-function renderIndexHtml(): string {
-  const rows = store.list();
+function renderIndexHtml(owner: string): string {
+  const rows = store.list(owner);
   const items = rows
     .map((r) => {
       const a = feedUrl(r.kind, r.slug, "audio");
@@ -272,7 +300,7 @@ h1{font-size:1.4rem}ul{list-style:none;padding:0}li{padding:.6rem 0;border-botto
 <ul>\n${items}\n</ul></body></html>\n`;
 }
 
-function renderOpml(req: http.IncomingMessage): string {
+function renderOpml(req: http.IncomingMessage, owner: string): string {
   const proto =
     (req.headers["x-forwarded-proto"] as string | undefined)
       ?.split(",")[0]
@@ -283,7 +311,7 @@ function renderOpml(req: http.IncomingMessage): string {
     "";
   const base = `${proto}://${host}`;
   const outlines = store
-    .list()
+    .list(owner)
     .flatMap((r) =>
       (["audio", "video"] as Variant[]).map((variant) => {
         const url = `${base}${feedUrl(r.kind, r.slug, variant)}`;
@@ -313,16 +341,18 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // Everything below is Basic-Auth guarded.
+    // Everything below is Basic-Auth guarded and scoped to the
+    // authenticated user's own feeds.
     if (method === "GET" || method === "HEAD") {
-      if (!checkBasicAuth(req)) {
+      const owner = checkBasicAuth(req);
+      if (!owner) {
         requireBasicAuth(res);
         return;
       }
 
       const rss = parseRssPath(pathname);
       if (rss) {
-        const feed = store.get(rss.kind, rss.slug);
+        const feed = store.get(owner, rss.kind, rss.slug);
         if (!feed) {
           res.writeHead(404, { "content-type": "text/plain" });
           res.end("feed not found\n");
@@ -334,13 +364,13 @@ const server = http.createServer((req, res) => {
 
       if (pathname === "/opml.xml") {
         res.writeHead(200, { "content-type": "text/x-opml; charset=utf-8" });
-        res.end(renderOpml(req));
+        res.end(renderOpml(req, owner));
         return;
       }
 
       if (pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        res.end(renderIndexHtml());
+        res.end(renderIndexHtml(owner));
         return;
       }
     }

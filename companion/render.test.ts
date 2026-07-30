@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type FeedSnapshot, hms, renderRss, rfc822, xmlEscape } from "./render.ts";
+import {
+  type FeedSnapshot,
+  hms,
+  renderRss,
+  rfc822,
+  xmlEscape,
+} from "./render.ts";
 
 const sample: FeedSnapshot = {
   kind: "playlist",
+  owner: "m",
   slug: "cooking",
   title: "Cooking & Baking",
   description: "Best <recipes>",
@@ -19,8 +26,10 @@ const sample: FeedSnapshot = {
       publishedAt: 1_689_000_000,
       thumbnailUrl: "https://owntube-media.home.nedworks.org/i/abc.jpg",
       channelName: "Chef",
-      enclosureAudio: "https://owntube-media.home.nedworks.org/media/abc123XYZ_-.m4a",
-      enclosureVideo: "https://owntube-media.home.nedworks.org/media/abc123XYZ_-.mp4",
+      enclosureAudio:
+        "https://owntube-media.home.nedworks.org/media/abc123XYZ_-.m4a",
+      enclosureVideo:
+        "https://owntube-media.home.nedworks.org/media/abc123XYZ_-.mp4",
     },
   ],
 };
@@ -40,8 +49,13 @@ test("rfc822 renders a GMT date", () => {
 });
 
 test("audio feed uses the m4a enclosure and audio/mp4 type", () => {
-  const xml = renderRss(sample, "audio", { selfUrl: "https://pub/rss/playlist/cooking.audio.xml" });
-  assert.match(xml, /<enclosure url="https:\/\/owntube-media\.home\.nedworks\.org\/media\/abc123XYZ_-\.m4a" type="audio\/mp4"/);
+  const xml = renderRss(sample, "audio", {
+    selfUrl: "https://pub/rss/playlist/cooking.audio.xml",
+  });
+  assert.match(
+    xml,
+    /<enclosure url="https:\/\/owntube-media\.home\.nedworks\.org\/media\/abc123XYZ_-\.m4a" type="audio\/mp4"/,
+  );
   assert.doesNotMatch(xml, /\.mp4"/);
   assert.match(xml, /<itunes:duration>1:02:05<\/itunes:duration>/);
   assert.match(xml, /<guid isPermaLink="false">abc123XYZ_-<\/guid>/);

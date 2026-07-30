@@ -11,6 +11,11 @@ import {
   users,
   watchQueue,
 } from "@/server/db/schema";
+import {
+  ensureRssPass,
+  rssUsername,
+  sha256Hex,
+} from "@/server/remote/rss-pass";
 import { getChannelRssEntries } from "@/server/rss/cache";
 import { fetchVideoDetail } from "@/server/services/proxy";
 
@@ -24,6 +29,12 @@ import { fetchVideoDetail } from "@/server/services/proxy";
  *
  * Nothing here is opt-in: we publish everything. The companion replaces its full
  * set each cycle, so deleting a playlist / unsubscribing prunes the feed.
+ *
+ * Access is per user: each snapshot carries its owner's Basic-Auth username
+ * (email local part) and the payload includes every user's credential as a
+ * SHA-256 — the plaintext RSS password never leaves home. The companion scopes
+ * every feed route to the authenticated owner, which also makes slug prefixing
+ * unnecessary: two users can both have `queue`.
  */
 
 export type FeedKind =
@@ -48,6 +59,8 @@ export type FeedItem = {
 
 export type FeedSnapshot = {
   kind: FeedKind;
+  /** Basic-Auth username whose credentials unlock this feed on the companion. */
+  owner: string;
   /** Readable, kind-namespaced on the companion (`/rss/<kind>/<slug>.*`). */
   slug: string;
   title: string;
@@ -215,7 +228,7 @@ function readChannelNames(
 async function buildFeedsForUser(
   db: AppDb,
   userId: number,
-  prefix: string,
+  owner: string,
   opts: Required<Omit<PublishOptions, "onLog">> & {
     onLog?: PublishOptions["onLog"];
   },
@@ -232,7 +245,6 @@ async function buildFeedsForUser(
     }
     return s;
   };
-  const p = (slug: string): string => (prefix ? `${prefix}-${slug}` : slug);
 
   // --- Playlists (all) ---
   const playlistRows = db
@@ -251,8 +263,10 @@ async function buildFeedsForUser(
     const items = await enrichVideoItems(db, itemRows, appOrigin, concurrency);
     feeds.push({
       kind: "playlist",
-      slug: p(
-        uniqueSlug(slugify(pl.name, `playlist-${pl.id}`), takenFor("playlist")),
+      owner,
+      slug: uniqueSlug(
+        slugify(pl.name, `playlist-${pl.id}`),
+        takenFor("playlist"),
       ),
       title: pl.name,
       description: pl.description ?? undefined,
@@ -274,7 +288,8 @@ async function buildFeedsForUser(
     const items = await enrichVideoItems(db, queueRows, appOrigin, concurrency);
     feeds.push({
       kind: "queue",
-      slug: p("queue"),
+      owner,
+      slug: "queue",
       title: "Queue",
       description: "OwnTube watch queue",
       link: `${appOrigin}/`,
@@ -295,7 +310,8 @@ async function buildFeedsForUser(
     const items = await enrichVideoItems(db, savedRows, appOrigin, concurrency);
     feeds.push({
       kind: "saved",
-      slug: p("saved"),
+      owner,
+      slug: "saved",
       title: "Saved",
       description: "OwnTube saved videos",
       link: `${appOrigin}/`,
@@ -324,7 +340,8 @@ async function buildFeedsForUser(
     );
     feeds.push({
       kind: "subscriptions",
-      slug: p("subscriptions"),
+      owner,
+      slug: "subscriptions",
       title: "Subscriptions",
       description: "Latest uploads from all subscribed channels",
       link: `${appOrigin}/subscriptions`,
@@ -357,7 +374,8 @@ async function buildFeedsForUser(
     if (items.length === 0) continue;
     feeds.push({
       kind: "tag",
-      slug: p(uniqueSlug(slugify(tag, "tag"), takenFor("tag"))),
+      owner,
+      slug: uniqueSlug(slugify(tag, "tag"), takenFor("tag")),
       title: `#${tag}`,
       description: `Latest uploads from channels tagged "${tag}"`,
       link: `${appOrigin}/subscriptions`,
@@ -380,7 +398,8 @@ async function buildFeedsForUser(
     const title = meta?.name ?? items[0]?.channelName ?? channelId;
     feeds.push({
       kind: "channel",
-      slug: p(uniqueSlug(slugify(title, channelId), takenFor("channel"))),
+      owner,
+      slug: uniqueSlug(slugify(title, channelId), takenFor("channel")),
       title,
       description: `Latest uploads from ${title}`,
       link: `${appOrigin}/channel/${channelId}`,
@@ -393,11 +412,17 @@ async function buildFeedsForUser(
   return feeds;
 }
 
-/** Build every feed snapshot for every user in the database. */
+export type FeedOwnerCredential = {
+  username: string;
+  /** SHA-256 hex of the user's RSS password — the plaintext never leaves home. */
+  passSha256: string;
+};
+
+/** Build every user's feed snapshots plus the credential set that unlocks them. */
 export async function buildAllFeeds(
   db: AppDb,
   options: PublishOptions,
-): Promise<FeedSnapshot[]> {
+): Promise<{ feeds: FeedSnapshot[]; users: FeedOwnerCredential[] }> {
   const opts = {
     appOrigin: options.appOrigin,
     channelFeedLimit: options.channelFeedLimit ?? DEFAULT_CHANNEL_LIMIT,
@@ -409,25 +434,32 @@ export async function buildAllFeeds(
     .select({ id: users.id, email: users.email })
     .from(users)
     .all();
-  const multiUser = userRows.length > 1;
+  const taken = new Set<string>();
   const all: FeedSnapshot[] = [];
+  const creds: FeedOwnerCredential[] = [];
   for (const u of userRows) {
-    const prefix = multiUser
-      ? slugify(u.email?.split("@")[0] ?? `user-${u.id}`, `user-${u.id}`)
-      : "";
-    const feeds = await buildFeedsForUser(db, u.id, prefix, opts);
-    opts.onLog?.(`publish: user ${u.id} — ${feeds.length} feed(s)`);
+    // Email local part; on a collision (two accounts, same local part) the
+    // later account falls back to its full address so credentials stay
+    // unambiguous.
+    let username = rssUsername(u.email);
+    if (taken.has(username)) username = u.email;
+    taken.add(username);
+    creds.push({ username, passSha256: sha256Hex(ensureRssPass(db, u.id)) });
+    const feeds = await buildFeedsForUser(db, u.id, username, opts);
+    opts.onLog?.(
+      `publish: user ${u.id} (${username}) — ${feeds.length} feed(s)`,
+    );
     all.push(...feeds);
   }
-  return all;
+  return { feeds: all, users: creds };
 }
 
-/** Build all feeds and POST them to the companion. */
+/** Build all feeds and POST them (with the credential set) to the companion. */
 export async function publishFeeds(
   db: AppDb,
   options: PublishOptions & { target: string; secret: string },
 ): Promise<{ feedCount: number; itemCount: number }> {
-  const feeds = await buildAllFeeds(db, options);
+  const { feeds, users: feedUsers } = await buildAllFeeds(db, options);
   const itemCount = feeds.reduce((n, f) => n + f.items.length, 0);
   const url = `${options.target.replace(/\/+$/, "")}/publish`;
   const res = await fetch(url, {
@@ -436,7 +468,7 @@ export async function publishFeeds(
       "content-type": "application/json",
       authorization: `Bearer ${options.secret}`,
     },
-    body: JSON.stringify({ feeds }),
+    body: JSON.stringify({ feeds, users: feedUsers }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");

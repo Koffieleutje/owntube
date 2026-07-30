@@ -19,6 +19,8 @@ export type FeedItem = {
 
 export type FeedSnapshot = {
   kind: string;
+  /** Basic-Auth username whose credentials unlock this feed. */
+  owner: string;
   slug: string;
   title: string;
   description?: string;
@@ -32,8 +34,18 @@ export type Variant = "audio" | "video";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
 
 export function xmlEscape(input: string | undefined): string {
@@ -69,7 +81,10 @@ export function hms(seconds: number | undefined): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }
 
-function watchLinkFromEnclosure(enclosureUrl: string, videoId: string): string | null {
+function watchLinkFromEnclosure(
+  enclosureUrl: string,
+  videoId: string,
+): string | null {
   try {
     return `${new URL(enclosureUrl).origin}/watch?v=${encodeURIComponent(videoId)}`;
   } catch {
@@ -78,7 +93,8 @@ function watchLinkFromEnclosure(enclosureUrl: string, videoId: string): string |
 }
 
 function renderItem(item: FeedItem, variant: Variant): string {
-  const enclosureUrl = variant === "audio" ? item.enclosureAudio : item.enclosureVideo;
+  const enclosureUrl =
+    variant === "audio" ? item.enclosureAudio : item.enclosureVideo;
   const mime = variant === "audio" ? "audio/mp4" : "video/mp4";
   const watchLink = watchLinkFromEnclosure(enclosureUrl, item.videoId);
   const parts = [
@@ -86,19 +102,26 @@ function renderItem(item: FeedItem, variant: Variant): string {
     `      <title>${xmlEscape(item.title)}</title>`,
     `      <guid isPermaLink="false">${xmlEscape(item.videoId)}</guid>`,
   ];
-  if (item.publishedAt) parts.push(`      <pubDate>${rfc822(item.publishedAt)}</pubDate>`);
+  if (item.publishedAt)
+    parts.push(`      <pubDate>${rfc822(item.publishedAt)}</pubDate>`);
   if (watchLink) parts.push(`      <link>${xmlEscape(watchLink)}</link>`);
   if (item.description) {
-    parts.push(`      <description>${xmlEscape(item.description)}</description>`);
+    parts.push(
+      `      <description>${xmlEscape(item.description)}</description>`,
+    );
     parts.push(
       `      <content:encoded><![CDATA[${item.description.replace(/]]>/g, "]]]]><![CDATA[>")}]]></content:encoded>`,
     );
   }
   if (item.channelName) {
-    parts.push(`      <itunes:author>${xmlEscape(item.channelName)}</itunes:author>`);
+    parts.push(
+      `      <itunes:author>${xmlEscape(item.channelName)}</itunes:author>`,
+    );
   }
   if (typeof item.durationSeconds === "number") {
-    parts.push(`      <itunes:duration>${hms(item.durationSeconds)}</itunes:duration>`);
+    parts.push(
+      `      <itunes:duration>${hms(item.durationSeconds)}</itunes:duration>`,
+    );
   }
   if (item.thumbnailUrl) {
     parts.push(`      <itunes:image href="${xmlEscape(item.thumbnailUrl)}"/>`);
@@ -131,7 +154,9 @@ export function renderRss(
     "  <channel>",
     `    <title>${xmlEscape(title)}</title>`,
     `    <description>${xmlEscape(feed.description ?? feed.title)}</description>`,
-    feed.link ? `    <link>${xmlEscape(feed.link)}</link>` : "    <link>about:blank</link>",
+    feed.link
+      ? `    <link>${xmlEscape(feed.link)}</link>`
+      : "    <link>about:blank</link>",
     "    <language>en</language>",
     `    <lastBuildDate>${rfc822(feed.updatedAt)}</lastBuildDate>`,
     `    <itunes:author>${xmlEscape(author)}</itunes:author>`,

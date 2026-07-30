@@ -11,6 +11,9 @@ export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  /** Generated Basic-Auth secret for the companion's RSS feeds (hex, plaintext
+   * on purpose: the settings UI must show it, and only its hash leaves home). */
+  rssPass: text("rss_pass"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });

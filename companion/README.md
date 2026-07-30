@@ -16,19 +16,25 @@ podcast app ──(LAN/VPN)──▶ owntube /media/<id>   ◀── enclosure U
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| POST | `/publish` | Bearer `PUBLISH_SECRET` + IP allow-list | Replace the full feed set with the pushed snapshots |
-| GET | `/rss/<kind>/<slug>.audio.xml` | Basic | Podcast RSS, m4a enclosures |
-| GET | `/rss/<kind>/<slug>.video.xml` | Basic | Podcast RSS, mp4 enclosures |
-| GET | `/` | Basic | HTML index of all feeds |
-| GET | `/opml.xml` | Basic | OPML of every feed (both variants) |
+| POST | `/publish` | Bearer `PUBLISH_SECRET` + IP allow-list | Replace the full feed + credential set with the pushed payload |
+| GET | `/rss/<kind>/<slug>.audio.xml` | Basic (per user) | Podcast RSS, m4a enclosures |
+| GET | `/rss/<kind>/<slug>.video.xml` | Basic (per user) | Podcast RSS, mp4 enclosures |
+| GET | `/` | Basic (per user) | HTML index of your feeds |
+| GET | `/opml.xml` | Basic (per user) | OPML of your feeds (both variants) |
 | GET | `/health` | none | Liveness |
 
 Feed `kind` ∈ `playlist`, `queue`, `saved`, `subscriptions`, `tag`, `channel`.
 
+Basic Auth is **per user**: the publisher pushes each OwnTube account's
+username (email local part) and the SHA-256 of its generated RSS password
+(shown in OwnTube → Settings → Podcast feeds) along with the snapshots — no
+plaintext password ever reaches this host. Every feed route serves only the
+authenticated owner's feeds, so two accounts can both have `queue`.
+
 Subscribe in a podcast app with the credentials inline:
 
 ```
-https://<RSS_USER>:<RSS_PASS>@owntube.nedworks.org/rss/playlist/<slug>.audio.xml
+https://<username>:<rss-pass>@owntube.nedworks.org/rss/queue/queue.audio.xml
 ```
 
 ## Config (env)
@@ -36,7 +42,6 @@ https://<RSS_USER>:<RSS_PASS>@owntube.nedworks.org/rss/playlist/<slug>.audio.xml
 | Var | Required | Default | |
 | --- | --- | --- | --- |
 | `PUBLISH_SECRET` | yes | — | Must match the home side's `OWNTUBE_PUBLISH_SECRET` |
-| `RSS_USER` / `RSS_PASS` | yes | — | Basic Auth for the feeds |
 | `PUBLISH_ALLOW_HOSTS` | no | — | Comma-separated hostnames allowed to POST `/publish`; re-resolved ~60s (DDNS-safe) |
 | `PUBLISH_ALLOW_IPS` | no | — | Comma-separated extra IPs/CIDRs allowed to POST `/publish` |
 | `PORT` | no | `8080` | |
@@ -58,7 +63,7 @@ Local dev (needs Node ≥ 22 for `.ts` execution, or use `npx tsx`):
 
 ```sh
 npm install
-PUBLISH_SECRET=x RSS_USER=me RSS_PASS=pw DATA_DIR=./data npm start
+PUBLISH_SECRET=x DATA_DIR=./data npm start
 npm test    # render unit tests
 ```
 
@@ -76,7 +81,7 @@ credentials.
 rsync -az --delete --exclude node_modules --exclude data --exclude '*.db*' \
   companion/ root@spiff.nedworks.org:/var/docker/owntube-companion/
 # create /var/docker/owntube-companion/.env on spiff (PUBLISH_SECRET must match
-# the home side's OWNTUBE_PUBLISH_SECRET; RSS_USER/RSS_PASS guard the feeds)
+# the home side's OWNTUBE_PUBLISH_SECRET; feed credentials come with each publish)
 ssh root@spiff.nedworks.org 'cd /var/docker/owntube-companion && docker compose up -d --build'
 curl -sf https://owntube.nedworks.org/health   # -> ok
 ```

@@ -6,9 +6,15 @@ import {
   interactions,
   subscriptions,
   userProfile,
+  users,
   watchHistory,
 } from "@/server/db/schema";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
+import {
+  ensureRssPass,
+  regenerateRssPass,
+  rssUsername,
+} from "@/server/remote/rss-pass";
 import {
   clearProxyCaches,
   getInstanceSourceInfo,
@@ -131,6 +137,25 @@ export const settingsRouter = router({
     .mutation(({ ctx, input }) =>
       upsertUserSettings(ctx.db, ctx.userId, input),
     ),
+
+  /** Basic-Auth credentials for the companion's podcast feeds. */
+  rssFeeds: protectedProcedure.query(({ ctx }) => {
+    const row = ctx.db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, ctx.userId))
+      .get();
+    return {
+      username: row ? rssUsername(row.email) : "",
+      pass: ensureRssPass(ctx.db, ctx.userId),
+      companionUrl: process.env.OWNTUBE_PUBLISH_TARGET?.trim() || null,
+    };
+  }),
+
+  /** New password; the companion accepts it after the next publish cycle. */
+  regenerateRssPass: protectedProcedure.mutation(({ ctx }) => ({
+    pass: regenerateRssPass(ctx.db, ctx.userId),
+  })),
 
   checkInstances: protectedProcedure.query(async () => {
     const { invidiousBases } = resolveProxyBaseCandidates();

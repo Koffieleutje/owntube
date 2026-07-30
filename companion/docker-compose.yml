@@ -15,8 +15,8 @@ services:
       PORT: "8080"
       DATA_DIR: /data
       PUBLISH_SECRET: ${PUBLISH_SECRET:?set PUBLISH_SECRET in .env}
-      RSS_USER: ${RSS_USER:?set RSS_USER in .env}
-      RSS_PASS: ${RSS_PASS:?set RSS_PASS in .env}
+      # Feed Basic Auth is per user: credentials arrive with each publish
+      # (username + SHA-256 of the RSS pass from OwnTube's user settings).
       # Optional /publish IP allow-list (defense-in-depth atop PUBLISH_SECRET).
       PUBLISH_ALLOW_HOSTS: ${PUBLISH_ALLOW_HOSTS:-}
       PUBLISH_ALLOW_IPS: ${PUBLISH_ALLOW_IPS:-}

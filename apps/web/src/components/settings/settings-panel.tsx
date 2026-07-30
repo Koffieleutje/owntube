@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { InstanceSourceHint } from "@/components/settings/instance-source-hint";
+import { RssFeedsSection } from "@/components/settings/rss-feeds-section";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_PLAYBACK_QUALITY_SELECT_OPTIONS,
@@ -677,6 +678,8 @@ export function SettingsPanel({
           {clearingCaches ? "Clearing cache…" : "Clear cache"}
         </Button>
       </section>
+
+      <RssFeedsSection />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Data export / import</h2>
