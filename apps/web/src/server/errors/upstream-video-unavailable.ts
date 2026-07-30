@@ -20,9 +20,15 @@ export class UpstreamVideoUnavailableError extends Error {
 /**
  * Signatures YouTube uses for definitive per-video refusals, as relayed by
  * Invidious (`{"error":"The uploader has not made this video available in
- * your country"}`) and Piped. Deliberately conservative: transient extractor
- * or instance failures must keep flowing into the generic unavailable path
- * so its instance-health hints stay reachable.
+ * your country"}`). Deliberately conservative: transient extractor or instance
+ * failures must keep flowing into the generic unavailable path so its
+ * instance-health hints stay reachable.
+ *
+ * Matching is substring-based, so entries must be specific enough not to fire
+ * on an ordinary video. "members-only content" is safe here in a way a bare
+ * "members only" would not be — that phrase is common in legitimate titles
+ * (songs, tutorials) and matching it was exactly the mistake made by the feed
+ * filter this replaced.
  */
 const VIDEO_UNAVAILABLE_SIGNATURES = [
   "not made this video available in your country",
@@ -33,6 +39,21 @@ const VIDEO_UNAVAILABLE_SIGNATURES = [
   "video has been removed",
   "no longer available",
   "account associated with this video has been terminated",
+  // Paywalled by the channel or by YouTube. These are definitive per-video
+  // refusals like the rest, but they used to miss every signature and fall
+  // through to the generic "Invidious is unavailable — check instance health"
+  // wall, which blames the instance for something no instance can fix.
+  //
+  // Invidious relays YouTube's own `playabilityStatus.reason` (or the
+  // errorScreen subreason) verbatim, so these match YouTube's wording rather
+  // than anything Invidious composes.
+  "members-only content",
+  "members only content",
+  "available to this channel's members",
+  "join this channel to get access",
+  "requires payment to watch",
+  "purchase this video",
+  "rent or buy",
 ];
 
 /** True when an upstream error message is a definitive YouTube refusal. */
