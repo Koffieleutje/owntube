@@ -149,6 +149,13 @@ export interface PullSelection {
   height?: number | null;
   /** Audio track id, when pulling audio. */
   audioTrackId?: string;
+  /** Seek position; needs the googlevideo-seek patch. */
+  startAtMs?: number;
+  /**
+   * Low when restarting across stalls: the default of 10 costs ~60s of retries
+   * before a stall is even reported, and a long video needs many restarts.
+   */
+  maxRetries?: number;
 }
 
 /**
@@ -197,6 +204,8 @@ export async function pullTrack(
     videoFormat: videoFor,
     audioFormat: audioFor,
     enabledTrackTypes: wantVideo ? EnabledTrackTypes.VIDEO_ONLY : EnabledTrackTypes.AUDIO_ONLY,
+    ...(sel.startAtMs ? { startAtMs: sel.startAtMs } : {}),
+    ...(sel.maxRetries !== undefined ? { maxRetries: sel.maxRetries } : {}),
   } as any);
 
   return {
@@ -210,6 +219,111 @@ export async function pullTrack(
       }
     },
   };
+}
+
+/**
+ * Pull a whole track, restarting across stalls.
+ *
+ * A single `SabrStream` does not survive a long video: on a 1541s video it
+ * delivers ~12 segments, then the server stops sending media and the library
+ * burns its ten retries and gives up. Stock googlevideo 4.1.1 behaves
+ * identically, so this is not something the seek patch introduced — but the seek
+ * patch is what lets us recover, because we can open a fresh session positioned
+ * at the last segment we received.
+ *
+ * yt-dlp survives the same video (its suite has `test_vod_stall` and
+ * `test_reload`), which is what suggested restart-on-stall rather than
+ * retry-in-place.
+ *
+ * Yields fMP4 bytes as one continuous stream: the init segment from the first
+ * pass only, then media from each pass in order.
+ */
+export async function pullTrackResilient(
+  videoId: string,
+  sel: PullSelection,
+  opts: { maxRestarts?: number; onProgress?: (m: string) => void } = {},
+): Promise<ReadableStream<Uint8Array>> {
+  const maxRestarts = opts.maxRestarts ?? 12;
+  const log = opts.onProgress ?? (() => {});
+
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let startAtMs = 0;
+      let sentInit = false;
+      let lastDecodeSec = 0;
+      let durationSec = 0;
+
+      for (let attempt = 0; attempt <= maxRestarts; attempt++) {
+        const session = await openSession(videoId);
+        durationSec = session.durationSec;
+        const { stream } = await pullTrack(session, { ...sel, startAtMs, maxRetries: sel.maxRetries ?? 1 });
+
+        let buf = Buffer.alloc(0);
+        let inInit = !sentInit;
+        let timescale = 0;
+        let got = 0;
+        const reader = stream.getReader();
+
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf = Buffer.concat([buf, Buffer.from(value)]);
+
+            // Emit whole boxes, dropping the init segment on restarts (the
+            // server does not resend it, but a partial buffer might straddle it).
+            let off = 0;
+            for (;;) {
+              if (off + 8 > buf.length) break;
+              const size = buf.readUInt32BE(off);
+              const type = buf.subarray(off + 4, off + 8).toString('latin1');
+              if (!/^[a-zA-Z0-9]{4}$/.test(type) || size < 8 || off + size > buf.length) break;
+              const raw = buf.subarray(off, off + size);
+
+              if (type === 'moov') {
+                const i = raw.indexOf('mvhd', 0, 'latin1');
+                if (i >= 0) {
+                  const v = raw.readUInt8(i + 4);
+                  timescale = raw.readUInt32BE(i + 4 + 4 + (v === 1 ? 16 : 8));
+                }
+              }
+              if (type === 'moof') {
+                inInit = false;
+                got++;
+                const i = raw.indexOf('tfdt', 0, 'latin1');
+                if (i >= 0 && timescale) {
+                  const v = raw.readUInt8(i + 4);
+                  const t = v === 1 ? Number(raw.readBigUInt64BE(i + 8)) : raw.readUInt32BE(i + 8);
+                  lastDecodeSec = t / timescale;
+                }
+              }
+
+              const isInitBox = type === 'ftyp' || type === 'moov' || type === 'sidx';
+              if (!isInitBox || !sentInit) controller.enqueue(new Uint8Array(raw));
+              off += size;
+            }
+            if (off > 0) buf = buf.subarray(off);
+          }
+          sentInit = true;
+          log(`pass ${attempt + 1}: +${got} segments, reached ${lastDecodeSec.toFixed(0)}s/${durationSec}s`);
+        } catch (e: any) {
+          sentInit = sentInit || !inInit;
+          log(`pass ${attempt + 1}: stalled at ${lastDecodeSec.toFixed(0)}s/${durationSec}s after ${got} segments`);
+        }
+
+        // Done when we are within a segment of the end, or made no progress.
+        if (lastDecodeSec >= durationSec - 12) break;
+        if (got === 0) {
+          log(`pass ${attempt + 1}: no progress, giving up at ${lastDecodeSec.toFixed(0)}s`);
+          break;
+        }
+        // Resume just past the last segment we actually received.
+        startAtMs = Math.round((lastDecodeSec + 0.5) * 1000);
+      }
+
+      controller.close();
+    },
+  });
 }
 
 /**

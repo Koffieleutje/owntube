@@ -36,7 +36,7 @@ CAPTIONS_PROXY=https://owntube-media.home.nedworks.org pnpm exec tsx server.ts
 | `/v/:id/:track/{init.mp4,seg-N.m4s}` | segments |
 | `/v/:id/captions/:lang.vtt` | WebVTT |
 
-Verified end to end on `dQw4w9WgXcQ`: manifest built in ~10s (38 video + 22 audio
+Verified end to end on `dQw4w9WgXcQ` (213s): manifest built in ~10s (38 video + 22 audio
 segments), **ffmpeg decodes the served HTTP manifest to 5,326 frames / 213.04s
 with zero warnings**, and captions return real VTT (en 4,263 B, de-DE 3,781 B).
 
@@ -53,22 +53,43 @@ through invidious-companion.
 
 **Captions are therefore a reason the companion cannot simply be dropped.**
 
-### Known limitation: format selection
+### Known limitation: long videos stall part-way
 
-Some videos refuse mp4 over SABR. On `0e3GPea1Tyg` every mp4 selection fails with
-`Cannot proceed with stream: attestation required` or "No media parts", across
-WEB / ANDROID / IOS / TV / **ANDROID_VR**, and with po_tokens bound to both
-`visitorData` and the video id. The same video works immediately when webm
-formats are selected (itags 243/249) — and yt-dlp downloads it fine, choosing
-`251-0+396-0`.
+**Correction.** An earlier version of this file blamed container/format selection
+(“mp4 fails, webm works”). That was wrong, and the mistake is worth recording:
+every one of those comparisons aborted the read after 200–400 KB, so they only
+ever exercised the first few seconds. Re-probing each itag individually shows
+**all six 360p/240p formats work** — mp4/avc1, mp4/av01 and webm/vp9 alike.
 
-The segmenter only cuts ISO-BMFF, so webm is not a fallback it can use: **that
-video cannot currently be converted.** Closing this needs either an EBML/cluster
-segmenter for webm, or smarter per-video format selection modelled on yt-dlp's.
-Checking the reference implementation is what found this — its one-line log
-(`Downloading android vr player API JSON`, then `251-0+396-0`) pointed straight at
-the container, after four client variants and two token bindings had ruled
-everything else out.
+The real fault is duration. On `0e3GPea1Tyg` (**1541s**, not the 213s of the
+other demo video) the stream advances `0 → 19.5s → 36.5s → 57.2s` and then the
+server returns empty responses forever:
+
+```
+[DEBUG] Received SABR context update (type: 5, sendByDefault: true)
+[DEBUG] Respecting server backoff policy: waiting 4000ms before request
+[DEBUG] Starting new segment fetch at playback position: 57187ms
+[WARN]  Segment fetch attempt 1/3 failed - No media parts or protocol updates received
+```
+
+Established about it:
+
+- **Not our fork.** Stock `googlevideo@4.1.1` fails identically at the same point.
+- **Not attestation.** A po_token is attached, bound either way.
+- **Not the client.** WEB / ANDROID / IOS / TV / ANDROID_VR all stall the same.
+- **Not fixed by restarting.** Reopening a session at the stall point (using the
+  seek patch) yields exactly one more segment, then stalls again — 13 passes,
+  still 57s.
+- **Not fixed by honouring the backoff harder.** Re-reading
+  `nextRequestPolicy.backoffTimeMs` on every retry, the way yt-dlp's
+  `_check_vod_ad_wait` does, changes nothing; the server sends no new policy at
+  the stall.
+- **yt-dlp downloads the same video completely** (75 MB), so it is solvable —
+  something in its `processor` handling (consumed ranges, `sabr_contexts_to_send`
+  round-tripping) that `SabrStream` does not do.
+
+So the converter is proven on short VOD and **not yet usable for long videos**.
+That is the blocker to close before wiring it into anything.
 
 ## What it proves
 
