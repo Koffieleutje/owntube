@@ -1,6 +1,11 @@
 # PR 1 — Detect livestreams from the thumbnail time-status overlay
 
-**Status: DRAFT, not submitted.** Target: `iv-org/invidious`, branch `master`.
+**Status: SUBMITTED as [iv-org/invidious#5844](https://github.com/iv-org/invidious/pull/5844)**
+on 2026-07-30, from branch `fix/livestream-thumbnail-overlay` on `mdbraber/invidious`.
+
+The body actually submitted differs from the draft below: it carries the
+AI disclosure `AI_POLICY.md` requires (exact model + tool), and the
+cross-references use real PR numbers. Read the PR for the submitted text.
 
 ## Proposed title
 

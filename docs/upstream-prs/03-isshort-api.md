@@ -1,6 +1,11 @@
 # PR 3 — Expose `isShort` on list items
 
-**Status: DRAFT, not submitted.** Target: `iv-org/invidious`, branch `master`.
+**Status: SUBMITTED as [iv-org/invidious#5846](https://github.com/iv-org/invidious/pull/5846)**
+on 2026-07-30, from branch `feat/api-is-short` on `mdbraber/invidious`.
+
+The body actually submitted differs from the draft below: it carries the
+AI disclosure `AI_POLICY.md` requires (exact model + tool), and the
+cross-references use real PR numbers. Read the PR for the submitted text.
 
 ## Proposed title
 
