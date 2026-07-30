@@ -21,6 +21,8 @@ podcast app ──(LAN/VPN)──▶ owntube /media/<id>   ◀── enclosure U
 | GET | `/rss/<kind>/<slug>.video.xml` | Basic (per user) | Podcast RSS, mp4 enclosures |
 | GET | `/` | Basic (per user) | HTML index of your feeds |
 | GET | `/opml.xml` | Basic (per user) | OPML of your feeds (both variants) |
+| GET | `/chapters/<videoId>.json` | none | Podcasting 2.0 JSON chapters (public YT-derived data) |
+| GET | `/icon.png` | none | OwnTube icon — stable podcast cover art |
 | GET | `/health` | none | Liveness |
 
 Feed `kind` ∈ `playlist`, `queue`, `saved`, `subscriptions`, `tag`, `channel`.

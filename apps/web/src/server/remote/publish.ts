@@ -76,6 +76,10 @@ export type FeedSnapshot = {
 export type PublishOptions = {
   /** Absolute origin used to build enclosure/link URLs (media host resolved from env). */
   appOrigin: string;
+  /** Stable podcast cover art for the library feeds (queue, playlists, …).
+   * Defaults to the companion's own /icon.png; channel feeds keep their
+   * channel avatar. Item thumbnails are unaffected. */
+  iconUrl?: string;
   /** Newest N uploads to keep per channel-based feed. */
   channelFeedLimit?: number;
   /** Newest N videos to keep in the merged subscriptions/tag feeds. */
@@ -304,7 +308,7 @@ async function buildFeedsForUser(
         title: pl.name,
         description: pl.description ?? undefined,
         link: `${appOrigin}/playlist?list=${pl.id}`,
-        image: items[0]?.thumbnailUrl,
+        image: opts.iconUrl || items[0]?.thumbnailUrl,
         updatedAt: pl.updatedAt ?? now,
         items,
       },
@@ -329,7 +333,7 @@ async function buildFeedsForUser(
         title: "Queue",
         description: "OwnTube watch queue",
         link: `${appOrigin}/`,
-        image: items[0]?.thumbnailUrl,
+        image: opts.iconUrl || items[0]?.thumbnailUrl,
         updatedAt: now,
         items,
       },
@@ -354,7 +358,7 @@ async function buildFeedsForUser(
         title: "Saved",
         description: "OwnTube saved videos",
         link: `${appOrigin}/`,
-        image: items[0]?.thumbnailUrl,
+        image: opts.iconUrl || items[0]?.thumbnailUrl,
         updatedAt: now,
         items,
       },
@@ -387,7 +391,7 @@ async function buildFeedsForUser(
         title: "Subscriptions",
         description: "Latest uploads from all subscribed channels",
         link: `${appOrigin}/subscriptions`,
-        image: items[0]?.thumbnailUrl,
+        image: opts.iconUrl || items[0]?.thumbnailUrl,
         updatedAt: now,
         items,
       },
@@ -424,7 +428,7 @@ async function buildFeedsForUser(
         title: `#${tag}`,
         description: `Latest uploads from channels tagged "${tag}"`,
         link: `${appOrigin}/subscriptions`,
-        image: items[0]?.thumbnailUrl,
+        image: opts.iconUrl || items[0]?.thumbnailUrl,
         updatedAt: now,
         items,
       },
@@ -451,7 +455,7 @@ async function buildFeedsForUser(
         title,
         description: `Latest uploads from ${title}`,
         link: `${appOrigin}/channel/${channelId}`,
-        image: meta?.avatarUrl ?? items[0]?.thumbnailUrl,
+        image: meta?.avatarUrl ?? (opts.iconUrl || items[0]?.thumbnailUrl),
         updatedAt: now,
         items,
       },
@@ -475,6 +479,7 @@ export async function buildAllFeeds(
 ): Promise<{ feeds: FeedSnapshot[]; users: FeedOwnerCredential[] }> {
   const opts = {
     appOrigin: options.appOrigin,
+    iconUrl: options.iconUrl ?? "",
     channelFeedLimit: options.channelFeedLimit ?? DEFAULT_CHANNEL_LIMIT,
     mergedFeedLimit: options.mergedFeedLimit ?? DEFAULT_MERGED_LIMIT,
     concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
@@ -527,9 +532,15 @@ export async function publishFeeds(
   db: AppDb,
   options: PublishOptions & { target: string; secret: string },
 ): Promise<{ feedCount: number; itemCount: number }> {
-  const { feeds, users: feedUsers } = await buildAllFeeds(db, options);
+  const base = options.target.replace(/\/+$/, "");
+  const { feeds, users: feedUsers } = await buildAllFeeds(db, {
+    ...options,
+    // The companion serves the OwnTube icon itself — a stable cover that,
+    // unlike a first-item thumbnail, never changes when the queue does.
+    iconUrl: options.iconUrl ?? `${base}/icon.png`,
+  });
   const itemCount = feeds.reduce((n, f) => n + f.items.length, 0);
-  const url = `${options.target.replace(/\/+$/, "")}/publish`;
+  const url = `${base}/publish`;
   const res = await fetch(url, {
     method: "POST",
     headers: {

@@ -17,7 +17,10 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { promises as dns } from "node:dns";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isIpAllowed } from "./ip-allow.ts";
 import {
   type FeedSnapshot,
@@ -52,6 +55,17 @@ if (!PUBLISH_SECRET) {
 }
 
 const store = new FeedStore(DATA_DIR);
+
+// The OwnTube icon, served at /icon.png as permanent podcast cover art. Loaded
+// once at startup; absent (unusual deploy) the route just 404s.
+let iconPng: Buffer | null = null;
+try {
+  iconPng = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "icon.png"),
+  );
+} catch {
+  /* no icon shipped */
+}
 
 function logLine(msg: string): void {
   process.stdout.write(`${msg}\n`);
@@ -343,6 +357,23 @@ const server = http.createServer((req, res) => {
     if (method === "GET" && pathname === "/health") {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok\n");
+      return;
+    }
+
+    // Permanent podcast cover art. Unauthenticated: podcast platforms fetch
+    // cover art server-side without the feed's credentials.
+    if ((method === "GET" || method === "HEAD") && pathname === "/icon.png") {
+      if (!iconPng) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("no icon\n");
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "image/png",
+        "content-length": iconPng.length,
+        "cache-control": "public, max-age=86400",
+      });
+      res.end(method === "HEAD" ? undefined : iconPng);
       return;
     }
 
