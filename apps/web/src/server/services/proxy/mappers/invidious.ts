@@ -10,7 +10,6 @@ import {
   pickViewCount,
   readPositiveNumberField,
   readStreamHeightPx,
-  reconcilePublishedAtWithText,
   resolveInvidiousAbsoluteMediaUrl,
   resolveInvidiousThumbnail,
   toUnixText,
@@ -56,15 +55,13 @@ export function mapInvidiousItem(
   const viewCount = pickViewCount(o);
   const publishedText =
     typeof o.publishedText === "string" ? o.publishedText : undefined;
+  // `published` is what Invidious actually emits (6 serialisation sites);
+  // `premiereTimestamp` covers scheduled premieres, which have no `published`
+  // yet. `publishedAt` and `timestamp` used to be tried here too — Invidious
+  // emits neither, at zero sites; they were Piped shapes that outlived Piped.
   const publishedAt =
     coercePublishedSecondsFromUpstream(o.published) ??
-    coercePublishedSecondsFromUpstream(o.publishedAt) ??
-    coercePublishedSecondsFromUpstream(o.timestamp) ??
     coercePublishedSecondsFromUpstream(o.premiereTimestamp);
-  const reconciledPublishedAt = reconcilePublishedAtWithText(
-    publishedAt,
-    publishedText,
-  );
   const channelName = typeof o.author === "string" ? o.author : undefined;
   const channelId = typeof o.authorId === "string" ? o.authorId : undefined;
   const channelAvatarUrl = resolveInvidiousThumbnail(
@@ -81,7 +78,7 @@ export function mapInvidiousItem(
     durationSeconds,
     viewCount,
     publishedText,
-    publishedAt: reconciledPublishedAt,
+    publishedAt,
     isLive: isLive || undefined,
     isUpcoming: isUpcoming || undefined,
     isShort: o.isShort === true || isShortItem || undefined,
@@ -314,15 +311,13 @@ export function mapInvidiousVideo(
     typeof o.publishedText === "string"
       ? o.publishedText
       : toUnixText(o.published);
+  // `published` is what Invidious actually emits (6 serialisation sites);
+  // `premiereTimestamp` covers scheduled premieres, which have no `published`
+  // yet. `publishedAt` and `timestamp` used to be tried here too — Invidious
+  // emits neither, at zero sites; they were Piped shapes that outlived Piped.
   const publishedAt =
     coercePublishedSecondsFromUpstream(o.published) ??
-    coercePublishedSecondsFromUpstream(o.publishedAt) ??
-    coercePublishedSecondsFromUpstream(o.timestamp) ??
     coercePublishedSecondsFromUpstream(o.premiereTimestamp);
-  const reconciledPublishedAt = reconcilePublishedAtWithText(
-    publishedAt,
-    publishedText,
-  );
 
   const { isLive, isUpcoming } = pickLiveFlagsFromUpstream(o);
   const rawDurationSeconds =
@@ -344,7 +339,7 @@ export function mapInvidiousVideo(
     durationSeconds,
     viewCount: pickViewCount(o),
     publishedText,
-    publishedAt: reconciledPublishedAt,
+    publishedAt,
     isLive: isLive || undefined,
     isUpcoming: isUpcoming || undefined,
     isPostLiveDvr: o.isPostLiveDvr === true || undefined,

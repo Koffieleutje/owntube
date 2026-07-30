@@ -1,4 +1,3 @@
-import { parseRelativePublishedToUnix } from "@/lib/published-sort-key";
 import { preferHighResVideoThumbnailUrl } from "@/lib/video-thumbnail-url";
 import type { VideoStoryboard } from "@/server/services/proxy.types";
 
@@ -126,21 +125,6 @@ export function pickViewCount(o: Record<string, unknown>): number | undefined {
     if (n === 0 && zeroish === undefined) zeroish = 0;
   }
   return zeroish;
-}
-
-export function reconcilePublishedAtWithText(
-  publishedAt: number | undefined,
-  publishedText: string | undefined,
-): number | undefined {
-  if (!publishedText?.trim()) return publishedAt;
-  const now = Math.floor(Date.now() / 1000);
-  const fromText = parseRelativePublishedToUnix(publishedText, now);
-  if (fromText === undefined) return publishedAt;
-  if (publishedAt === undefined) return fromText;
-  // Some instances return a mismatched numeric timestamp (often "too recent").
-  // If delta is large, trust relative text for consistency in feed ordering/labels.
-  if (Math.abs(publishedAt - fromText) > 2 * 3600) return fromText;
-  return publishedAt;
 }
 
 export function pickVideoThumbnail(
