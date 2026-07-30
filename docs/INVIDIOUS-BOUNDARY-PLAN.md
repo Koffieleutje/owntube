@@ -65,12 +65,23 @@ Rationale: this audit found **three silent upstream regressions**, one of which
 had been live for a week. Detection has to come before refactoring, or later
 phases will be debugging blind.
 
-- [x] **Consolidate the Invidious build.** Branch `nedworks/integration` in
-      `/var/data/config/invidious-build` = `adfec764` (the commit the running
-      image was built from) + the three local patches + a tracked
-      `docker/Dockerfile.nedworks`. Pushed to `mdbraber/invidious`.
-- [x] **Document the build recipe** in `/var/data/config/invidious/docker-compose.yml`,
-      including why never to build from `/usr/local/src/invidious-build`.
+- [x] **One tree, one branch.** `nedworks/integration` in
+      `/var/data/config/invidious-build` = **upstream + our patches, kept in step
+      by rebase** — not cherry-picks onto a pinned base, and not several
+      branches. Pushed to `mdbraber/invidious`. Inspect the patch set with
+      `git log origin/master..nedworks/integration`.
+- [x] **Rebased onto current upstream** (`9d1291a0`). The delta from our previous
+      base `adfec764` was CI/CHANGELOG/release-script only — **zero `src/`
+      changes** — so getting in step cost nothing behaviourally, and the four
+      patches reapplied byte-identically (verified by md5 of the patch diff).
+- [x] **Scripted the whole loop:** `invidious-build/nedworks-rebuild.sh` rebases,
+      counts the patch set before/after and **aborts if it dropped**, builds with
+      `Dockerfile.nedworks --build-arg release=1`, deploys, asserts
+      `/api/v1/stats` reports `branch: nedworks/integration`, and pushes the
+      branch. Takes an optional upstream commit to rebase onto (preferred when
+      adopting a single hotfix) and `--no-deploy`.
+- [x] **Document it** in `/var/data/config/invidious/docker-compose.yml`, pointing
+      at the script rather than duplicating the command.
 - [x] **Guard the stale tree** with `DO-NOT-BUILD-FROM-HERE.md`.
 - [ ] **Provenance canary — the single highest-value guard.** Assert that
       `/api/v1/stats` reports `software.branch === "nedworks/integration"`, and
@@ -214,22 +225,27 @@ and an untracked Dockerfile, so the image was built from plain upstream `master`
 and the fork's commits were simply absent. Both causes are fixed (Phase 0), and
 the provenance canary is what keeps them fixed.
 
-The real recurring cost of a long-lived fork is **rebase drift**:
-`nedworks/integration` is based on `adfec764` while upstream is already at
-`9d1291a0`, so every hotfix pickup means rebasing the patches. Keep that cheap:
+The real recurring cost of a long-lived fork is **rebase drift**. The model is
+therefore: **one tree, one branch, `upstream + our patches`, kept in step by
+rebase** — run `nedworks-rebuild.sh` whenever upstream has something you want.
+Keeping that cheap:
 
-- **Keep patches small, independent and single-purpose.** The current three are
-  clean cherry-picks touching 3 files / 105 insertions; that is why they rebased
-  without conflict. Resist bundling.
-- **Rebase onto the specific upstream commit you need, not onto `master`'s tip.**
-  Basing on the exact commit being adopted keeps the delta auditable — the
-  2026-07-30 build differs from the previously running image by *only* the three
-  patches, nothing else.
-- **Documented rebase procedure** (in the Invidious compose file): rebase, rebuild
-  with `Dockerfile.nedworks --build-arg release=1`, deploy, confirm
-  `/api/v1/stats` reports the new branch and commit, push the branch.
+- **Keep patches small, independent and single-purpose.** The current set is 3
+  source files / 105 insertions, which is why it rebases without conflict.
+  Resist bundling; one concern per commit.
+- **Rebase onto the specific upstream commit you need when adopting a hotfix**
+  (`nedworks-rebuild.sh <commit>`), not always onto `master`'s tip — it keeps the
+  delta from the previously running image auditable.
+- **Let the script enforce the invariants**: clean tree, patch count must not
+  drop, and `/api/v1/stats` must report `branch: nedworks/integration` after
+  deploy. Never hand-roll the docker build.
 - **Never build from `/usr/local/src/invidious-build`** — guarded by
-  `DO-NOT-BUILD-FROM-HERE.md`.
+  `DO-NOT-BUILD-FROM-HERE.md`, and redundant anyway since this tree's `origin`
+  already tracks upstream for diffing.
+- **Expect a patch to land upstream eventually.** When a rebase makes one
+  redundant, drop it (`git rebase --skip`) and remove it from the list in the
+  compose file — the script's patch-count check will flag the change so it can't
+  happen silently.
 
 Upstreaming is then a *cost reduction*, not a safety requirement: each merged PR is
 one fewer patch to rebase forever. Worth doing for the generic ones when
