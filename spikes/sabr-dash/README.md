@@ -133,11 +133,47 @@ None of the three fixes the attestation cut-off — verified — but the seek,
 resume and timeline checks all still pass, and the 213s conversion is unchanged
 at 0 timeline mismatches.
 
+#### Why our token is rejected
+
+`minter.ts` reimplements invidious-companion's minting faithfully — the same
+`getAttestationChallenge` → `BotGuardClient.snapshot` → `GenerateIT` →
+`WebPoMinter` chain, the same JSDOM-with-a-youtube.com-origin, the same browser
+user agent on the Innertube session. YouTube still refuses:
+
+```
+GenerateIT 200 [null, 43200, null, "Mk-65iJYmfX6R7qlDD4rlvOT7pTD..."]
+BGError: Failed to create WebPoMinter: No integrity token provided
+```
+
+Index 0 — the integrity token — is `null`, leaving only the low-trust websafe
+fallback at index 3. **The companion mints and validates successfully on this
+same host, in the same minute**, so this is not IP reputation and not the
+(harmless) missing-canvas warning both share:
+
+```
+[INFO] Validating PO token with video: sBWSEVRwgMo
+[INFO] Successfully validated PO token with video: sBWSEVRwgMo
+[INFO] Successfully generated PO token
+```
+
+Something in its environment — Deno rather than Node, the Web Worker it runs the
+snapshot in, its `getFetchClient` headers — makes its attestation acceptable and
+ours not. That difference has not been isolated.
+
 #### Next step
 
-Get a po_token the server accepts, then re-test. Until that is done, treat this
-converter as **proven for short VOD and unproven beyond about a minute of any
-long video**.
+**Don't reimplement BotGuard — source the token from the companion.** It already
+mints a validated token every few minutes and holds the `WebPoMinter` needed to
+bind one to any video id. Exposing that to the converter is a far smaller change
+than reproducing attestation, and it fits the boundary this plan already
+assumes: the companion stays AGPL behind HTTP, nothing is copied.
+
+That reframes the companion fork. Its first job is not to host the converter but
+to expose the attested session — one route returning a content-bound token for a
+video id, signed with `withCompanionCheck()` since `SERVER_VERIFY_REQUESTS=true`.
+
+Until that exists, treat this converter as **proven for short VOD and unproven
+beyond about a minute of any long video**.
 
 ## What it proves
 
