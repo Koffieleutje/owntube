@@ -12,7 +12,7 @@ Status: **not started — plan only.** Written 2026-07-30.
 | 4 — `comments` | **not started** | |
 | 5 — `videos` | **not started** | composes companion `/player` |
 | 6 — cutover | **not started** | fork goes 8 patches → 0 |
-| 7 — SABR connector | **not started** | only when the detector moves |
+| 7 — SABR connector | **spiked** — see `spikes/sabr-dash/` | conversion proven; seek is the open problem |
 
 This plan is a sibling of `INVIDIOUS-BOUNDARY-PLAN.md`, which shrank the boundary
 from OwnTube's side. This one proposes removing the far side of it.
@@ -135,16 +135,52 @@ companion's `/player`. Last: highest risk, best covered by existing tests.
 **Stage 6 — cutover.** Dual-run, watch divergence, flip the env var, keep
 Invidious warm for a week, then delete. Fork drops 8 patches → 0.
 
-**Stage 7 — SABR connector.** Only when the detector moves. `SabrStream` → fMP4
-segmentation → DASH, reusing `/dvr`'s exact shape (`/sabr/<id>/<rep>/<sq>`);
-`/dvr` is the proof we have already built this pattern. Read yt-dlp #13515 for the
-failure modes and Materialious' `onReloadPlayerResponse` (~25 lines) for the
-reload handler.
+**Stage 7 — SABR connector.** Only when the detector moves. **A spike now exists:
+`spikes/sabr-dash/`** — read its README before planning this.
 
-Design note: DASH expects a quality ladder, SABR picks quality per session.
-Advertise 2-3 Representations and start a session lazily for whichever rung the
-client requests; a mid-playback switch is a new session seeked to the current
-`playerTimeMs`, which `SabrStream` supports via `start({ state: { playerTimeMs } })`.
+What the spike settled:
+
+- **Conversion works and is segmentation, not transcoding.** ~130 lines of
+  ISO-BMFF box walking; no ffmpeg. Output cross-validated **byte-identical**
+  against yt-dlp's independent Python implementation (init segments and media).
+- **Non-uniform fragments are fine.** 29 distinct durations across 38 video
+  fragments; `SegmentTimeline` covers it, verified segment-by-segment against
+  each fragment's own `tfdt` — 0 mismatches, 213.00s exact.
+- **Cost is not the problem at our scale.** ~1.4% of one core at realtime.
+- **Resilience held**: 6/6 sequential, 4/4 concurrent, watchdog aborts cleanly.
+
+**The correction that matters: `SabrStream` cannot seek.** Four approaches all
+failed (partial state ignored; resume lands where the snapshot stopped; cleared
+buffers restart at 0; synthesised buffered ranges make the server stall).
+`grep -c seek` in its typings returns 0. Seek lives in the sibling export
+`SabrStreamingAdapter` — but that one requires **you** to parse UMP:
+
+| | UMP parsed for you | seek |
+|---|---|---|
+| `SabrStream` | yes | **no** |
+| `SabrStreamingAdapter` | **no** | yes |
+
+Neither gives headless + seek. So stage 7 must pick an approach up front:
+
+1. **Pre-pull and cache** (what the spike does). Trivially supports seek because
+   every segment is already on disk, and at ~30x realtime a 10-minute video takes
+   ~20s. Costs bandwidth and storage before first frame. **Most viable at
+   single-user scale.**
+2. **Long-lived sequential session per viewer.** Serve segments as they arrive.
+   Cheap, but no seek — a seek past the pulled point cannot be served.
+3. **Implement a headless `SabrPlayerAdapter`** (12 methods) on top of
+   `SabrStreamingAdapter`, including UMP parsing. Gets real seek, and is
+   materially more work than this plan previously assumed.
+
+Also settled by the spike, and easy to get wrong:
+`stream.abort()` never `reader.cancel()`; resume must stay inside one session
+(`sabr.media_serving_enforcement_id_error` otherwise); resume does not resend the
+init segment; and format *preference* flags do not stop it handing back WebM.
+
+Design note: DASH expects a quality ladder, SABR picks quality per session, so
+advertise 2-3 Representations and start a session per rung. Read yt-dlp #13515
+for the failure modes and Materialious' `onReloadPlayerResponse` (~25 lines) for
+the reload handler.
 
 ## What we are deliberately not building
 
