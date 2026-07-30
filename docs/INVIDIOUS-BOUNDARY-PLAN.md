@@ -1,6 +1,6 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: **Phases 0-2 and 3.1-3.3 shipped; 3.4-3.7, 4 and 5 outstanding.** Last
+Status: **Phases 0-2 and 3.1-3.4 shipped; 3.5-3.7, 4 and 5 outstanding.** Last
 updated 2026-07-30.
 
 | phase | state | commits |
@@ -13,7 +13,8 @@ updated 2026-07-30.
 | 3.1 — `audioTrack` upstream | **done** | `71fa2f4`, `8181c80` + Invidious `94911a03` |
 | 3.2 — trending `liveNow` | **done** | `5ec55a1` + Invidious `02099ffe` |
 | 3.3 — Shorts flag | **done** | `e5c9d36`, `70d449f` + Invidious `57b16ba9` |
-| 3.4-3.7 — remaining data gaps | **not started** | — |
+| 3.4 — members-only | **done (deleted, not closed)** | `0596008`, `daf0050` |
+| 3.5-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
 | 5 — restructure media routes | **not started** | — |
 
@@ -452,9 +453,51 @@ reasons: cached payloads predating the field, and the fact that the length rule
 is not made stricter when the flag is present, which would drop real Shorts from
 those cached rows.
 
-### 3.4-3.7 — remaining gaps
-4. **Members-only / paid.** Currently guessed from the title
-   (`mapper:47`, `titleSuggestsMembersOnlyOrSubscriberOnly`).
+### 3.4 — Members-only — **DONE by deletion** (`0596008`, `daf0050`)
+
+**The only phase so far whose answer was "remove the feature", not "add a
+field".** The plan assumed upstream had a members-only signal that OwnTube was
+guessing at. Measurement said the guess was not merely inaccurate — it was
+guessing at something that never arrives.
+
+| corpus | heuristic fires |
+|---|---|
+| 745 titles: channel tabs, neutral searches, trending, popular | **0 (0.00%)** |
+| 585 titles incl. targeted "members only"-style searches | 39, **all publicly watchable** |
+
+Those 39 were songs (`Drake - Members Only (Audio)`,
+`XXXTENTACION - Members Only VOL 1`), tutorials (`How to Enable Subscribers Only
+Mode for Comments`), news and commentary (`Members Only Videos are a HUGE Problem
+on YouTube`). `stripRestrictedListVideos` **dropped** each one.
+
+It could not have worked: members-only content is not served to signed-out
+clients at all — six channels' video tabs carry no `BADGE_STYLE_TYPE_MEMBERS_ONLY`
+and expose no Membership tab to an anonymous browse — and Invidious is always
+signed out. True-positive rate zero, false-positive rate not zero, and **a
+dropped row is invisible**, so nothing could surface the error.
+
+Removed: the title heuristic, `stripRestrictedListVideos` (12 call sites),
+`isUpstreamMembersOrPaidOnly` with its seven speculative key names, and the
+default-**on** setting "Hide members-only / subscribers-only videos in feeds".
+−255/+49 lines.
+
+In its place, `0596008` makes the failure legible instead of silent: paywall
+refusals now match `VIDEO_UNAVAILABLE_SIGNATURES`, so the watch page shows
+YouTube's own reason ("Join this channel to get access to members-only
+content…") rather than "Invidious is unavailable. Check instance health" — which
+blamed the instance for something no instance can fix. Signatures are specific
+(`members-only content`, not `members only`) precisely so they don't repeat the
+mistake; tests pin all four real titles above as non-matching.
+
+**The lesson for 3.5-3.7.** Before closing a data gap, check the gap is real. The
+plan listed this as "upstream has the data, doesn't emit it, OwnTube guesses" —
+the first clause was false. A filter that *hides* things deserves more suspicion
+than one that labels them, because its false positives are unobservable by
+construction: measure what it removes, not just what it keeps.
+
+### 3.5-3.7 — remaining gaps
+4. ~~**Members-only / paid.**~~ Resolved by deletion — see 3.4 above. Kept here
+   because the item as written was wrong: it assumed upstream had the data.
 5. **`publishedAt`.** Four candidate fields plus
    `reconcilePublishedAtWithText`, which lets the human string arbitrate the
    numeric timestamp. Emit one trustworthy value.
@@ -559,8 +602,10 @@ Phases 0, 1 and 2 are done. Remaining, in order:
    `liveNow` in the *extractor*, not `lengthSeconds` in the serialiser; see 3.2
    above. `UPSTREAM_CHECK_KNOWN_FAILING` is now empty.
 3. ~~Phase 3.3 — shorts flag.~~ **Done** — see 3.3 above.
-4. **Phase 3.4-3.7** — members-only flag, `publishedAt`, channel parse-error
-   placeholders, multi-shape pickers.
+4. ~~Phase 3.4 — members-only flag.~~ **Done by deletion** — the gap was not
+   real; see 3.4 above.
+5. **Phase 3.5-3.7** — `publishedAt`, channel parse-error placeholders,
+   multi-shape pickers.
 4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
    Phase 3's progress is measurable.
 5. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a

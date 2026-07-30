@@ -7,26 +7,31 @@ in git, so it does not depend on any prior conversation.
 
 Continue the OwnTube ↔ Invidious boundary work. Read `docs/INVIDIOUS-BOUNDARY-PLAN.md`
 first — it has the full analysis, the phase-by-phase plan, a status table, and an
-"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1-3.3** are shipped;
-**start at Phase 3.4**.
+"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1-3.4** are shipped;
+**start at Phase 3.5**.
 
-## Phase 3.4 — the task
+## Phase 3.5 — the task
 
-Members-only / paid videos are currently guessed from the title
-(`titleSuggestsMembersOnlyOrSubscriberOnly`, used in `mappers/invidious.ts` to
-drop rows). Find the real upstream signal and stop pattern-matching titles — a
-title heuristic both misses renamed videos and false-positives on any video whose
-title merely mentions membership.
+`publishedAt` has four candidate upstream fields (`published`, `publishedAt`,
+`timestamp`, `premiereTimestamp`) plus `reconcilePublishedAtWithText`, which lets
+a human-readable string ("3 days ago") arbitrate a numeric timestamp. Establish
+which field Invidious actually populates, in which endpoints, and whether the
+reconciliation is still correcting anything real — then collapse to one
+trustworthy value.
 
-`isUpstreamMembersOrPaidOnly` in `server/services/proxy/normalize.ts` already
-reads *something* from upstream; start by establishing what it actually receives
-versus what YouTube sends, the same way 3.2 and 3.3 were established (below).
+Measure before changing: 3.4's item turned out to be guarding against something
+that never arrives, and the fix was deletion. Check `reconcilePublishedAtWithText`
+the same way — instrument it over a real corpus and see how often it actually
+overrides, and whether the override is right when it does.
 
-Then 3.5 `publishedAt` (four candidate fields plus `reconcilePublishedAtWithText`,
-which lets a human string arbitrate a numeric timestamp), 3.6 channel
-`/videos` parse-error placeholders, 3.7 the multi-shape pickers.
+Then 3.6 (channel `/videos` parse-error placeholders — a reliability bug, worth
+an upstream issue with a reproducer) and 3.7 (multi-shape pickers:
+`pickViewCount`, `pickChannelSubscriberCount`, `readStreamHeightPx`,
+`readPositiveNumberField`, and duration scraped from `dur=`). Note `pickLiveFlags`
+in `lib/live-video.ts` still carries dead Piped branches (`raw.livestream`,
+`duration === -1 && uploaded === -1`) despite Phase 1 — 3.7 territory.
 
-## What Phases 3.1-3.3 established that is worth reusing
+## What Phases 3.1-3.4 established that is worth reusing
 
 - The upstream patch pattern: emit the field Invidious *already parses* for its
   own use, rebuild via `nedworks-rebuild.sh`, then delete OwnTube's guess. Phase
@@ -71,6 +76,18 @@ which lets a human string arbitrate a numeric timestamp), 3.6 channel
 - **Keep the fallback when cached payloads can predate the field.** 3.1 deleted
   its fallback; 3.3 kept the length/title rules for exactly that reason. Decide
   per field, and say which in the commit.
+- **Check the gap is real before closing it.** 3.4 was listed as "upstream has
+  the data, doesn't emit it, OwnTube guesses" — upstream never had it, because
+  members-only content is not served to signed-out clients and Invidious is
+  always signed out. The answer was to delete the feature, not add a field.
+- **Filters that hide things need more suspicion than ones that label things.**
+  A false positive in a filter is unobservable by construction — the row simply
+  is not there. 3.4's heuristic fired 0 times on 745 ordinary titles and, when it
+  did fire, was wrong every time, dropping songs and tutorials whose titles said
+  "members only". Measure what a filter *removes*, not just what it keeps.
+- **When you remove a guard, make the failure legible instead.** 3.4 paired the
+  deletion with a real error message: paywalled videos now show YouTube's own
+  reason rather than a generic "instance unavailable" wall.
 - **Formatting Crystal in this sandbox:** container writes to bind mounts are
   denied, so `crystal tool format <file>` silently no-ops while `--check` still
   reports a diff. Pipe instead:
