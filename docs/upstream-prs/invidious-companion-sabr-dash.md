@@ -57,16 +57,6 @@ exposed to the public internet that wasn't already.
    video is pulled and cut (~15s warm-up for a 25-minute video at 360p) in
    exchange for free seeking.
 
-## Test evidence (this branch, containerised)
-
-- 25-minute video: manifest in 15s, **288 video + 155 audio** segments; the
-  concatenated init + first segment is valid fMP4, and **ffmpeg decodes the
-  served bytes cleanly** (h264 640×360, full 1541.2s duration, 0 warnings).
-- Out-of-range segment → 404; invalid video id → 400.
-- With `SERVER_VERIFY_REQUESTS=true`: unsigned and forged `check` → 400; a valid
-  `check` → 200 and is embedded into every segment URL in the manifest; signed
-  segment fetch → 200.
-
 ## Dependency handling
 
 The connector needs a patched `googlevideo` (five VOD/seek fixes — see the
@@ -76,29 +66,65 @@ attribution and regeneration steps in its README) and mapped via `gv/` in
 `deno.json`. Once upstream releases, swap the vendor for a normal
 `jsr:@luanrt/googlevideo` pin and delete the directory.
 
-## Config
+## Session modes
 
-All optional, sensible defaults:
+Two ways to obtain a streaming session, in preference order:
+
+1. **WEB + po_token** (`SABR_POT_URL` set). Full format list — every height and
+   every dubbed audio track. **The GVS token must be bound to the video id, not
+   to visitorData.** A visitorData-bound token is accepted and then rejected
+   ~60s in with `streamProtectionStatus: 3` (token seen, judged invalid), which
+   is indistinguishable from having no token until you read the status code.
+   This one detail is what unlocked dubs and the ladder.
+2. **ANDROID_VR, no token.** Exempt from attestation, needs no provider, but
+   lists only the original audio track. Used automatically when no provider is
+   configured or minting fails; the fallback is logged.
+
+Any provider speaking the bgutil `POST /get_pot {content_binding}` shape works;
+tested against `brainicism/bgutil-ytdlp-pot-provider`.
+
+## Config
 
 | env | default | meaning |
 |---|---|---|
-| `SABR_VIDEO_HEIGHT` | 360 | video representation to build |
-| `SABR_MAX_AUDIO_TRACKS` | 2 | audio tracks to build per video |
-| `SABR_CACHE_VIDEOS` | 2 | prepared videos held in memory (LRU) |
+| `SABR_POT_URL` | *(unset)* | po_token provider; unset ⇒ ANDROID_VR fallback |
+| `SABR_SEED_HEIGHT` | 360 | height pulled up front |
+| `SABR_MAX_HEIGHT` | 1080 | ceiling on advertised renditions |
+| `SABR_CACHE_MB` | 512 | byte budget for prepared media |
+| `SABR_SEGMENT_WAIT_MS` | 30000 | how long a segment request waits |
 
-## Known limitations (POC scope)
+## Test evidence
 
-- **Single video quality.** One height per manifest; no quality ladder. DASH
-  expects one, SABR picks per session — a real version advertises 2–3
-  representations and opens a session per rung.
-- **Original audio only.** The raw ANDROID_VR response lists only the original
-  audio track; dubbed languages are unavailable on this path. Recovering them
-  needs a different exempt client or an attested WEB session — untested.
-- **Whole-video warm-up.** Pulls and cuts the entire video on first request
-  rather than serving segments lazily. Fine at single-household scale; a public
-  instance wants a streaming session cache keyed by (video, position).
-- **Memory cache.** In-process, lost on restart. A persistent cache is a separate
-  piece of work.
+- **Ladder + dubs**: `?audio=de,fr` on a 25-minute video yields
+  `mode=web+pot, 6 renditions, 24 audio tracks`, a 6-rendition video
+  AdaptationSet (144–1080) and German/French audio sets with labels.
+- **Shared timeline is sound**: fragment boundaries are identical across
+  heights (288 fragments, **0.0000s drift** 144p vs 720p). Verified end to end —
+  a lazily-pulled 720p decodes clean at 1280×720 and its actual tfdt deltas
+  (91091, 127127) match the manifest's `<S d=…>` exactly.
+- **Lazy + progressive**: first 720p segment served **4.9s** after the first
+  request for that rendition; `seg-200` served while the track was still
+  filling.
+- **Fallback**: with the provider unreachable the session drops to ANDROID_VR,
+  logs why, and still serves the video.
+- **Edge cases**: unknown rendition → 404, bad video id → 400, segment before
+  manifest → 404. With `SERVER_VERIFY_REQUESTS=true`: unsigned/forged `check` →
+  400; valid `check` → 200 and embedded in every segment URL.
+- ffmpeg decodes served bytes cleanly (h264, full 1541.2s duration).
+
+## Remaining limitations
+
+- **Seed warm-up.** The first manifest still waits for one height plus the
+  requested audio tracks (~15–35s for a 25-minute video, depending on how many
+  audio tracks were asked for). Removing it entirely needs the manifest to be
+  built from an index rather than from a completed pull — the timeline
+  currently comes from observed `tfdt` values.
+- **Audio tracks are pulled eagerly** when named in `?audio=`, unlike video
+  renditions. They could use the same lazy path; they are not on it yet because
+  each track needs its own timeline in the manifest, and that timeline comes
+  from the pull.
+- **In-process cache.** Bounded now, but lost on restart. A shared or persistent
+  cache is separate work.
 - **Captions** still route through the existing companion caption path (the
   `timedtext` base_url is IP-blocked); unchanged here.
 
