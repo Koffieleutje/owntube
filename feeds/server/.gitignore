@@ -3,3 +3,6 @@ data
 *.db
 *.db-*
 .env
+# The Dockerfile deliberately builds without one (3 deps, majors pinned in
+# package.json); a committed lockfile would quietly become the source of truth.
+package-lock.json

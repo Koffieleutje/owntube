@@ -34,10 +34,21 @@ export class FeedStore {
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
-    // Deliberately still `companion.db`: this file lives in a mounted volume on
-    // the deployed server and holds the published snapshots and per-user feed
-    // credentials. Renaming it would quietly start from an empty database.
-    this.db = new Database(path.join(dataDir, "companion.db"));
+    // Renamed from `companion.db`. A deployed server has the old file in its
+    // volume, and starting from an empty database would drop every published
+    // snapshot and per-user feed credential until the next push — so adopt it
+    // in place rather than ignoring it. One-way and one-time: after the move
+    // there is nothing left to find.
+    const dbPath = path.join(dataDir, "feeds.db");
+    const legacyPath = path.join(dataDir, "companion.db");
+    if (!fs.existsSync(dbPath) && fs.existsSync(legacyPath)) {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        if (fs.existsSync(legacyPath + suffix)) {
+          fs.renameSync(legacyPath + suffix, dbPath + suffix);
+        }
+      }
+    }
+    this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS feeds (

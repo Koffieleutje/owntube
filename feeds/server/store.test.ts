@@ -59,7 +59,8 @@ test("replaceAll prunes feeds and users absent from the payload", () => {
 test("legacy ownerless table is migrated and orphans pruned on publish", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
   {
-    // Simulate a pre-per-user database.
+    // Simulate a pre-per-user database. The filename is the pre-rename one, so
+    // this also exercises the `companion.db` -> `feeds.db` adoption in Store.
     const db = new Database(path.join(dir, "companion.db"));
     db.exec(
       `CREATE TABLE feeds (
@@ -118,4 +119,33 @@ test("chapters index rebuilds from pushed items", () => {
     [{ username: "alice", passSha256: "a".repeat(64) }],
   );
   assert.equal(store.chaptersFor("vidWITHchap"), null);
+});
+
+test("a legacy companion.db is adopted rather than left behind", () => {
+  // A deployed server has the old file in its volume. Starting from an empty
+  // database would drop every published snapshot and per-user credential until
+  // the next push, so the old name is taken over in place.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
+  {
+    const db = new Database(path.join(dir, "companion.db"));
+    db.exec("CREATE TABLE marker (id INTEGER PRIMARY KEY)");
+    db.prepare("INSERT INTO marker (id) VALUES (1)").run();
+    db.close();
+  }
+
+  new FeedStore(dir);
+  assert.equal(fs.existsSync(path.join(dir, "feeds.db")), true);
+  assert.equal(fs.existsSync(path.join(dir, "companion.db")), false);
+  // The adopted file is the same one, not a fresh database beside it.
+  const reopened = new Database(path.join(dir, "feeds.db"));
+  const rows = reopened.prepare("SELECT id FROM marker").all() as { id: number }[];
+  reopened.close();
+  assert.deepEqual(rows, [{ id: 1 }]);
+});
+
+test("a fresh data dir just starts a new database", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
+  const store = new FeedStore(dir);
+  assert.equal(fs.existsSync(path.join(dir, "feeds.db")), true);
+  assert.equal(store.list("alice").length, 0);
 });

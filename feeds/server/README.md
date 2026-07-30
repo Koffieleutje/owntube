@@ -71,10 +71,22 @@ PUBLISH_SECRET=x DATA_DIR=./data npm start
 npm test    # render unit tests
 ```
 
+## Tests
+
+```bash
+cd feeds/server
+npm install     # not part of the pnpm workspace: it ships as its own container
+npm test
+```
+
+Node 22 (see `.nvmrc`), matching the Dockerfile. `better-sqlite3` publishes
+prebuilt binaries per Node major; on a newer Node it falls back to compiling
+from source and the install fails, which is why the version is pinned rather
+than left to whatever `node` happens to be on PATH.
+
 ## Deploy on spiff
 
-Lives at `/var/docker/owntube-companion/` on spiff (the deploy directory keeps its
-original name — the named volume and SQLite file inside it are live), fronted by its
+Lives at `/var/docker/owntube-feeds-server/` on spiff, fronted by its
 caddy-docker-proxy (`caddy` external network, `caddy` label prefix — see
 `docker-compose.yml`). Public TLS is provisioned automatically by Caddy. The
 feeds server does its own HTTP Basic Auth, so it deliberately does **not** import
@@ -84,9 +96,9 @@ credentials.
 ```sh
 # from the owntube repo on naggon:
 rsync -az --delete --exclude node_modules --exclude data --exclude '*.db*' \
-  feeds/server/ root@spiff.nedworks.org:/var/docker/owntube-companion/
-# create /var/docker/owntube-companion/.env on spiff (PUBLISH_SECRET must match
+  feeds/server/ root@spiff.nedworks.org:/var/docker/owntube-feeds-server/
+# create /var/docker/owntube-feeds-server/.env on spiff (PUBLISH_SECRET must match
 # the home side's OWNTUBE_PUBLISH_SECRET; feed credentials come with each publish)
-ssh root@spiff.nedworks.org 'cd /var/docker/owntube-companion && docker compose up -d --build'
+ssh root@spiff.nedworks.org 'cd /var/docker/owntube-feeds-server && docker compose up -d --build'
 curl -sf https://owntube.nedworks.org/health   # -> ok
 ```

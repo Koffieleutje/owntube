@@ -27,11 +27,7 @@ services:
       retries: 5
       start_period: 10s
     volumes:
-      # Deliberately still `companion-data`: this is a live named volume holding
-      # the published snapshots and per-user feed credentials. Renaming it would
-      # silently start from an empty one. `docker volume` can migrate it if the
-      # old name ever becomes confusing enough to be worth the downtime.
-      - companion-data:/data
+      - feeds-server-data:/data
     networks:
       - caddy
     labels:
@@ -42,7 +38,7 @@ services:
       caddy.reverse_proxy: "* {{upstreams 8080}}"
 
 volumes:
-  companion-data:
+  feeds-server-data:
 
 networks:
   caddy:
