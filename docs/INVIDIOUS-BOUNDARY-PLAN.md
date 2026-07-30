@@ -114,7 +114,15 @@ phases will be debugging blind.
 
       Because a long-lived patched fork is the accepted strategy, this assertion
       *is* the strategy's safety net. Add it before anything else.
-- [x] **Behaviour canary.** A scheduled job asserting, against the live upstream:
+
+      **No longer runs on a schedule** (see the behaviour canary below).
+      `nedworks-rebuild.sh` still asserts it at deploy time, so the rebuild path
+      is covered; drift *after* a deploy is not.
+- [~] **Behaviour canary — built, then switched off by choice (2026-07-30).** The
+      checks all exist in `apps/web/scripts/check-upstream.ts` and pass; what is
+      gone is the *schedule*. Run with `pnpm check:upstream`. See "The canary is
+      deliberately off" under Open items — do not re-enable without asking.
+      Asserts, against the live upstream:
       - `/api/v1/captions/<id>?label=…` returns a redirect (or usable VTT)
       - `adaptiveFormats` entries carry `init` + `index` byte ranges
       - trending items have non-zero `lengthSeconds`
@@ -281,10 +289,14 @@ deployed stack. Single-audio videos carry no `audioTrack` at all, which is
 correct rather than a gap — there is no second track to distinguish — so no
 fallback was kept.
 
-`8181c80` adds an `audioTracks` canary check. That is not optional here: with the
-scraping deleted, `audioTrack` is the *only* source of audio-language data, so
-losing it (dropped patch, or YouTube withdrawing the field) would be silent.
-Canary is now **5 PASS + 1 KNOWN**.
+`8181c80` adds an `audioTracks` canary check, because with the scraping deleted
+`audioTrack` is the *only* source of audio-language data, so losing it (dropped
+patch, or YouTube withdrawing the field) would otherwise be silent. It passed
+("24 distinct audio tracks, all named, 1 flagged original").
+
+**The canary has since been disabled at the owner's request — see "The canary is
+deliberately off" below.** The check remains in `scripts/check-upstream.ts` and
+runs on demand via `pnpm check:upstream`; it simply is not scheduled.
 
 **Correction to the estimate below — it was wrong by more than an order of
 magnitude.** The claim was "~5 lines upstream deletes ~300 lines of the most
@@ -462,21 +474,38 @@ Phases 0, 1 and 2 are done. Remaining, in order:
 
 ## Open items and honest gaps
 
-**Found broken on 2026-07-30, during Phase 3.1 — the canary was not running.**
-The `owntube-upstream-canary` service had been **commented out** in
-`/var/data/config/owntube/docker-compose.yml`, and its container had exited
-(137) hours earlier. So for some unknown window, the guard this plan calls "the
-strategy's safety net" was silently absent — the same failure *shape* as the July
-23 incident it exists to catch: the mechanism was fine, it just wasn't running,
-and nothing said so. Restored (with a timestamped `.bak-*` first) and verified
-reporting 5 PASS + 1 KNOWN.
+**The canary is deliberately off (2026-07-30).** The `owntube-upstream-canary`
+service is commented out in `/var/data/config/owntube/docker-compose.yml` and its
+container removed, **at the owner's explicit request**. This is a decision, not an
+oversight — **do not re-enable it without asking.**
 
-Worth drawing the obvious conclusion: a canary that can be switched off without
+Earlier the same day it was found commented out with a dead container and was
+restored, on the assumption it had lapsed by accident; that assumption was wrong,
+and the restore was reverted. If you find it off, that is the intended state.
+
+What this costs, recorded plainly so the trade is visible rather than forgotten —
+this plan elsewhere calls the canary the fork strategy's safety net, and that
+reasoning has not changed, only the decision about whether to run it:
+
+- **Provenance is no longer asserted continuously.** The July 23 incident — an
+  image built from plain upstream `master`, silently dropping every local patch,
+  captions broken for a week — is exactly what the `provenance` check caught in
+  one assertion. `nedworks-rebuild.sh` still asserts it at *deploy* time, which
+  covers the rebuild path but not drift afterwards.
+- **`audioTrack` has no monitored guard.** Phase 3.1 deleted the URL-scraping
+  fallback, so if the patch is lost or YouTube withdraws the field, multi-language
+  videos degrade to unlabelled rows with nothing reporting it.
+- The other checks (captions, byte ranges, extraction) go back to being noticed
+  by accident, which is how all three of the original regressions were found.
+
+None of this is an argument to override the decision. The mitigation, if wanted
+later, is to run `pnpm check:upstream` by hand after each Invidious rebuild — it
+still works and still exits non-zero on a new failure.
+
+Worth keeping from the earlier analysis: a canary that can be switched off without
 anything noticing is only half a guard. It has no external heartbeat — nothing
-asserts *that it ran*, only what it found when it did. If this recurs, the fix is
-a dead-man's check (last-success timestamp somewhere observable), not more
-assertions inside the canary. Left undone deliberately; noting it so the gap is
-on the record rather than rediscovered.
+asserts *that it ran*, only what it found when it did. That gap is now moot while
+it is off, but it is the first thing to fix if it is ever turned back on.
 
 **The `/dvr` segment route is now verified end to end** (2026-07-30). A
 post-live-DVR video was found by scanning 113 candidates across trending and five

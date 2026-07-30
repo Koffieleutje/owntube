@@ -32,8 +32,9 @@ list path is where `lengthSeconds` is being dropped.
   own use, rebuild via `nedworks-rebuild.sh`, then delete OwnTube's guess. Phase
   3.1's Invidious commit is `94911a03`.
 - **Add a canary check for anything whose fallback you delete.** Phase 3.1 added
-  `audioTracks`; without it, losing the patch would be silent. Canary is now
-  5 PASS + 1 KNOWN.
+  `audioTracks`; without it, losing the patch would be silent. (The canary is
+  currently disabled by choice — see below — but the check still exists and
+  `pnpm check:upstream` still runs it on demand.)
 - **Expect the new data to expose bugs the old guesses were hiding.** Phase 3.1
   found two (audio rows keyed on the primary subtag merged `zh-Hans` with
   `zh-Hant`, making one dub unreachable in the picker; and upstream `displayName`
@@ -93,12 +94,14 @@ when one step went wrong. Split by concern; each commit independently green.
 - Internal companion address: `INVIDIOUS_COMPANION_INTERNAL_URL`
   (`http://invidious-companion:8282`). Use it for server-side fetches; only use
   the public base for URLs the browser must reach.
-- The canary runs hourly: `docker logs -f owntube-upstream-canary`. It should
-  report **5 PASS + 1 KNOWN** (`listDuration`). If a new check goes red, that is
-  a real regression — investigate before continuing. **Check it is running at
-  all** (`docker compose ps owntube-upstream-canary`): it was found commented
-  out of compose with a dead container on 2026-07-30, and nothing asserts that
-  it ran.
+- **The canary is deliberately disabled** (2026-07-30, owner's request):
+  commented out of compose, container removed. **Do not re-enable it without
+  asking** — it was restored once that day on the assumption it had lapsed by
+  accident, and that was wrong. Run it by hand instead when you need it:
+  `docker exec owntube node_modules/.bin/tsx /path/to/check-upstream.ts`, or
+  `pnpm check:upstream` in `apps/web`. It should report **5 PASS + 1 KNOWN**
+  (`listDuration`). Worth running after any Invidious rebuild, since nothing is
+  watching provenance continuously any more.
 - `docker-compose.yml` files under `/var/data/config/*` are **not** in git; the
   convention is timestamped `.bak-*` copies before editing.
 
