@@ -27,7 +27,10 @@ services:
       retries: 5
       start_period: 10s
     volumes:
-      - feeds-server-data:/data
+      # Bind mount, not a named volume: the data sits beside the compose file so
+      # it can be listed, backed up and rsynced like anything else on the host.
+      # Matches the other stacks here (pocket-sessions uses ./data:/data too).
+      - ./data:/data
     networks:
       - caddy
     labels:
@@ -36,9 +39,6 @@ services:
       # would break podcast-client credentials).
       caddy: "owntube.nedworks.org"
       caddy.reverse_proxy: "* {{upstreams 8080}}"
-
-volumes:
-  feeds-server-data:
 
 networks:
   caddy:
