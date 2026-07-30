@@ -19,6 +19,57 @@ pnpm exec tsx probe.ts                   # which Innertube clients expose SABR
 Node 20 + pnpm 9. `pnpm install` pulls `googlevideo`, `youtubei.js`,
 `bgutils-js`, `jsdom` — all MIT, so nothing here constrains OwnTube's licence.
 
+## Demo server
+
+`server.ts` plays real videos in a browser over SABR→DASH, with captions and
+multi-track audio.
+
+```bash
+CAPTIONS_PROXY=https://owntube-media.home.nedworks.org pnpm exec tsx server.ts
+# then open http://localhost:8899/watch/dQw4w9WgXcQ
+```
+
+| route | |
+|---|---|
+| `/watch/:id[?audio=en,fr]` | dash.js player page with caption `<track>`s |
+| `/v/:id/manifest.mpd` | generated manifest (one AdaptationSet per track) |
+| `/v/:id/:track/{init.mp4,seg-N.m4s}` | segments |
+| `/v/:id/captions/:lang.vtt` | WebVTT |
+
+Verified end to end on `dQw4w9WgXcQ`: manifest built in ~10s (38 video + 22 audio
+segments), **ffmpeg decodes the served HTTP manifest to 5,326 frames / 213.04s
+with zero warnings**, and captions return real VTT (en 4,263 B, de-DE 3,781 B).
+
+On first request a video is pulled and cut to disk, then served statically —
+trading a warm-up delay for free seeking.
+
+### Captions need the companion
+
+Google IP-blocks the `timedtext` `base_url`: HTTP **200 with zero bytes** and
+`content-type: text/html`, regardless of `fmt` (vtt/srv3/json3), with or without
+a po_token, on every client. `getTranscript()` fails too. So `CAPTIONS_PROXY`
+delegates to OwnTube's existing `/captions` route, which works because it goes
+through invidious-companion.
+
+**Captions are therefore a reason the companion cannot simply be dropped.**
+
+### Known limitation: format selection
+
+Some videos refuse mp4 over SABR. On `0e3GPea1Tyg` every mp4 selection fails with
+`Cannot proceed with stream: attestation required` or "No media parts", across
+WEB / ANDROID / IOS / TV / **ANDROID_VR**, and with po_tokens bound to both
+`visitorData` and the video id. The same video works immediately when webm
+formats are selected (itags 243/249) — and yt-dlp downloads it fine, choosing
+`251-0+396-0`.
+
+The segmenter only cuts ISO-BMFF, so webm is not a fallback it can use: **that
+video cannot currently be converted.** Closing this needs either an EBML/cluster
+segmenter for webm, or smarter per-video format selection modelled on yt-dlp's.
+Checking the reference implementation is what found this — its one-line log
+(`Downloading android vr player API JSON`, then `251-0+396-0`) pointed straight at
+the container, after four client variants and two token bindings had ruled
+everything else out.
+
 ## What it proves
 
 **Conversion works, and it is segmentation rather than transcoding.** SABR
