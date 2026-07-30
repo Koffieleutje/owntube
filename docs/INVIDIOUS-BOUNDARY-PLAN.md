@@ -687,14 +687,21 @@ Phases 0, 1 and 2 are done. Remaining, in order:
 4. ~~Phase 3.4 — members-only flag.~~ **Done by deletion** — the gap was not
    real; see 3.4 above.
 5. ~~Phase 3.5 — `publishedAt`.~~ **Done** — see 3.5 above.
-6. **Phase 3.6-3.7** — channel parse-error placeholders, multi-shape pickers.
-4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
-   Phase 3's progress is measurable.
-5. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a
+6. **Phase 3.6** — channel `/videos` parse-error placeholders. A reliability bug
+   upstream, so it needs a reproducing channel before anything else.
+7. **Phase 3.7** — multi-shape pickers, plus the dead Piped branches still in
+   `pickLiveFlagsFromUpstream`.
+8. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
+   Phase 3's progress is measurable. Cheap now that 3.1-3.5 have established what
+   upstream actually emits.
+9. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a
    compatibility alias because the prefix is referenced by six web modules plus
    the TV and iOS clients.
-6. **Phase 4 PRs** — opportunistic throughout; each merged one shrinks the
-   permanent rebase set.
+10. **Phase 4 PRs** — opportunistic throughout; each merged one shrinks the
+    permanent rebase set. Now five patches deep (`audioTrack`, trending
+    `liveNow`, `isShort` + the three pre-existing), so the rebase surface has
+    grown — the `liveNow` and `isShort` ones are generic bug fixes and the best
+    upstream candidates.
 
 ## Open items and honest gaps
 
