@@ -1,15 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { handleTimestampLinkClick } from "@/lib/player-seek-event";
-import { watchHref } from "@/lib/yt-routes";
 import { useEffect } from "react";
 import {
   type ScrubFramePreview,
   useScrubFramePreview,
 } from "@/hooks/use-scrub-frame-preview";
+import { handleTimestampLinkClick } from "@/lib/player-seek-event";
 import type { VideoChapter } from "@/lib/video-chapters";
 import { scrubFrameStyleAt } from "@/lib/video-scrub-frames";
+import { watchHref } from "@/lib/yt-routes";
 import type { VideoStoryboard } from "@/server/services/proxy.types";
 
 type WatchChaptersSectionProps = {

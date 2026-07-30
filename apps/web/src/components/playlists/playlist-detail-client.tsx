@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useCopyRssUrl } from "@/components/feeds/copy-rss-url";
 import { PlaylistFormModal } from "@/components/playlists/playlist-form-modal";
 import { PlaylistTags } from "@/components/playlists/playlist-tags";
 import {
@@ -38,6 +39,8 @@ export function PlaylistDetailClient({ playlistId }: { playlistId: number }) {
   useEffect(() => {
     if (itemsQuery.data) setItems(itemsQuery.data);
   }, [itemsQuery.data]);
+
+  const copyRssUrl = useCopyRssUrl();
 
   const [editOpen, setEditOpen] = useState(false);
   const detail = detailQuery.data;
@@ -82,13 +85,22 @@ export function PlaylistDetailClient({ playlistId }: { playlistId: number }) {
             <h1 className="m-0 max-w-2xl text-2xl font-extrabold leading-tight tracking-tight sm:text-3xl">
               {detail.name}
             </h1>
-            <button
-              type="button"
-              onClick={() => setEditOpen(true)}
-              className="shrink-0 rounded-full border border-white/25 bg-black/20 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-black/35"
-            >
-              Edit
-            </button>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => void copyRssUrl("playlist", String(playlistId))}
+                className="rounded-full border border-white/25 bg-black/20 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-black/35"
+              >
+                Copy RSS URL
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                className="rounded-full border border-white/25 bg-black/20 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-black/35"
+              >
+                Edit
+              </button>
+            </div>
           </div>
           {detail.description ? (
             <p className="m-0 max-w-2xl whitespace-pre-line text-sm text-white/85">

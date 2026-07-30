@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { handleTimestampLinkClick } from "@/lib/player-seek-event";
-import { watchHref } from "@/lib/yt-routes";
 import { useMemo } from "react";
+import { handleTimestampLinkClick } from "@/lib/player-seek-event";
 import { compactRichTextParts, parseRichText } from "@/lib/watch-rich-text";
+import { watchHref } from "@/lib/yt-routes";
 
 type WatchRichTextProps = {
   videoId: string;

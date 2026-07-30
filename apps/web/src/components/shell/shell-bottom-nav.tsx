@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import {
   activeForPath,
-  bottomNavItemsFromKeys,
   BOTTOM_NAV,
+  bottomNavItemsFromKeys,
 } from "@/components/shell/nav-config";
 import { DEFAULT_BOTTOM_NAV_KEYS } from "@/lib/bottom-nav";
 import { cn } from "@/lib/utils";

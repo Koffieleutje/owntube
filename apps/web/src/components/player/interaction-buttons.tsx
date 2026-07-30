@@ -16,8 +16,8 @@ import {
   VideoActionsMenu,
 } from "@/components/videos/video-actions-menu";
 import { saveMembershipLabel } from "@/lib/save-membership";
-import { trpc } from "@/trpc/react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/trpc/react";
 
 type InteractionButtonsProps = {
   videoId: string;

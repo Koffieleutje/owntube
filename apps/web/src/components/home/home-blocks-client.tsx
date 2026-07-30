@@ -1,16 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { formatPublishedLabel } from "@/lib/video-display";
-import { watchHref } from "@/lib/yt-routes";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PullToRefreshHint } from "@/components/ui/pull-to-refresh-hint";
-import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 import {
   SubscriptionTagFilter,
   type TagState,
 } from "@/components/subscriptions/subscription-tag-filter";
 import { Button } from "@/components/ui/button";
+import { PullToRefreshHint } from "@/components/ui/pull-to-refresh-hint";
 import { Sheet } from "@/components/ui/sheet";
 import { useIgnoredVideos } from "@/components/videos/ignored-videos-context";
 import { useRowDrag } from "@/components/videos/use-row-drag";
@@ -26,6 +23,7 @@ import { VideoGrid } from "@/components/videos/video-grid";
 import { useWatchProgressMap } from "@/components/videos/video-membership-context";
 import { VideoRow } from "@/components/videos/video-row";
 import { VideoThumbnailImg } from "@/components/videos/video-thumbnail-img";
+import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 import {
   blockFetchCount,
   blockTagLists,
@@ -45,6 +43,8 @@ import {
   TAG_OPTION_PREFIX,
 } from "@/lib/home-blocks";
 import { cn } from "@/lib/utils";
+import { formatPublishedLabel } from "@/lib/video-display";
+import { watchHref } from "@/lib/yt-routes";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 import { trpc } from "@/trpc/react";
 

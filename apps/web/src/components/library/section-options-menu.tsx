@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCopyRssUrl } from "@/components/feeds/copy-rss-url";
 import { MoreIcon } from "@/components/videos/video-action-icons";
 import {
   HOME_BLOCK_SIZE_LABEL,
@@ -36,6 +37,7 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
   const update = trpc.settings.update.useMutation({
     onSettled: () => utils.settings.get.invalidate(),
   });
+  const copyRssUrl = useCopyRssUrl();
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +116,20 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
             />
             Hide watched videos
           </label>
+          {/* History has no companion feed; Queue and Saved publish as fixed slugs. */}
+          {section !== "history" ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="mt-1 w-full rounded-lg px-1 py-2 text-left transition hover:bg-[hsl(var(--muted)_/_0.65)]"
+              onClick={() => {
+                setOpen(false);
+                void copyRssUrl(section, section);
+              }}
+            >
+              Copy RSS URL
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

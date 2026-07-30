@@ -26,15 +26,17 @@ podcast app ──(LAN/VPN)──▶ owntube /media/<id>   ◀── enclosure U
 Feed `kind` ∈ `playlist`, `queue`, `saved`, `subscriptions`, `tag`, `channel`.
 
 Basic Auth is **per user**: the publisher pushes each OwnTube account's
-username (email local part) and the SHA-256 of its generated RSS password
-(shown in OwnTube → Settings → Podcast feeds) along with the snapshots — no
-plaintext password ever reaches this host. Every feed route serves only the
-authenticated owner's feeds, so two accounts can both have `queue`.
+username (the full email address) and the SHA-256 of its generated RSS
+password (shown in OwnTube → Settings → Podcast feeds) along with the
+snapshots — no plaintext password ever reaches this host. Every feed route
+serves only the authenticated owner's feeds, so two accounts can both have
+`queue`.
 
-Subscribe in a podcast app with the credentials inline:
+Subscribe in a podcast app with the credentials inline (percent-encode the
+`@` in the email; clients that forward it un-decoded still authenticate):
 
 ```
-https://<username>:<rss-pass>@owntube.nedworks.org/rss/queue/queue.audio.xml
+https://user%40example.com:<rss-pass>@owntube.nedworks.org/rss/queue/queue.audio.xml
 ```
 
 ## Config (env)

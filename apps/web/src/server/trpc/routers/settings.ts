@@ -4,17 +4,14 @@ import { defaultPlaybackQualitySchema } from "@/lib/default-playback-quality";
 import { sponsorBlockCategorySchema } from "@/lib/sponsorblock";
 import {
   interactions,
+  publishedFeeds,
   subscriptions,
   userProfile,
   users,
   watchHistory,
 } from "@/server/db/schema";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
-import {
-  ensureRssPass,
-  regenerateRssPass,
-  rssUsername,
-} from "@/server/remote/rss-pass";
+import { ensureRssPass, regenerateRssPass } from "@/server/remote/rss-pass";
 import {
   clearProxyCaches,
   getInstanceSourceInfo,
@@ -146,7 +143,8 @@ export const settingsRouter = router({
       .where(eq(users.id, ctx.userId))
       .get();
     return {
-      username: row ? rssUsername(row.email) : "",
+      // Full email; URL-encode it when placed inside a feed URL.
+      username: row?.email ?? "",
       pass: ensureRssPass(ctx.db, ctx.userId),
       companionUrl: process.env.OWNTUBE_PUBLISH_TARGET?.trim() || null,
     };
@@ -156,6 +154,55 @@ export const settingsRouter = router({
   regenerateRssPass: protectedProcedure.mutation(({ ctx }) => ({
     pass: regenerateRssPass(ctx.db, ctx.userId),
   })),
+
+  /**
+   * The credentialed companion URL for one feed, resolved through the slugs
+   * the publisher recorded on its last run. `url` is null when no companion
+   * is configured or the feed hasn't been published yet (empty, or created
+   * since the last publish cycle).
+   */
+  rssFeedUrl: protectedProcedure
+    .input(
+      z.object({
+        kind: z.enum([
+          "playlist",
+          "queue",
+          "saved",
+          "subscriptions",
+          "tag",
+          "channel",
+        ]),
+        refId: z.string().min(1),
+      }),
+    )
+    .query(({ ctx, input }) => {
+      const base = process.env.OWNTUBE_PUBLISH_TARGET?.trim().replace(
+        /\/+$/,
+        "",
+      );
+      if (!base) return { url: null, reason: "no-companion" as const };
+      const row = ctx.db
+        .select({ slug: publishedFeeds.slug })
+        .from(publishedFeeds)
+        .where(
+          and(
+            eq(publishedFeeds.userId, ctx.userId),
+            eq(publishedFeeds.kind, input.kind),
+            eq(publishedFeeds.refId, input.refId),
+          ),
+        )
+        .get();
+      if (!row) return { url: null, reason: "not-published" as const };
+      const user = ctx.db
+        .select({ email: users.email })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .get();
+      if (!user) return { url: null, reason: "not-published" as const };
+      const auth = `${encodeURIComponent(user.email)}:${ensureRssPass(ctx.db, ctx.userId)}`;
+      const url = `${base.replace(/^(https?:\/\/)/, `$1${auth}@`)}/rss/${encodeURIComponent(input.kind)}/${encodeURIComponent(row.slug)}.audio.xml`;
+      return { url, reason: null };
+    }),
 
   checkInstances: protectedProcedure.query(async () => {
     const { invidiousBases } = resolveProxyBaseCandidates();

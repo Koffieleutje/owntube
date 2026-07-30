@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { videoCache } from "@/server/db/schema";
 import {
   clearRssInFlight,
   getChannelRssEntries,
   getLongFormWindow,
   refreshChannelRss,
 } from "@/server/rss/cache";
-import { videoCache } from "@/server/db/schema";
 import { createTestDb } from "@/test/db";
 
 const CHANNEL = "UCabcdefghijklmnopqrstuv";

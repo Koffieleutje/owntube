@@ -1,7 +1,7 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { watchHref } from "@/lib/yt-routes";
 import {
   useCallback,
   useEffect,
@@ -10,7 +10,6 @@ import {
   useRef,
   useState,
 } from "react";
-import dynamic from "next/dynamic";
 import { usePlayerContext } from "@/components/player/player-context";
 import { isIosLikeBrowser } from "@/lib/ios-playback";
 import {
@@ -18,6 +17,7 @@ import {
   type PlayerSeekDetail,
 } from "@/lib/player-seek-event";
 import { cn } from "@/lib/utils";
+import { watchHref } from "@/lib/yt-routes";
 
 /**
  * The persistent host is mounted app-wide (in the shell), so importing the
@@ -30,6 +30,7 @@ const VideoPlayer = dynamic(
   () => import("@/components/player/video-player").then((m) => m.VideoPlayer),
   { ssr: false },
 );
+
 import {
   MINI_MAX_WIDTH,
   MINI_MIN_WIDTH,

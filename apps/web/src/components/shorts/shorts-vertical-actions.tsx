@@ -1,7 +1,9 @@
 "use client";
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { ShareDialog } from "@/components/player/share-dialog";
 import { useVideoActions } from "@/components/videos/use-video-actions";
+import { ShareIcon } from "@/components/videos/video-action-icons";
 import {
   isVideoActionActive,
   VideoActionGlyph,
@@ -9,8 +11,6 @@ import {
   videoActionShortLabel,
 } from "@/components/videos/video-action-registry";
 import { PlaylistPicker } from "@/components/videos/video-actions-menu";
-import { ShareDialog } from "@/components/player/share-dialog";
-import { ShareIcon } from "@/components/videos/video-action-icons";
 import { cn } from "@/lib/utils";
 
 type ShortsVerticalActionsProps = {

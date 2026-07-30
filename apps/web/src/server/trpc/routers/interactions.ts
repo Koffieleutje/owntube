@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { watchHref } from "@/lib/yt-routes";
 import { z } from "zod";
+import { watchHref } from "@/lib/yt-routes";
 import { interactions } from "@/server/db/schema";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { fetchVideoDetail } from "@/server/services/proxy";

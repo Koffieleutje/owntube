@@ -6,9 +6,10 @@ import { trpc } from "@/trpc/react";
 
 /**
  * Per-account credentials for the companion's podcast feeds. The username is
- * the account's email local part; the password is generated server-side and
- * only its hash ever reaches the companion. Regeneration takes effect at the
- * next publish cycle, so old app subscriptions keep working briefly.
+ * the account's full email (URL-encoded in feed URLs); the password is
+ * generated server-side and only its hash ever reaches the companion.
+ * Regeneration takes effect at the next publish cycle, so old app
+ * subscriptions keep working briefly.
  */
 export function RssFeedsSection() {
   const utils = trpc.useUtils();

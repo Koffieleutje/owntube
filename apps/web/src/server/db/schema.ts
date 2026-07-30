@@ -261,3 +261,30 @@ export const watchQueue = sqliteTable(
     index("watch_queue_user_pos_idx").on(t.userId, t.position),
   ],
 );
+
+/**
+ * The feed slugs the publisher assigned on its last run, per user — the
+ * lookup the UI needs to turn "this playlist / the queue" into a companion
+ * feed URL. ref_id identifies the source entity within its kind: playlist id,
+ * tag name, channel id, or the kind itself for the singleton feeds.
+ */
+export const publishedFeeds = sqliteTable(
+  "published_feeds",
+  {
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    refId: text("ref_id").notNull(),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("published_feeds_user_kind_ref_uidx").on(
+      t.userId,
+      t.kind,
+      t.refId,
+    ),
+  ],
+);

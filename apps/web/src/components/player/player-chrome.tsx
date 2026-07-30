@@ -41,11 +41,11 @@ import {
   VolLowIcon,
 } from "@/components/player/player-icons";
 import { usePlayerKeyboardShortcuts } from "@/components/player/player-keyboard";
+import type { ChromeProps } from "@/components/player/player-types";
 import { ScrubPreviewStage } from "@/components/player/scrub-preview";
+import { Sheet } from "@/components/ui/sheet";
 import { useVideoActions } from "@/components/videos/use-video-actions";
 import { VideoActionGlyph } from "@/components/videos/video-action-registry";
-import type { ChromeProps } from "@/components/player/player-types";
-import { Sheet } from "@/components/ui/sheet";
 import { useWatchProgress } from "@/components/videos/video-membership-context";
 import { useSponsorBlockAutoSkip } from "@/hooks/use-sponsorblock-auto-skip";
 import { cn } from "@/lib/utils";

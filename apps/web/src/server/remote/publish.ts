@@ -7,15 +7,12 @@ import {
   interactions,
   playlistItems,
   playlists,
+  publishedFeeds,
   subscriptions,
   users,
   watchQueue,
 } from "@/server/db/schema";
-import {
-  ensureRssPass,
-  rssUsername,
-  sha256Hex,
-} from "@/server/remote/rss-pass";
+import { ensureRssPass, sha256Hex } from "@/server/remote/rss-pass";
 import { getChannelRssEntries } from "@/server/rss/cache";
 import { fetchVideoDetail } from "@/server/services/proxy";
 
@@ -31,10 +28,11 @@ import { fetchVideoDetail } from "@/server/services/proxy";
  * set each cycle, so deleting a playlist / unsubscribing prunes the feed.
  *
  * Access is per user: each snapshot carries its owner's Basic-Auth username
- * (email local part) and the payload includes every user's credential as a
- * SHA-256 — the plaintext RSS password never leaves home. The companion scopes
- * every feed route to the authenticated owner, which also makes slug prefixing
- * unnecessary: two users can both have `queue`.
+ * (the full account email — URL-encoded by clients inside feed URLs) and the
+ * payload includes every user's credential as a SHA-256 — the plaintext RSS
+ * password never leaves home. The companion scopes every feed route to the
+ * authenticated owner, which also makes slug prefixing unnecessary: two users
+ * can both have `queue`.
  */
 
 export type FeedKind =
@@ -225,6 +223,15 @@ function readChannelNames(
   return out;
 }
 
+/** What buildFeedsForUser assigned, keyed by source entity — persisted so the
+ * UI can turn "this playlist / the queue" into the published feed URL. */
+export type PublishedFeedRef = {
+  kind: FeedKind;
+  refId: string;
+  slug: string;
+  title: string;
+};
+
 async function buildFeedsForUser(
   db: AppDb,
   userId: number,
@@ -232,10 +239,15 @@ async function buildFeedsForUser(
   opts: Required<Omit<PublishOptions, "onLog">> & {
     onLog?: PublishOptions["onLog"];
   },
-): Promise<FeedSnapshot[]> {
+): Promise<{ feeds: FeedSnapshot[]; refs: PublishedFeedRef[] }> {
   const { appOrigin, channelFeedLimit, mergedFeedLimit, concurrency } = opts;
   const now = Math.floor(Date.now() / 1000);
   const feeds: FeedSnapshot[] = [];
+  const refs: PublishedFeedRef[] = [];
+  const pushFeed = (feed: FeedSnapshot, refId: string): void => {
+    feeds.push(feed);
+    refs.push({ kind: feed.kind, refId, slug: feed.slug, title: feed.title });
+  };
   const slugsByKind = new Map<FeedKind, Set<string>>();
   const takenFor = (kind: FeedKind): Set<string> => {
     let s = slugsByKind.get(kind);
@@ -261,20 +273,23 @@ async function buildFeedsForUser(
       .all();
     if (itemRows.length === 0) continue;
     const items = await enrichVideoItems(db, itemRows, appOrigin, concurrency);
-    feeds.push({
-      kind: "playlist",
-      owner,
-      slug: uniqueSlug(
-        slugify(pl.name, `playlist-${pl.id}`),
-        takenFor("playlist"),
-      ),
-      title: pl.name,
-      description: pl.description ?? undefined,
-      link: `${appOrigin}/playlist?list=${pl.id}`,
-      image: items[0]?.thumbnailUrl,
-      updatedAt: pl.updatedAt ?? now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "playlist",
+        owner,
+        slug: uniqueSlug(
+          slugify(pl.name, `playlist-${pl.id}`),
+          takenFor("playlist"),
+        ),
+        title: pl.name,
+        description: pl.description ?? undefined,
+        link: `${appOrigin}/playlist?list=${pl.id}`,
+        image: items[0]?.thumbnailUrl,
+        updatedAt: pl.updatedAt ?? now,
+        items,
+      },
+      String(pl.id),
+    );
   }
 
   // --- Queue ---
@@ -286,17 +301,20 @@ async function buildFeedsForUser(
     .all();
   if (queueRows.length > 0) {
     const items = await enrichVideoItems(db, queueRows, appOrigin, concurrency);
-    feeds.push({
-      kind: "queue",
-      owner,
-      slug: "queue",
-      title: "Queue",
-      description: "OwnTube watch queue",
-      link: `${appOrigin}/`,
-      image: items[0]?.thumbnailUrl,
-      updatedAt: now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "queue",
+        owner,
+        slug: "queue",
+        title: "Queue",
+        description: "OwnTube watch queue",
+        link: `${appOrigin}/`,
+        image: items[0]?.thumbnailUrl,
+        updatedAt: now,
+        items,
+      },
+      "queue",
+    );
   }
 
   // --- Saved inbox ---
@@ -308,17 +326,20 @@ async function buildFeedsForUser(
     .all();
   if (savedRows.length > 0) {
     const items = await enrichVideoItems(db, savedRows, appOrigin, concurrency);
-    feeds.push({
-      kind: "saved",
-      owner,
-      slug: "saved",
-      title: "Saved",
-      description: "OwnTube saved videos",
-      link: `${appOrigin}/`,
-      image: items[0]?.thumbnailUrl,
-      updatedAt: now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "saved",
+        owner,
+        slug: "saved",
+        title: "Saved",
+        description: "OwnTube saved videos",
+        link: `${appOrigin}/`,
+        image: items[0]?.thumbnailUrl,
+        updatedAt: now,
+        items,
+      },
+      "saved",
+    );
   }
 
   // --- Subscription-derived channel feeds (subscribed channels only) ---
@@ -338,17 +359,20 @@ async function buildFeedsForUser(
       appOrigin,
       mergedFeedLimit,
     );
-    feeds.push({
-      kind: "subscriptions",
-      owner,
-      slug: "subscriptions",
-      title: "Subscriptions",
-      description: "Latest uploads from all subscribed channels",
-      link: `${appOrigin}/subscriptions`,
-      image: items[0]?.thumbnailUrl,
-      updatedAt: now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "subscriptions",
+        owner,
+        slug: "subscriptions",
+        title: "Subscriptions",
+        description: "Latest uploads from all subscribed channels",
+        link: `${appOrigin}/subscriptions`,
+        image: items[0]?.thumbnailUrl,
+        updatedAt: now,
+        items,
+      },
+      "subscriptions",
+    );
   }
 
   // Per channel tag — restricted to subscribed channels.
@@ -372,17 +396,20 @@ async function buildFeedsForUser(
       mergedFeedLimit,
     );
     if (items.length === 0) continue;
-    feeds.push({
-      kind: "tag",
-      owner,
-      slug: uniqueSlug(slugify(tag, "tag"), takenFor("tag")),
-      title: `#${tag}`,
-      description: `Latest uploads from channels tagged "${tag}"`,
-      link: `${appOrigin}/subscriptions`,
-      image: items[0]?.thumbnailUrl,
-      updatedAt: now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "tag",
+        owner,
+        slug: uniqueSlug(slugify(tag, "tag"), takenFor("tag")),
+        title: `#${tag}`,
+        description: `Latest uploads from channels tagged "${tag}"`,
+        link: `${appOrigin}/subscriptions`,
+        image: items[0]?.thumbnailUrl,
+        updatedAt: now,
+        items,
+      },
+      tag,
+    );
   }
 
   // Per channel.
@@ -396,20 +423,23 @@ async function buildFeedsForUser(
     if (items.length === 0) continue;
     const meta = names.get(channelId);
     const title = meta?.name ?? items[0]?.channelName ?? channelId;
-    feeds.push({
-      kind: "channel",
-      owner,
-      slug: uniqueSlug(slugify(title, channelId), takenFor("channel")),
-      title,
-      description: `Latest uploads from ${title}`,
-      link: `${appOrigin}/channel/${channelId}`,
-      image: meta?.avatarUrl ?? items[0]?.thumbnailUrl,
-      updatedAt: now,
-      items,
-    });
+    pushFeed(
+      {
+        kind: "channel",
+        owner,
+        slug: uniqueSlug(slugify(title, channelId), takenFor("channel")),
+        title,
+        description: `Latest uploads from ${title}`,
+        link: `${appOrigin}/channel/${channelId}`,
+        image: meta?.avatarUrl ?? items[0]?.thumbnailUrl,
+        updatedAt: now,
+        items,
+      },
+      channelId,
+    );
   }
 
-  return feeds;
+  return { feeds, refs };
 }
 
 export type FeedOwnerCredential = {
@@ -434,24 +464,42 @@ export async function buildAllFeeds(
     .select({ id: users.id, email: users.email })
     .from(users)
     .all();
-  const taken = new Set<string>();
   const all: FeedSnapshot[] = [];
   const creds: FeedOwnerCredential[] = [];
   for (const u of userRows) {
-    // Email local part; on a collision (two accounts, same local part) the
-    // later account falls back to its full address so credentials stay
-    // unambiguous.
-    let username = rssUsername(u.email);
-    if (taken.has(username)) username = u.email;
-    taken.add(username);
+    // The full email — unique by schema, so usernames can't collide.
+    const username = u.email;
     creds.push({ username, passSha256: sha256Hex(ensureRssPass(db, u.id)) });
-    const feeds = await buildFeedsForUser(db, u.id, username, opts);
+    const { feeds, refs } = await buildFeedsForUser(db, u.id, username, opts);
+    recordPublishedFeeds(db, u.id, refs);
     opts.onLog?.(
       `publish: user ${u.id} (${username}) — ${feeds.length} feed(s)`,
     );
     all.push(...feeds);
   }
   return { feeds: all, users: creds };
+}
+
+/** Persist this run's slug assignments so the UI can build feed URLs. */
+function recordPublishedFeeds(
+  db: AppDb,
+  userId: number,
+  refs: PublishedFeedRef[],
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  db.delete(publishedFeeds).where(eq(publishedFeeds.userId, userId)).run();
+  for (const r of refs) {
+    db.insert(publishedFeeds)
+      .values({
+        userId,
+        kind: r.kind,
+        refId: r.refId,
+        slug: r.slug,
+        title: r.title,
+        updatedAt: now,
+      })
+      .run();
+  }
 }
 
 /** Build all feeds and POST them (with the credential set) to the companion. */

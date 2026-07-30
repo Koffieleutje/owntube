@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ASSIGNABLE_NAV, navItemByKey } from "@/components/shell/nav-config";
-import { DragHandleIcon, XIcon } from "@/components/videos/video-action-icons";
 import { useRowDrag } from "@/components/videos/use-row-drag";
+import { DragHandleIcon, XIcon } from "@/components/videos/video-action-icons";
 import {
   DEFAULT_BOTTOM_NAV_KEYS,
   MAX_BOTTOM_NAV,

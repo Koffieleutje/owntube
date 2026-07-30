@@ -5,7 +5,7 @@ import {
   type SponsorBlockApiSegment,
   type SponsorBlockPrefixVideo,
   type SponsorBlockSegment,
-  sponsorBlockCategorySchema,
+  type sponsorBlockCategorySchema,
 } from "@/lib/sponsorblock";
 import {
   hashPrefixForVideoId,

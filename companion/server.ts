@@ -135,7 +135,17 @@ function checkBasicAuth(req: http.IncomingMessage): string | null {
   if (idx < 0) return null;
   const username = decoded.slice(0, idx);
   const pass = decoded.slice(idx + 1);
-  const user = store.getUser(username);
+  let user = store.getUser(username);
+  // Usernames are full email addresses, percent-encoded inside feed URLs.
+  // Some podcast clients forward the URL userinfo without decoding it, so a
+  // miss on the raw form retries the decoded one.
+  if (!user && username.includes("%")) {
+    try {
+      user = store.getUser(decodeURIComponent(username));
+    } catch {
+      /* not valid percent-encoding — fall through to the dummy compare */
+    }
+  }
   const digest = createHash("sha256").update(pass, "utf8").digest("hex");
   const ok = safeEqual(digest, user?.passSha256 ?? DUMMY_SHA256);
   return ok && user ? user.username : null;

@@ -12,6 +12,7 @@ export {
   resolveProxyBases,
   type UpstreamAvailability,
 } from "@/server/services/proxy/config";
+
 import { clearSearchInFlight } from "@/server/services/proxy/search";
 
 export { searchVideos } from "@/server/services/proxy/search";
@@ -44,15 +45,13 @@ export function clearProxyCaches(db: AppDb): { clearedRows: number } {
 
 export { UpstreamAgeRestrictedError } from "@/server/errors/upstream-age-restricted";
 export { UpstreamLiveUpcomingError } from "@/server/errors/upstream-live-upcoming";
-
-export {
-  type FetchVideoDetailOptions,
-  fetchRelatedVideos,
-  fetchVideoDetail,
-} from "@/server/services/proxy/video";
-
 export {
   fetchRelatedChannels,
   type RelatedChannelsResult,
   type SuggestedChannel,
 } from "@/server/services/proxy/related-channels";
+export {
+  type FetchVideoDetailOptions,
+  fetchRelatedVideos,
+  fetchVideoDetail,
+} from "@/server/services/proxy/video";

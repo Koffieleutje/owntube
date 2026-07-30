@@ -3,8 +3,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ChannelAvatarCircle } from "@/components/videos/channel-avatar-circle";
-import { channelHref } from "@/lib/yt-routes";
 import { formatSubscribersLabel } from "@/lib/video-display";
+import { channelHref } from "@/lib/yt-routes";
 
 export type ChannelListItemData = {
   channelId: string;

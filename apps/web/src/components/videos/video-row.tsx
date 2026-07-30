@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { watchHref } from "@/lib/yt-routes";
 import type { ReactNode } from "react";
 import { CardSwipeLayer } from "@/components/videos/card-swipe-layer";
 import { XIcon } from "@/components/videos/video-action-icons";
@@ -13,6 +12,7 @@ import { VideoStatusPills } from "@/components/videos/video-status-pills";
 import { VideoThumbnailImg } from "@/components/videos/video-thumbnail-img";
 import { VideoWatchProgress } from "@/components/videos/video-watch-progress";
 import { cn } from "@/lib/utils";
+import { watchHref } from "@/lib/yt-routes";
 
 type VideoRowProps = {
   videoId: string;

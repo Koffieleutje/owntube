@@ -6,8 +6,8 @@ import type { VideoActionSurface } from "@/components/videos/video-action-regist
 import { VideoActionsMenu } from "@/components/videos/video-actions-menu";
 import { VideoCardDurationBadge } from "@/components/videos/video-card-duration-badge";
 import { VideoCardQuickActions } from "@/components/videos/video-card-quick-actions";
-import { VideoCardThumbnailImg } from "@/components/videos/video-card-thumbnail-img";
 import { VideoCardShell } from "@/components/videos/video-card-shell";
+import { VideoCardThumbnailImg } from "@/components/videos/video-card-thumbnail-img";
 import { VideoCardThumbnailInteractive } from "@/components/videos/video-card-thumbnail-interactive";
 import { VideoStatusPills } from "@/components/videos/video-status-pills";
 import { VideoWatchProgress } from "@/components/videos/video-watch-progress";

@@ -5,15 +5,11 @@ import { users } from "@/server/db/schema";
 
 /**
  * Per-user credentials for the companion's RSS feeds. The username is the
- * account's email local part; the password is generated here and stored
- * plaintext (the settings UI has to display it), but only its SHA-256 ever
- * leaves home — the publisher pushes hashes, the companion stores hashes.
+ * account's full email (URL-encoded inside feed URLs); the password is
+ * generated here and stored plaintext (the settings UI has to display it),
+ * but only its SHA-256 ever leaves home — the publisher pushes hashes, the
+ * companion stores hashes.
  */
-
-export function rssUsername(email: string): string {
-  const at = email.indexOf("@");
-  return at > 0 ? email.slice(0, at) : email;
-}
 
 export function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");

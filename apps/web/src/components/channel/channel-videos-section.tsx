@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { playlistHref } from "@/lib/yt-routes";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChannelListItem } from "@/components/channel/channel-list-item";
 import { Button } from "@/components/ui/button";
@@ -9,6 +8,7 @@ import { useIgnoredVideos } from "@/components/videos/ignored-videos-context";
 import { PlaylistIcon } from "@/components/videos/video-action-icons";
 import { VideoGrid } from "@/components/videos/video-grid";
 import { mergeVideosNewestFirst } from "@/lib/published-sort-key";
+import { playlistHref } from "@/lib/yt-routes";
 import type { ChannelTab, UnifiedVideo } from "@/server/services/proxy.types";
 import { trpc } from "@/trpc/react";
 
