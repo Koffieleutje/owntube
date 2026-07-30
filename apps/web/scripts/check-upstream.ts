@@ -22,6 +22,10 @@
  *                  `#shorts` title heuristic.
  *  - `videoStreams` the blunt "is extraction working at all" check; YouTube
  *                  breakage (hotfixes #5818/#5819) killed this outright.
+ *  - `audioTracks` `adaptiveFormats[].audioTrack` is a fork patch (Phase 3.1).
+ *                  Without it OwnTube cannot tell one audio language from
+ *                  another, and the URL-scraping it used to fall back on has
+ *                  been deleted — so losing this field is silent and total.
  *
  * Deliberately talks to the upstreams over HTTP rather than importing the proxy
  * layer: the point is to observe what Invidious/companion actually return, not
@@ -43,6 +47,14 @@ const EXPECTED_BRANCH =
 
 /** A stable, long-standing video with captions and adaptive formats. */
 const PROBE_VIDEO_ID = process.env.UPSTREAM_CHECK_VIDEO_ID ?? "haxkWC6MgcQ";
+
+/**
+ * A video with many dubbed audio tracks, for the `audioTracks` check. Needs to
+ * be a separate probe: the main one is single-audio and legitimately carries no
+ * `audioTrack` at all.
+ */
+const MULTI_AUDIO_VIDEO_ID =
+  process.env.UPSTREAM_CHECK_MULTI_AUDIO_VIDEO_ID ?? "0e3GPea1Tyg";
 
 const TREND_REGION = process.env.UPSTREAM_CHECK_REGION ?? "NL";
 
@@ -187,6 +199,62 @@ async function checkVideoStreamsAndByteRanges(): Promise<Result[]> {
   ];
 }
 
+/**
+ * `adaptiveFormats[].audioTrack` — the Phase 3.1 fork patch. Invidious parses
+ * this for its own DASH manifest but upstream still does not serialise it, so
+ * this check is really a provenance check with teeth: it fails if the patch is
+ * lost *or* if YouTube stops supplying the data.
+ *
+ * Asserts more than presence. A multi-language video must yield at least two
+ * distinct track ids (one id for every track would mean the tracks are
+ * indistinguishable, which is the state this patch existed to fix) and exactly
+ * one track flagged as the original.
+ */
+async function checkAudioTracks(): Promise<Result> {
+  const v = (await getJson(
+    `/api/v1/videos/${encodeURIComponent(MULTI_AUDIO_VIDEO_ID)}`,
+  )) as {
+    adaptiveFormats?: {
+      type?: string;
+      audioTrack?: {
+        id?: string;
+        displayName?: string;
+        audioIsDefault?: boolean;
+      };
+    }[];
+  };
+  const audio = (v.adaptiveFormats ?? []).filter((f) =>
+    (f.type ?? "").toLowerCase().startsWith("audio/"),
+  );
+  const tracks = audio.map((f) => f.audioTrack).filter(Boolean);
+  const ids = new Set(tracks.map((t) => t?.id).filter(Boolean));
+  const named = tracks.filter((t) => t?.displayName).length;
+  const originals = new Set(
+    audio
+      .filter((f) => f.audioTrack?.audioIsDefault)
+      .map((f) => f.audioTrack?.id),
+  );
+
+  if (tracks.length === 0) {
+    return {
+      name: "audioTracks",
+      ok: false,
+      detail:
+        `${MULTI_AUDIO_VIDEO_ID}: none of ${audio.length} audio formats carry ` +
+        "audioTrack — the fork patch is missing, or the video lost its dubs",
+    };
+  }
+  const ok = ids.size >= 2 && named === tracks.length && originals.size === 1;
+  return {
+    name: "audioTracks",
+    ok,
+    detail: ok
+      ? `${ids.size} distinct audio tracks, all named, 1 flagged original`
+      : `${ids.size} distinct ids / ${named} of ${tracks.length} named / ` +
+        `${originals.size} flagged original — expected >=2 ids, all named, exactly 1 original`,
+  };
+}
+
 async function checkListDurations(): Promise<Result> {
   const list = (await getJson(`/api/v1/trending?region=${TREND_REGION}`)) as {
     videoId?: string;
@@ -231,6 +299,7 @@ async function run(): Promise<void> {
       names: ["videoStreams", "byteRanges"],
       run: checkVideoStreamsAndByteRanges,
     },
+    { names: ["audioTracks"], run: checkAudioTracks },
     { names: ["listDuration"], run: checkListDurations },
   ];
 
