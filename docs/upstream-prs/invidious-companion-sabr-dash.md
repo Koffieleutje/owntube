@@ -147,14 +147,49 @@ fixed. The manifest is now byte-identical cold vs warm.
 the compiled binary's `--allow-write` list; `deno.json` is updated for
 `/var/tmp/sabr-cache`. Writes fail loudly but non-fatally if it is not.
 
+## Captions
+
+The manifest advertises one text `AdaptationSet` per language pointing at the
+companion's existing `/api/v1/captions` route. That route already works around
+Google's IP block on the `timedtext` base_url (HTTP 200, zero bytes), so
+reimplementing caption fetching here would only reproduce the bug it exists to
+avoid. Languages are deduped — videos routinely list the same language twice
+(authored and auto-generated). Verified: 5 languages advertised, advertised URL
+returns real WebVTT.
+
+## Partial tracks resume
+
+Segments are written through as they are published, so a pull interrupted by a
+restart leaves usable segments behind. On the next start a partially cached
+track resumes at its first gap rather than being abandoned.
+
+Incoming segments are numbered by matching their `tfdt` against the `sidx`
+index, not by counting arrivals: a resumed pull begins at the segment
+*containing* the requested time, so counting would misnumber everything after
+it. The overlap SABR re-delivers is dropped.
+
+Verified by killing the server mid-pull — 64/609 segments on disk, resumed at
+segment 65, filled to 609/609, **all 609 verified against the index with zero
+mismatches**, and ffmpeg decoding cleanly across the resume boundary.
+
+This exposed a real bug worth noting for review: googlevideo's end-of-stream
+validation *rejects* a resumed pull, because it never delivered the segments
+already on disk. The index is the authority on completeness, not the library's
+accounting, so `fill()` treats a satisfied index as success.
+
+## The cache directory is shareable
+
+Every write is atomic (temp name + rename), so companion instances on a common
+mount cannot corrupt each other; concurrent pulls of the same track are
+redundant but harmless. Verified with a second instance serving a video it
+never pulled, entirely from the first instance's cache, in 1.3s.
+
 ## Remaining limitations
 
-- **Only completed tracks are cached.** A partially pulled track is abandoned on
-  restart and refills in the background. Resuming a half-filled track from disk
-  means reconciling it with a live pull, which buys little.
-- **The cache is per-process on disk**, not shared between companion instances.
-- **Captions** still route through the existing companion caption path (the
-  `timedtext` base_url is IP-blocked); unchanged here.
+- **One video quality is pulled per rendition requested.** Renditions are lazy,
+  but a player that switches bitrate mid-playback pulls a whole second track.
+  Segment-granular fetching would need a session per seek.
+- **No live/DVR support.** VOD only.
 
 ## Files
 
