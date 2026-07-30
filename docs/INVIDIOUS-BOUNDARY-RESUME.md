@@ -7,37 +7,43 @@ in git, so it does not depend on any prior conversation.
 
 Continue the OwnTube ↔ Invidious boundary work. Read `docs/INVIDIOUS-BOUNDARY-PLAN.md`
 first — it has the full analysis, the phase-by-phase plan, a status table, and an
-"Open items and honest gaps" section. Phases 0, 1 and 2 are shipped; **start at
-Phase 3.1**.
+"Open items and honest gaps" section. Phases 0, 1, 2 and **3.1** are shipped;
+**start at Phase 3.2**.
 
-## Phase 3.1 — the task
+## Phase 3.2 — the task
 
-Invidious already parses structured audio-track data and then drops it. Its own
-DASH builder reads it at `src/invidious/routes/api/manifest.cr:71-74`:
+The trending/list serialiser is wrong, not merely sparse. Measured: trending items
+report `lengthSeconds: 0` **and** `liveNow: false`, while `/api/v1/videos` reports
+`liveNow: true` for the same ids. Because durations are missing, `short-video.ts`
+falls back to detecting Shorts from a `#shorts` title heuristic (Phase 3.3).
 
-    fmt["audioTrack"]["id"]              # language, e.g. "en-US.4"
-    fmt["audioTrack"]["audioIsDefault"]  # is this the original audio
-    fmt["audioTrack"]["displayName"]     # human label
+This is the canary's one remaining acknowledged failure. Fix it upstream on
+`nedworks/integration`, then **remove `listDuration` from
+`UPSTREAM_CHECK_KNOWN_FAILING`** — that is what locks the fix in. The canary
+prints a `NOTE:` when a known-failing check starts passing, so it will tell you.
 
-…but `src/invidious/jsonify/api_v1/video_json.cr:79-150` serialises **zero**
-audioTrack fields into `/api/v1/videos` → `adaptiveFormats`.
+Start by finding which serialiser trending actually uses: the detail endpoint
+(`jsonify/api_v1/video_json.cr`) is not the same code path as list items, and the
+list path is where `lengthSeconds` is being dropped.
 
-Because of that, OwnTube reverse-engineers it from googlevideo URL query strings:
-`apps/web/src/lib/audio-track-label.ts` (~257 lines) parses `lang=`,
-`xtags=acont%3Doriginal%3Alang%3Den-US` and `audioTrackId=.fr.4`, and
-`apps/web/src/server/services/proxy/mappers/invidious.ts:133-185` tries seven
-shapes before *guessing a track name from `qualityLabel`*. If YouTube changes
-`xtags`, audio-track labelling breaks silently.
+## What Phase 3.1 established that is worth reusing
 
-Do this:
-1. Add the three `audioTrack` fields to `adaptiveFormats` in `video_json.cr` on
-   the Invidious fork (~5 lines).
-2. Rebuild and deploy Invidious **only** via
-   `/var/data/config/invidious-build/nedworks-rebuild.sh` (see below).
-3. Surface the fields in `proxy.types.ts` + `mappers/invidious.ts`.
-4. Delete the URL-scraping path, keeping it as a fallback only if a real video
-   still needs it — verify against a genuinely multi-language video before
-   deleting anything.
+- The upstream patch pattern: emit the field Invidious *already parses* for its
+  own use, rebuild via `nedworks-rebuild.sh`, then delete OwnTube's guess. Phase
+  3.1's Invidious commit is `94911a03`.
+- **Add a canary check for anything whose fallback you delete.** Phase 3.1 added
+  `audioTracks`; without it, losing the patch would be silent. Canary is now
+  5 PASS + 1 KNOWN.
+- **Expect the new data to expose bugs the old guesses were hiding.** Phase 3.1
+  found two (audio rows keyed on the primary subtag merged `zh-Hans` with
+  `zh-Hant`, making one dub unreachable in the picker; and upstream `displayName`
+  appended unconditionally produced "Chinese (Chinese (Simplified))"). Feed real
+  upstream values through the existing consumer *before* assuming the change is
+  purely additive.
+- **Do not trust this plan's line-count forecasts.** 3.1's was out by more than
+  10x: predicted ~300 lines deleted, actual net −23 production lines, because
+  most of the module was presentation rather than inference. The plan records the
+  correction.
 
 ## Non-negotiables (learned the hard way this session)
 
@@ -70,11 +76,13 @@ when one step went wrong. Split by concern; each commit independently green.
 
 ## Environment
 
-- OwnTube source `/usr/local/src/owntube` (fork `mdbraber/owntube`, branch `main`,
-  pushed through `6c2c9e3`). Deploy:
+- OwnTube source `/usr/local/src/owntube` (fork `mdbraber/owntube`, branch `main`).
+  **`71fa2f4`..`efa69da` are committed but NOT pushed.** Deploy:
   `cd /var/data/config/owntube && docker compose build owntube && docker compose up -d owntube`
-  (also `owntube-cache-warmer`, `owntube-publisher`, `owntube-upstream-canary` —
-  same image).
+  — but the sidecars (`owntube-cache-warmer`, `owntube-publisher`,
+  `owntube-upstream-canary`) each build their **own** image, so that command
+  leaves them on stale code. Use `docker compose up -d --build <service>` for
+  each. The warmer on old code means old-shaped rows in the shared cache.
 - Invidious fork `/var/data/config/invidious-build` @ `nedworks/integration`,
   running image reports `branch: nedworks/integration`.
 - Companion image `nedworks/invidious-companion:2026.07.29-dvrfix-captionfix`.
@@ -86,8 +94,11 @@ when one step went wrong. Split by concern; each commit independently green.
   (`http://invidious-companion:8282`). Use it for server-side fetches; only use
   the public base for URLs the browser must reach.
 - The canary runs hourly: `docker logs -f owntube-upstream-canary`. It should
-  report **4 PASS + 1 KNOWN** (`listDuration`). If a new check goes red, that is
-  a real regression — investigate before continuing.
+  report **5 PASS + 1 KNOWN** (`listDuration`). If a new check goes red, that is
+  a real regression — investigate before continuing. **Check it is running at
+  all** (`docker compose ps owntube-upstream-canary`): it was found commented
+  out of compose with a dead container on 2026-07-30, and nothing asserts that
+  it ran.
 - `docker-compose.yml` files under `/var/data/config/*` are **not** in git; the
   convention is timestamped `.bak-*` copies before editing.
 
@@ -100,7 +111,9 @@ when one step went wrong. Split by concern; each commit independently green.
   `docker exec owntube node -e "fetch('http://invidious:3000/api/v1/videos/<id>').then(r=>r.json()).then(j=>console.log(j.isPostLiveDvr))"`
   and always re-check the flag before concluding anything — these convert to VOD
   without warning.
-- **The `/dvr` segment route end to end** — same blocker.
+- The `/dvr` segment route is **no longer** on this list — verified end to end on
+  2026-07-30 (real fMP4, 206 on Range, CORS, public origin). `IWqNAUTGK58` was a
+  post-live-DVR video that day. Only Safari's own DASH handling is untested.
 - **Settings → "Video source instances"** should now be read-only (no editable
   fields) with a working health check. Auth-gated, so it needs a signed-in eyeball.
 
