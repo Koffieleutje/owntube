@@ -215,24 +215,35 @@ async function checkListDurations(): Promise<Result> {
 }
 
 async function run(): Promise<void> {
-  const checks: (() => Promise<Result | Result[]>)[] = [
-    checkProvenance,
-    checkCaptions,
-    checkVideoStreamsAndByteRanges,
-    checkListDurations,
+  /**
+   * Names are declared, not derived from the function identifier: a thrown check
+   * must report the same name as a returned one, or `KNOWN_FAILING` silently
+   * stops matching exactly when things are broken. One entry may cover several
+   * results (`videoStreams` + `byteRanges` share a fetch).
+   */
+  const checks: {
+    names: string[];
+    run: () => Promise<Result | Result[]>;
+  }[] = [
+    { names: ["provenance"], run: checkProvenance },
+    { names: ["captions"], run: checkCaptions },
+    {
+      names: ["videoStreams", "byteRanges"],
+      run: checkVideoStreamsAndByteRanges,
+    },
+    { names: ["listDuration"], run: checkListDurations },
   ];
 
   const results: Result[] = [];
   for (const check of checks) {
     try {
-      const r = await check();
+      const r = await check.run();
       results.push(...(Array.isArray(r) ? r : [r]));
     } catch (e) {
-      results.push({
-        name: check.name.replace(/^check/, "").toLowerCase(),
-        ok: false,
-        detail: `threw: ${(e as Error).message}`,
-      });
+      const message = (e as Error).message;
+      for (const name of check.names) {
+        results.push({ name, ok: false, detail: `threw: ${message}` });
+      }
     }
   }
 
