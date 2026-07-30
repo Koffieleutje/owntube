@@ -17,7 +17,7 @@ updated 2026-07-30.
 | 3.5 — `publishedAt` | **done** | `9bb0cec`, `d7ff553` |
 | 3.6-3.7 — remaining data gaps | **not started** | — |
 | 4 — maintain the fork | ongoing | — |
-| 5 — restructure media routes | **not started** | — |
+| 5 — restructure media routes | **stages 1-2 done, 3 pending** | `def1e99`, `721c46c` |
 
 Every shipped phase was verified the same way: tsc diffed against an 8-error
 baseline (all pre-existing missing local packages), the full vitest suite, biome
@@ -666,7 +666,56 @@ convenient, in rough order of value:
 None of these are blockers. They shrink the permanent rebase burden; the fork is
 safe without them as long as the provenance canary is in place.
 
-## Phase 5 — Restructure OwnTube's media routes
+## Phase 5 — Restructure OwnTube's media routes — **STAGES 1-2 DONE**
+
+Shipped: `def1e99` (extract + mount), `721c46c` (switch generation).
+**Stage 3 — delete the `/invidious` alias — is deliberately not done yet;** see
+the sequencing note below.
+
+**Two corrections to the plan below, both found in the code.**
+
+1. **The clients do not reference the prefix at all.** The plan said a
+   compatibility alias was needed because `/invidious/...` is referenced by "six
+   web modules plus the TV and iOS clients". `apps/tv` and `apps/ios` contain
+   **zero** occurrences: the TV app builds
+   `${OWNTUBE_BASE_URL}/dash/<id>/manifest.mpd` and then simply *follows* the
+   segment URLs inside the manifest body. So the prefix was only ever an internal
+   detail, and the alias is needed for **cached manifests**, not for client
+   releases — a much shorter horizon.
+2. **`/media/segment` and `/media/image` were not available.** `/media/[[...parts]]`
+   was already the RSS enclosure route (`/media/<videoId>.m4a`). The layout used
+   instead is three top-level prefixes: **`/stream`** (byte-range media, HLS
+   manifests), **`/image`** (thumbnails, avatars, storyboards) and
+   **`/enclosure`** (the RSS target, moved off `/media`). The enclosure move
+   would normally need its old URL alive forever, since podcast clients store
+   them; it was a clean rename only because there are no subscribers yet
+   (owner's decision, 2026-07-30).
+
+**What the split actually bought.** `app/invidious/[[...path]]/route.ts` went
+**601 → 35 lines**; the logic lives in `server/media/upstream-proxy.ts` with the
+mount prefix as a parameter, which is what lets one handler serve three prefixes.
+The routes are now named for what they serve rather than for an upstream.
+
+**Sequencing, and why stage 3 waits.** Recognisers (`hls-same-origin`,
+`video-thumbnail-url`, `invidious-proxy`, `player-recovery`) accept *both*
+prefixes, so stage 2 was deployable alone: manifests handed out before the deploy
+still point at `/invidious` and keep working. Stage 3 removes the alias, and can
+only run once nothing in flight references it — bounded by
+`STREAMS_DETAIL_CACHE_TTL_MAX_SEC` (3 h) and googlevideo URL expiry on a similar
+horizon. Removing it in the same deploy would have broken every already-open
+player.
+
+**Stage 3 checklist** (for whoever picks this up):
+- Delete `app/invidious/[[...path]]/route.ts` and `LEGACY_PROXY_PREFIX` from
+  `server/media/upstream-proxy.ts`.
+- Drop the legacy arm from the four recognisers listed above.
+- `audio-peak-limiter.test.ts` is currently the only test covering the legacy
+  path (`/invidious/videoplayback` through `isSameOriginMediaSrc`) — retarget it.
+- Rename `lib/invidious-proxy.ts`; it is now the m3u8/stream-proxy helper and no
+  longer upstream-specific.
+
+<details><summary>Original plan (kept; two of its premises were wrong)</summary>
+
 
 `app/invidious/[[...path]]/route.ts` is 601 lines — the largest route — doing five
 unrelated jobs: thumbnails with a 5-step fallback chain, storyboards, channel
@@ -690,6 +739,8 @@ Piped arms are already gone, and mind that `/invidious/...` URLs are referenced 
 `video-thumbnail-url`, `player-recovery`, `invidious-origin-context` and the TV/iOS
 clients — needs a compatibility alias during rollout.
 
+</details>
+
 ---
 
 ## Suggested order
@@ -711,9 +762,10 @@ Phases 0, 1 and 2 are done. Remaining, in order:
    `pickLiveFlagsFromUpstream`.
 8. ~~Phase 0's last box~~ — **Done**; `proxy.types.ts` now tags provenance per
    field. See Phase 0 above.
-9. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a
-   compatibility alias because the prefix is referenced by six web modules plus
-   the TV and iOS clients.
+9. **Phase 5** — stages 1-2 done (`/stream`, `/image`, `/enclosure`). **Stage 3,
+   deleting the `/invidious` alias, is the remaining work** and only needs a
+   deploy to have been live longer than the 3 h manifest cache. The TV/iOS
+   concern in the original plan was unfounded — see Phase 5.
 10. **Phase 4 PRs** — opportunistic throughout; each merged one shrinks the
     permanent rebase set. Now five patches deep (`audioTrack`, trending
     `liveNow`, `isShort` + the three pre-existing), so the rebase surface has
