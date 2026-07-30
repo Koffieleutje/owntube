@@ -1,7 +1,22 @@
 # OwnTube ↔ Invidious boundary: phased plan
 
-Status: proposed, 2026-07-30. Nothing here is done except the Phase 0 items marked
-**done**.
+Status: **Phases 0-2 shipped, Phases 3-5 outstanding.** Last updated 2026-07-30.
+
+| phase | state | commits |
+|---|---|---|
+| 0 — guardrails | **done** | `ee1f49e`, `25c43b6` + the Invidious fork work below |
+| 1a — delete Piped | **done** | `06231e7` (+212 / −3,207, 45 files) |
+| 1b(a) — collapse `sourceUsed` unions | **done** | `590a02e` |
+| 1b(b) — remove per-account overrides | **done** | `fd9ac84` (+293 / −945, 47 files) |
+| 2 — companion direct + internal | **done** | `ad8504f`, `6c2c9e3` |
+| 3 — close data gaps upstream | **not started** | — |
+| 4 — maintain the fork | ongoing | — |
+| 5 — restructure media routes | **not started** | — |
+
+Every shipped phase was verified the same way: tsc diffed against an 8-error
+baseline (all pre-existing missing local packages), the full vitest suite, biome
+diffed against a stashed baseline, then built, deployed and smoke-tested.
+Test count went 450 → 463 across the work.
 
 ## The question this answers
 
@@ -59,7 +74,7 @@ built from the integration branch (Phase 0).
 
 ---
 
-## Phase 0 — Guardrails (do first; partially done)
+## Phase 0 — Guardrails — **DONE**
 
 Rationale: this audit found **three silent upstream regressions**, one of which
 had been live for a week. Detection has to come before refactoring, or later
@@ -83,7 +98,7 @@ phases will be debugging blind.
 - [x] **Document it** in `/var/data/config/invidious/docker-compose.yml`, pointing
       at the script rather than duplicating the command.
 - [x] **Guard the stale tree** with `DO-NOT-BUILD-FROM-HERE.md`.
-- [ ] **Provenance canary — the single highest-value guard.** Assert that
+- [x] **Provenance canary — the single highest-value guard.** Assert that
       `/api/v1/stats` reports `software.branch === "nedworks/integration"`, and
       optionally that `software.version` matches the branch tip. Invidious embeds
       the git branch and commit at build time, so this catches *any* image built
@@ -97,18 +112,50 @@ phases will be debugging blind.
 
       Because a long-lived patched fork is the accepted strategy, this assertion
       *is* the strategy's safety net. Add it before anything else.
-- [ ] **Behaviour canary.** A scheduled job asserting, against the live upstream:
+- [x] **Behaviour canary.** A scheduled job asserting, against the live upstream:
       - `/api/v1/captions/<id>?label=…` returns a redirect (or usable VTT)
       - `adaptiveFormats` entries carry `init` + `index` byte ranges
       - trending items have non-zero `lengthSeconds`
       - a known video id still resolves with streams
       Each of these was broken at some point and found only by accident. This
       catches upstream *behaviour* drift, which the provenance check cannot see.
-- [ ] **Record the contract.** `proxy.types.ts` is already the schema; add a short
+- [ ] **Record the contract** (still outstanding). `proxy.types.ts` is already the schema; add a short
       note per field that OwnTube *infers* rather than reads, so the inference
       surface is visible and shrinks measurably in Phase 3.
 
-## Phase 1 — Delete Piped (biggest win, zero upstream risk)
+## Phase 1 — Delete Piped — **DONE** (`06231e7`, `590a02e`, `fd9ac84`)
+
+**Outcome: ~4,450 lines deleted.** Split into three commits because a single
+39-file blob proved unreviewable and unrecoverable when a step went wrong.
+
+What differed from the plan below:
+- The plan said "keep per-account instance overrides". That was reversed once it
+  was confirmed Invidious is configured once in compose with no user settings, so
+  1b(b) removed them entirely — including the Settings editor and onboarding
+  field. The read-only display and health check remain, and multi-instance
+  failover still works via a multi-URL `INVIDIOUS_BASE_URL`.
+- `?upstream=piped` was removed end to end, including the `tryLiveUpstreamFallback`
+  that reloaded the page onto the other upstream.
+- `pipedBaseUrl*` had survived in `appSettingsSchema` — 1a only cleaned the tRPC
+  schema. 1b(b) got the rest.
+- `sourceUsed: "piped"` turned out to be used in `shorts-feed.ts` as a *sentinel
+  for locally personalized results*, which was mislabelling regardless; now
+  `"invidious"`.
+- 12 split-path tests broke on fixture conversion because the only route to the
+  progressive/split builder for a detail *with* adaptive streams was the Piped
+  branch. That builder is still live for adaptive streams **without** byte-range
+  indexes, so those tests now use a `noIndexBase()` fixture that reaches it the
+  way production does.
+
+**Method note, learned the hard way (two failed attempts):** removing whole named
+functions with brace matching and letting tsc enumerate the fallout is safe —
+it fails loudly. Regex over *signatures* fails silently into something that still
+parses (it produced `opts.?.invidiousBaseUrls`, `const = opts.overrides;` and a
+dangling `opts.`). Signature edits must be whole-line deletions or hand edits,
+verified with tsc after each file.
+
+<details><summary>Original plan (kept for the reasoning)</summary>
+
 
 `PIPED_BASE_URL=disabled` in the deployment. Cost of carrying it:
 
@@ -140,7 +187,32 @@ Steps:
 Risk: low. Pure OwnTube change, entirely unit-testable, no shared service touched.
 This is the opposite risk profile to moving logic upstream.
 
-## Phase 2 — Talk to the companion directly, and internally
+</details>
+
+## Phase 2 — Companion direct + internal — **DONE** (`ad8504f`, `6c2c9e3`)
+
+Shipped:
+- `server/services/companion.ts` — public base for browser-facing URLs, internal
+  (`INVIDIOUS_COMPANION_INTERNAL_URL`, default `http://invidious-companion:8282`)
+  for server-side fetches, plus `toInternalCompanionUrl` for rewriting the public
+  segment URLs the companion embeds from its own `SERVER_BASE_URL`.
+- Captions inverted to **companion-first**, Invidious as fallback: 0.14-0.58s
+  where the affected tracks previously took 3-5s cold, and the fork-patched
+  Invidious redirect is out of the hot path.
+- `check=` signing (`companionCheckParam`), matching Invidious'
+  `invidious_companion_encrypt` exactly, and **`SERVER_VERIFY_REQUESTS=true` is
+  now on** — the companion is no longer an unauthenticated YouTube proxy.
+  Verified three ways: unsigned → 400 "No check ID.", bogus → 400 "ID incorrect.",
+  signed → 200. `/videoplayback` stays ungated by design.
+
+Correction to the original claim below: the latency win is ~2ms (5ms internal vs
+7ms public, median of 8 warm alternating requests), not "a TLS round trip per
+segment" — keep-alive amortises the handshake. The real benefit is that
+server-side playback no longer depends on public DNS, a valid certificate, or
+Caddy being up.
+
+<details><summary>Original plan (kept for the reasoning)</summary>
+
 
 Today three paths coexist:
 
@@ -183,7 +255,9 @@ search, channels, trending, comments, playlists or resolveurl. Current dependenc
 counts — `videos` 14, `channels` 10, `manifest` 8, `trending` 3, `search` 3,
 `captions` 3, `resolveurl` 2, `comments` 2, `playlists` 1, `stats` 1.
 
-## Phase 3 — Close data gaps upstream, then delete OwnTube's inference
+</details>
+
+## Phase 3 — Close data gaps upstream, then delete OwnTube's inference — **NEXT**
 
 Each item: upstream has the data, doesn't emit it, and OwnTube guesses. Land the
 upstream change on `nedworks/integration` (and open the PR per Phase 4), then
@@ -300,20 +374,47 @@ clients — needs a compatibility alias during rollout.
 
 ## Suggested order
 
-1. **Phase 0 provenance canary** — cheapest item in the plan and the safety net for
-   the fork strategy. Do it first.
-2. Phase 1 Piped removal — largest simplification, zero shared-service risk.
-3. Phase 2 internal-direct + caption inversion — removes the known-fragile hop.
-4. Phase 3 item 1 (audioTrack) — lands on the fork, deletes ~300 lines here.
-5. Phase 0 behaviour canary, once there is a place to run scheduled checks.
-6. Phase 3 items 2–7, then Phase 5. Phase 4 PRs opportunistically throughout.
+Phases 0, 1 and 2 are done. Remaining, in order:
 
-Because the fork is a long-term choice, Phase 3's upstream changes land on
-`nedworks/integration` and stay there indefinitely — that is fine. Each one adds
-to the rebase set, so keep them as separate, minimal commits, and prefer
-upstreaming the generic ones eventually to shrink that set.
+1. **Phase 3.1 — `audioTrack` upstream.** The highest-value item left: ~5 lines in
+   `video_json.cr` deletes ~300 lines of the most fragile code in OwnTube.
+2. **Phase 3.2 — the trending list serialiser** (`lengthSeconds` / `liveNow`).
+   This is the canary's one acknowledged `KNOWN` failure; fixing it upstream lets
+   the entry be removed from `UPSTREAM_CHECK_KNOWN_FAILING`, which locks it in.
+3. **Phase 3.3-3.7** — shorts flag, members-only flag, `publishedAt`, channel
+   parse-error placeholders, multi-shape pickers.
+4. **Phase 0's last box** — record which `proxy.types.ts` fields are inferred, so
+   Phase 3's progress is measurable.
+5. **Phase 5** — split `/invidious` into `/media/*`. Do this last; it needs a
+   compatibility alias because the prefix is referenced by six web modules plus
+   the TV and iOS clients.
+6. **Phase 4 PRs** — opportunistic throughout; each merged one shrinks the
+   permanent rebase set.
 
 ## Open items and honest gaps
+
+**Never verified, still outstanding from the DVR work:**
+- **iPad Safari playback of a post-live-DVR video.** The original goal. The test
+  video (`7S6aQm1ZxkQ`) converted to VOD mid-session and no replacement could be
+  found (110 candidates scanned across trending and several live searches).
+  macOS Safari was confirmed working.
+- **The `/dvr` segment route end to end**, for the same reason. The internal
+  manifest fetch is confirmed against the companion; `toInternalCompanionUrl` is
+  unit-tested but unexercised live.
+- **The Settings "Video source instances" read-only display.** That route is
+  auth-gated, so anonymous curl only reaches the sign-in view. Wants an eyeball
+  while signed in.
+
+**Also worth knowing:**
+- `docker-compose.yml` in `/var/data/config/owntube` and
+  `/var/data/config/invidious` are **not** committed anywhere — the convention
+  there is timestamped `.bak-*` files. The Invidious one now carries
+  `SERVER_VERIFY_REQUESTS=true`; rollback is one commented line.
+- The cache-warmer could never reach Invidious until this work (missing
+  `caddy-media` network) — it had been silently "warming" only rows the main
+  container had already cached. Fixed; worth remembering as the class of bug the
+  canary exists to catch.
+
 
 - **The iOS/DVR path is unverified on iPad.** The test video (`7S6aQm1ZxkQ`)
   converted to VOD mid-session; a scan of 110 candidates found no fresh
