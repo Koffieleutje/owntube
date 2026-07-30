@@ -11,7 +11,8 @@ pnpm exec tsx main.ts dQw4w9WgXcQ        # pull + segment + write dash-out/manif
 pnpm exec tsx verify-timeline.ts         # check the manifest against the media
 pnpm exec tsx resilience-test.ts         # repeat / concurrency / watchdog
 pnpm exec tsx resume-test.ts             # snapshot + resume a session
-pnpm exec tsx seek-test.ts               # seek attempt (does NOT work — see below)
+pnpm exec tsx seek-fork-test.ts          # seek, needs googlevideo-seek.patch applied
+pnpm exec tsx seek-test.ts               # earlier failed attempts, kept as evidence
 pnpm exec tsx probe.ts                   # which Innertube clients expose SABR
 ```
 
@@ -52,6 +53,37 @@ is calibrated for public instances; at single-user scale it does not bite.
 **Resilience held up.** 6/6 sequential pulls with no retry, 6/6 with retry (none
 needed), 4/4 concurrent in 6.4 s at 239 MB RSS, and the watchdog aborts cleanly
 on an impossible stall budget.
+
+## Playback — verified with a real DASH client
+
+The output is not merely well-formed; ffmpeg's DASH demuxer consumes it and
+decodes every frame.
+
+```
+$ ffprobe manifest.mpd
+format_name=dash   duration=213.000000   nb_streams=2
+  h264  640x360  25/1
+  aac   44100Hz  2ch
+
+$ ffmpeg -i manifest.mpd -f null -
+frame= 5326 ... time=00:03:33.04     # zero warnings at -v warning
+```
+
+| check | result |
+|---|---|
+| full decode | **5,326 video frames, 0 warnings**, 213.04s |
+| audio decode | **9,177 AAC frames** = 213.06s — A/V agree within 0.02s |
+| seek to 120s, decode 5s | clean, no warnings — exercises the non-uniform `SegmentTimeline` |
+| extract a frame at 150s | a real 203 KB PNG of actual video content |
+
+Caveat worth stating: ffmpeg's DASH demuxer is *a* DASH client, not *the* one you
+ship to. dash.js, Shaka and ExoPlayer each have their own strictness, so this
+does not guarantee browser or TV playback. But it is an independent
+implementation reading the manifest, fetching init + segments, and decoding —
+which is a far stronger claim than the structural validation that preceded it.
+
+Reproduce with `apt-get install ffmpeg`, then run ffprobe/ffmpeg **from inside**
+`dash-out/` — relative segment URLs resolve against the working directory.
 
 ## Seeking — solved, via a two-line fix to googlevideo
 

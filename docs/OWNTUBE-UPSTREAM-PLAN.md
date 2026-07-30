@@ -148,29 +148,17 @@ What the spike settled:
   each fragment's own `tfdt` — 0 mismatches, 213.00s exact.
 - **Cost is not the problem at our scale.** ~1.4% of one core at realtime.
 - **Resilience held**: 6/6 sequential, 4/4 concurrent, watchdog aborts cleanly.
+- **It plays.** ffmpeg's DASH demuxer decodes the output: 5,326 video frames and
+  9,177 audio frames with zero warnings, A/V agreeing within 0.02s, seeking to
+  120s clean, and a real frame extracted at 150s.
+- **Seeking works** with a 35-line patch to `googlevideo`
+  (`spikes/sabr-dash/googlevideo-seek.patch`), which fixes a genuine upstream bug:
+  the requested start position is reset to 0 on the first loop iteration, before
+  any format is initialized.
 
-**The correction that matters: `SabrStream` cannot seek.** Four approaches all
-failed (partial state ignored; resume lands where the snapshot stopped; cleared
-buffers restart at 0; synthesised buffered ranges make the server stall).
-`grep -c seek` in its typings returns 0. Seek lives in the sibling export
-`SabrStreamingAdapter` — but that one requires **you** to parse UMP:
-
-| | UMP parsed for you | seek |
-|---|---|---|
-| `SabrStream` | yes | **no** |
-| `SabrStreamingAdapter` | **no** | yes |
-
-Neither gives headless + seek. So stage 7 must pick an approach up front:
-
-1. **Pre-pull and cache** (what the spike does). Trivially supports seek because
-   every segment is already on disk, and at ~30x realtime a 10-minute video takes
-   ~20s. Costs bandwidth and storage before first frame. **Most viable at
-   single-user scale.**
-2. **Long-lived sequential session per viewer.** Serve segments as they arrive.
-   Cheap, but no seek — a seek past the pulled point cannot be served.
-3. **Implement a headless `SabrPlayerAdapter`** (12 methods) on top of
-   `SabrStreamingAdapter`, including UMP parsing. Gets real seek, and is
-   materially more work than this plan previously assumed.
+`SabrStream` cannot seek **as shipped**, and four attempts from outside the
+library all failed. The fix had to be inside it, and is now in
+`googlevideo-seek.patch` — small enough to offer upstream rather than carry.
 
 Also settled by the spike, and easy to get wrong:
 `stream.abort()` never `reader.cancel()`; resume must stay inside one session
