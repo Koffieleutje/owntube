@@ -1,0 +1,77 @@
+diff --git a/src/core/SabrStream.ts b/src/core/SabrStream.ts
+index f1fef22..028c1f7 100644
+--- a/src/core/SabrStream.ts
++++ b/src/core/SabrStream.ts
+@@ -358,7 +358,10 @@ export class SabrStream extends EventEmitterLike {
+       this._errored = false;
+       this._aborted = false;
+ 
+-      let playerTimeMs = 0;
++      // `startAtMs` seeks a fresh session; `state` resumes a captured one and
++      // wins if both are given, since a restored session carries its own
++      // position along with the buffered ranges that justify it.
++      let playerTimeMs = options.startAtMs ?? 0;
+ 
+       if (options.state && this.restoreState(videoFormat, audioFormat, options.state)) {
+         playerTimeMs = options.state.playerTimeMs || 0;
+@@ -367,6 +370,20 @@ export class SabrStream extends EventEmitterLike {
+       const maxRetries = options.maxRetries !== undefined ? options.maxRetries : DEFAULT_MAX_RETRIES;
+       const enabledTrackTypesBitfield = options.enabledTrackTypes ?? EnabledTrackTypes.VIDEO_AND_AUDIO;
+ 
++      if (options.startAtMs && !options.state) {
++        const seekMs = options.startAtMs;
++        this.cachedBufferedRanges = [ videoFormat, audioFormat ]
++          .filter(Boolean)
++          .map((f) => ({
++            formatId: { itag: f.itag, lastModified: f.lastModified, xtags: f.xtags },
++            startTimeMs: '0',
++            durationMs: String(seekMs),
++            startSegmentIndex: 1,
++            endSegmentIndex: Math.max(1, Math.round(seekMs / (f.approxDurationMs || 5000))),
++            timeRange: { startTicks: '0', durationTicks: String(seekMs), timescale: 1000 }
++          })) as any;
++      }
++
+       const abrState: Record<string, any> = {
+         playerTimeMs,
+         audioTrackId: audioFormat.audioTrackId,
+@@ -400,7 +417,10 @@ export class SabrStream extends EventEmitterLike {
+         if (this.mainFormat)
+           this.validateAndCorrectDuration(this.mainFormat.formatInitializationMetadata);
+ 
+-        abrState.playerTimeMs = this.mainFormat ? getTotalDownloadedDuration(this.mainFormat) : 0;
++        // Fall back to the requested start position rather than 0: on the first
++        // iteration no format is initialized yet, and resetting here discards
++        // both `startAtMs` and a restored state's position.
++        abrState.playerTimeMs = this.mainFormat ? getTotalDownloadedDuration(this.mainFormat) : playerTimeMs;
+ 
+         const { shouldStop } = this.checkForStall({
+           playerTimeMs: abrState.playerTimeMs,
+@@ -695,6 +715,10 @@ export class SabrStream extends EventEmitterLike {
+       throw new Error('Client info must be set before starting.');
+ 
+     const bufferedRanges = this.cachedBufferedRanges || [];
++    }
+     const { sabrContexts, unsentSabrContexts } = this.prepareSabrContexts();
+ 
+     const { selectedFormatIds, updatedBufferedRanges } = this.prepareFormatSelections(
+diff --git a/src/types/sabrStreamTypes.ts b/src/types/sabrStreamTypes.ts
+index 796980e..bb61bcd 100644
+--- a/src/types/sabrStreamTypes.ts
++++ b/src/types/sabrStreamTypes.ts
+@@ -58,6 +58,15 @@ export interface SabrPlaybackOptions {
+    */
+   audioFormat?: number | SabrFormat | ((formats: SabrFormat[]) => SabrFormat | undefined);
+ 
++  /**
++   * Start playback at this position, in milliseconds.
++   *
++   * Unlike `state`, this does not require a previously captured session: it sets
++   * the initial `playerTimeMs` on the very first request, where no buffered
++   * ranges exist yet, so the server serves from that position. Use `state` to
++   * *resume* a session you already had; use this to *seek* into a fresh one.
++   */
++  startAtMs?: number;
+   /**
+    * Preferred video quality (e.g., "1080p", "720p").
+    */

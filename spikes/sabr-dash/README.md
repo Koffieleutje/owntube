@@ -53,10 +53,71 @@ is calibrated for public instances; at single-user scale it does not bite.
 needed), 4/4 concurrent in 6.4 s at 239 MB RSS, and the watchdog aborts cleanly
 on an impossible stall budget.
 
-## What it does NOT prove — seeking
+## Seeking — solved, via a two-line fix to googlevideo
 
-`SabrStream` **cannot seek**. Four attempts, all recorded in `seek-test.ts` and
-`resume-test.ts`:
+`googlevideo-seek.patch` adds a `startAtMs` option to `SabrStream` and makes
+seeking work headlessly:
+
+```
+baseline (no startAtMs)   -> first segment at   0.0s
+startAtMs= 30000 ( 30s)   -> first segment at  24.6s  SEEK WORKS
+startAtMs= 60000 ( 60s)   -> first segment at  55.4s  SEEK WORKS
+startAtMs=120000 (120s)   -> first segment at 114.7s  SEEK WORKS
+startAtMs=180000 (180s)   -> first segment at 178.9s  SEEK WORKS
+```
+
+Landing slightly *before* each target is correct — the server returns the segment
+containing the seek point so a decoder can start from the preceding keyframe.
+
+### The actual bug
+
+```ts
+abrState.playerTimeMs = this.mainFormat ? getTotalDownloadedDuration(this.mainFormat) : 0;
+```
+
+On the **first** iteration no format is initialized, so `mainFormat` is null and
+the position is unconditionally reset to **0** — discarding both `startAtMs` and
+a restored state's own position, before the request is even built. Changing the
+fallback from `0` to the requested start position is the whole fix.
+
+This is arguably an upstream bug in its own right: it is also why a restored
+state only "worked" when its `initializedFormatsMap` happened to make
+`mainFormat` non-null.
+
+### The second half
+
+A `playerTimeMs` on its own is *not* a seek instruction — the server serves from
+the end of what the client claims to hold. So when `startAtMs` is set on a fresh
+session, the patch also synthesises the buffered ranges that justify it:
+
+```ts
+formatId: { itag: f.itag, lastModified: f.lastModified, xtags: f.xtags }
+```
+
+That `formatId` matters. A `BufferedRange` without one is meaningless, and every
+earlier attempt from *outside* the library omitted it — `SabrFormat` has no
+`.formatId` property, it carries the FormatId fields inline.
+
+### Why this could not be done from outside
+
+`restoreState` only accepts state it produced itself, and the internal
+`downloadedSegments` / `lastMediaHeaders` must agree with any buffered ranges you
+assert. Four external attempts are preserved in `seek-test.ts` and
+`seek2-test.ts` — including one using *real* indexed segment boundaries — and all
+either started at 0 or stalled the server. Being inside the library is what makes
+the state coherent.
+
+### Upstreaming
+
+The patch is small, additive and fixes a real bug. Worth offering to
+`LuanRT/googlevideo` (MIT) rather than carrying: it is the difference between a
+permanent fork and a merged feature. Note the working tree also carries a
+`SABR_TRACE` debug log, stripped from this patch.
+
+## Previously: what it did NOT prove — seeking
+
+`SabrStream` cannot seek **as shipped**. Four attempts from outside the library,
+all recorded in `seek-test.ts`, `seek2-test.ts` and `resume-test.ts`:
 
 | attempt | result |
 |---|---|
