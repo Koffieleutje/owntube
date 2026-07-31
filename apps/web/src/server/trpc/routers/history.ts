@@ -2,10 +2,10 @@ import { and, desc, eq, like, or } from "drizzle-orm";
 import { z } from "zod";
 import { readChannelMetaByIds } from "@/server/channel-meta/store";
 import { watchHistory } from "@/server/db/schema";
+import { fireHooks } from "@/server/hooks/run-hooks";
 import { removeWatchedFromQueue } from "@/server/queue/remove-watched";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
-import { notifyPcsPlayback } from "@/server/remote/pcs-notify";
 import { fetchVideoDetail } from "@/server/services/proxy";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
@@ -115,14 +115,19 @@ export const historyRouter = router({
           clearRecommendationCachesForUser(ctx.userId);
         }
         if (!input.isShort) {
-          notifyPcsPlayback({
+          fireHooks({
+            event: completed === 1 ? "watched" : "progress",
             videoId: input.videoId,
+            channelId: input.channelId,
             positionSeconds,
             completed: completed === 1,
             durationSeconds: Math.max(
               recent.videoDurationSeconds,
               input.videoDurationSeconds,
             ),
+            videoTitle: recent.videoTitle ?? input.videoTitle,
+            channelName: recent.channelName ?? input.channelName,
+            source: "live",
           });
         }
         return { id: recent.id, updated: true, dequeued };
@@ -155,11 +160,16 @@ export const historyRouter = router({
         clearRecommendationCachesForUser(ctx.userId);
       }
       if (!input.isShort) {
-        notifyPcsPlayback({
+        fireHooks({
+          event: input.completed ? "watched" : "progress",
           videoId: input.videoId,
+          channelId: input.channelId,
           positionSeconds: input.positionSeconds ?? 0,
           completed: !!input.completed,
           durationSeconds: input.videoDurationSeconds,
+          videoTitle: input.videoTitle,
+          channelName: input.channelName,
+          source: "live",
         });
       }
       return { id: inserted.id, updated: false, dequeued };
