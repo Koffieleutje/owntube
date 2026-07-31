@@ -1,5 +1,5 @@
 diff --git a/src/core/SabrStream.ts b/src/core/SabrStream.ts
-index f1fef22..8432c45 100644
+index f1fef22..d4b8a34 100644
 --- a/src/core/SabrStream.ts
 +++ b/src/core/SabrStream.ts
 @@ -58,6 +58,19 @@ export interface InitializedFormat {
@@ -291,6 +291,9 @@ index f1fef22..8432c45 100644
 +   * @private
 +   */
 +  private recordConsumedSegment(initializedFormat: InitializedFormat, header: MediaHeader): void {
++    if ((globalThis as any)?.process?.env?.SABR_TRACE) {
++      // eslint-disable-next-line no-console
++      console.log(`[trace] mediaHeader ${JSON.stringify(header, (_k, v) => typeof v === 'bigint' ? String(v) : v)}`);
 +    }
 +    // An init segment is metadata, not content: it occupies no playback time,
 +    // and recording it would seed a zero-length range at sequence 0 that the
@@ -376,9 +379,13 @@ index f1fef22..8432c45 100644
  
 -    const bufferedRanges = this.cachedBufferedRanges || [];
 +
++    if ((globalThis as any)?.process?.env?.SABR_TRACE) {
++      // eslint-disable-next-line no-console
++      console.log(`[trace] request playerTimeMs=${abrState.playerTimeMs} bufferedRanges=${JSON.stringify(bufferedRanges)}`);
 +    }
      const { sabrContexts, unsentSabrContexts } = this.prepareSabrContexts();
  
++    const dumpDir = (globalThis as any)?.process?.env?.SABR_DUMP_DIR;
 +
 +
      const { selectedFormatIds, updatedBufferedRanges } = this.prepareFormatSelections(
@@ -409,6 +416,7 @@ index f1fef22..8432c45 100644
      }).finish();
 +
 +    if (dumpDir) {
++      // eslint-disable-next-line @typescript-eslint/no-require-imports
 +      const fs = (globalThis as any).process.getBuiltinModule?.('fs') ?? require('fs');
 +      fs.writeFileSync(`${dumpDir}/req-${this.requestNumber}.bin`, encoded);
 +    }
@@ -492,7 +500,7 @@ index f1fef22..8432c45 100644
          await wait(retryBackoffMs);
        } finally {
          this.partialSegmentQueue.clear();
-@@ -961,10 +1152,26 @@ export class SabrStream extends EventEmitterLike {
+@@ -961,10 +1152,30 @@ export class SabrStream extends EventEmitterLike {
  
      const formatIdKey = FormatKeyUtils.fromFormatInitializationMetadata(formatInitMetadata);
  
@@ -511,6 +519,10 @@ index f1fef22..8432c45 100644
 +      }
 +    }
 +
++    // A broadcast re-sends this on every response. Re-initializing would drop
++    // the downloaded segments and consumed ranges each time, so the stream
++    // could never make progress — refresh the metadata and keep the state.
++    // yt-dlp ignores a repeat initialization outright for the same reason.
      const initializedFormat: InitializedFormat = {
        formatInitializationMetadata: formatInitMetadata,
        downloadedSegments: new Map<number, Segment>(),
@@ -520,7 +532,7 @@ index f1fef22..8432c45 100644
      };
  
      this.initializedFormatsMap.set(formatIdKey, initializedFormat);
-@@ -1209,6 +1416,11 @@ export class SabrStream extends EventEmitterLike {
+@@ -1209,6 +1420,11 @@ export class SabrStream extends EventEmitterLike {
        segment.bufferedChunks = [];
  
        initializedFormat.lastMediaHeaders.push(segment.mediaHeader);
@@ -532,7 +544,7 @@ index f1fef22..8432c45 100644
        initializedFormat.downloadedSegments.set(segment.segmentNumber, segment);
        this.partialSegmentQueue.delete(headerId);
      }
-@@ -1312,10 +1524,11 @@ export class SabrStream extends EventEmitterLike {
+@@ -1312,10 +1528,11 @@ export class SabrStream extends EventEmitterLike {
      this.nextRequestPolicy = undefined;
      this.mainFormat = undefined;
      this.requestNumber = 0;

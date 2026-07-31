@@ -141,29 +141,46 @@ ANDROID_VR is preferred; WEB+pot is used only when a dubbed track is requested.
 On the same video: indexing **69ms vs 4.1s**, seeks **27–115ms vs ~4s**. Paying
 60× latency for dubs nobody asked for was the wrong default.
 
-## Live and post-live DVR — not supported
+## Live and post-live DVR — not supported, and `SabrStream` is the wrong tool
 
-Live requests are redirected to the companion's `/api/manifest/dash/id`. That is
-the right layering, but **it does not currently produce a working live stream**:
-that route answers live with an empty manifest — 417 bytes, `<Period/>`, zero
-representations, verified against a confirmed-live stream (`isLive=true`, 21
-adaptive formats). The redirect is correct plumbing in front of a gap.
+Live requests are redirected to the companion's `/api/manifest/dash/id`, which
+is the right layering but currently answers live with an *empty* manifest (417
+bytes, `<Period/>`, zero representations, verified against a confirmed-live
+stream). So the redirect is correct plumbing in front of a gap.
 
-Two routes to fixing it, neither small:
+**An attempt to implement live in `SabrStream` was made and reverted.** It is
+preserved on the `live-sabr-wip` branch of the googlevideo fork. What it
+established is worth keeping even though it does not work:
 
-1. **Implement live in SABR.** The protocol carries it and yt-dlp does it, with
-   ~180 references to broadcast handling — head tracking, end detection, deep
-   rewind, seekable-range and target-duration logic. `SabrStream`, the headless
-   downloader used here, has none of it and stalls on a live pull.
-2. **Proxy YouTube's native manifest.** It is real and complete (1MB,
-   `type="dynamic"`, 9 BaseURLs), but its segment URLs are absolute googlevideo
-   addresses with **path-encoded** parameters, while the companion's
-   videoplayback proxy takes query parameters — so every BaseURL needs
-   rewriting.
+- `LIVE_METADATA` (UMP part 31) is present and parses — googlevideo ships the
+  proto but `SabrStream` never handled it. A broadcast reports its head
+  sequence, head time, and a seekable window (observed: a 12-hour DVR window on
+  a 32-hour stream).
+- The stall had a real cause: a live pull requests position 0, which is outside
+  the window, and the server answers with metadata and no media. Clamping into
+  the window and seeding a positioning range (the shape yt-dlp injects when
+  rewinding) makes the requests structurally correct.
+- **Media then does flow at the protocol level** — responses carry
+  `MEDIA_HEADER`/`MEDIA`/`MEDIA_END`, dozens of segments each — but never
+  reaches the output stream. Two contributing bugs were found and fixed along
+  the way (a broadcast re-sends `FORMAT_INITIALIZATION_METADATA` every response,
+  which reset all accumulated state; and live media headers carry no
+  `contentLength`, so a length check discarded every segment). Neither was
+  sufficient.
 
-Delegation triggers on the live flag **or** a missing `sidx`, so a post-live
-recording that does carry an index is served here as ordinary VOD rather than
-excluded by its label.
+**The reference implementations say why.** kira and FreeTube both play live, and
+both use `SabrStreamingAdapter`, not `SabrStream` — and the adapter does not use
+the SABR ABR request loop for live at all. It takes the segment URL from the
+DASH manifest and fetches it as a plain UMP GET, appending
+`/ump/1/srfvp/1/alr/yes/pot/<token>/range/<bytes>` to the path
+(`SabrStreamingAdapter.ts`, the `source/yt_live_broadcast` branch). Live is
+manifest-driven per-segment fetching, not an ABR stream.
+
+So the correct implementation is the one this connector does not do: **proxy
+YouTube's native dynamic manifest** (verified real and complete — 1MB,
+`type="dynamic"`, 9 BaseURLs) and rewrite its BaseURLs through the companion's
+`/videoplayback`, which already appends `ump=yes` when configured. That is a
+manifest-rewriting job in `dashManifest.ts`, not SABR work.
 
 ## Whole-file download
 
