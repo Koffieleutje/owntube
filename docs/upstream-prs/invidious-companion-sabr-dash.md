@@ -141,46 +141,37 @@ ANDROID_VR is preferred; WEB+pot is used only when a dubbed track is requested.
 On the same video: indexing **69ms vs 4.1s**, seeks **27–115ms vs ~4s**. Paying
 60× latency for dubs nobody asked for was the wrong default.
 
-## Live and post-live DVR — not supported, and `SabrStream` is the wrong tool
+## Live and post-live DVR — working, and deliberately not via SABR
 
-Live requests are redirected to the companion's `/api/manifest/dash/id`, which
-is the right layering but currently answers live with an *empty* manifest (417
-bytes, `<Period/>`, zero representations, verified against a confirmed-live
-stream). So the redirect is correct plumbing in front of a gap.
+Verified end to end against a live broadcast: all 8 media representations
+return real media through the connector, and ffmpeg decodes both **1080p h264**
+and **AAC audio** cleanly.
 
-**An attempt to implement live in `SabrStream` was made and reverted.** It is
-preserved on the `live-sabr-wip` branch of the googlevideo fork. What it
-established is worth keeping even though it does not work:
+**SABR is the wrong tool here, and the reference players say so.** kira and
+FreeTube both play live through `SabrStreamingAdapter`, which for a broadcast
+skips the ABR request loop entirely and fetches the segment URLs the manifest
+hands it (`SabrStreamingAdapter.ts`, the `source/yt_live_broadcast` branch).
+Live is manifest-driven per-segment fetching, not an adaptive-bitrate stream.
+An attempt to add a broadcast path to `SabrStream` got media flowing at the
+protocol level but never into an output stream; it is preserved on the fork's
+`live-sabr-wip` branch, and what it established is written up there.
 
-- `LIVE_METADATA` (UMP part 31) is present and parses — googlevideo ships the
-  proto but `SabrStream` never handled it. A broadcast reports its head
-  sequence, head time, and a seekable window (observed: a 12-hour DVR window on
-  a 32-hour stream).
-- The stall had a real cause: a live pull requests position 0, which is outside
-  the window, and the server answers with metadata and no media. Clamping into
-  the window and seeding a positioning range (the shape yt-dlp injects when
-  rewinding) makes the requests structurally correct.
-- **Media then does flow at the protocol level** — responses carry
-  `MEDIA_HEADER`/`MEDIA`/`MEDIA_END`, dozens of segments each — but never
-  reaches the output stream. Two contributing bugs were found and fixed along
-  the way (a broadcast re-sends `FORMAT_INITIALIZATION_METADATA` every response,
-  which reset all accumulated state; and live media headers carry no
-  `contentLength`, so a length check discarded every segment). Neither was
-  sufficient.
+So live proxies YouTube's own manifest instead. That manifest is already
+exactly what a player needs — `type="dynamic"`, a `SegmentList` per
+representation — and the only obstacle is that its `BaseURL`s are absolute
+googlevideo addresses, IP-locked to this server. Each is rewritten to a local
+path; the relative `<SegmentURL media="sq/…"/>` entries are left untouched
+because DASH resolves them against it.
 
-**The reference implementations say why.** kira and FreeTube both play live, and
-both use `SabrStreamingAdapter`, not `SabrStream` — and the adapter does not use
-the SABR ABR request loop for live at all. It takes the segment URL from the
-DASH manifest and fetches it as a plain UMP GET, appending
-`/ump/1/srfvp/1/alr/yes/pot/<token>/range/<bytes>` to the path
-(`SabrStreamingAdapter.ts`, the `source/yt_live_broadcast` branch). Live is
-manifest-driven per-segment fetching, not an ABR stream.
+Two details that are easy to get wrong:
 
-So the correct implementation is the one this connector does not do: **proxy
-YouTube's native dynamic manifest** (verified real and complete — 1MB,
-`type="dynamic"`, 9 BaseURLs) and rewrite its BaseURLs through the companion's
-`/videoplayback`, which already appends `ump=yes` when configured. That is a
-manifest-rewriting job in `dashManifest.ts`, not SABR work.
+- The rewrite must be **path-style**. A query-style proxy URL is discarded by
+  DASH's relative resolution, so the segment paths would not survive.
+- The `check` parameter travels **in the path** for the same reason.
+
+Live segments are self-initializing (`ftyp`+`moov`+`moof`+`mdat` each), so
+there is no init-segment handling. The manifest is re-fetched every 20s, since
+a live one advances and its URLs expire.
 
 ## Whole-file download
 
@@ -204,7 +195,6 @@ delegates rather than assembling anything.
 
 ## Remaining limitations
 
-- **Live does not work** (above) — the largest remaining gap.
 - **Muxed video download is intermittent** (above); audio is reliable.
 - A **cold seek** costs ~50ms rather than being instant from a cache. Deliberate.
 
@@ -213,6 +203,7 @@ delegates rather than assembling anything.
 ```
 src/lib/sabr/session.ts      WEB+pot / ANDROID_VR sessions + track pulling
 src/lib/sabr/reader.ts       sidx parsing, positioned readers, reader pool
+src/lib/sabr/live.ts         native dynamic manifest proxying for broadcasts
 src/routes/sabrRoutes.ts     manifest + segment routes, verifyRequest-gated
 vendor/googlevideo/          patched MIT library, mapped via gv/ in deno.json
 src/routes/index.ts          + app.route("/sabr", sabrRoutes)
