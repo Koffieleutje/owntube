@@ -141,45 +141,55 @@ ANDROID_VR is preferred; WEB+pot is used only when a dubbed track is requested.
 On the same video: indexing **69ms vs 4.1s**, seeks **27–115ms vs ~4s**. Paying
 60× latency for dubs nobody asked for was the wrong default.
 
-## Live and post-live DVR
+## Live and post-live DVR — not supported
 
-Delegated to the companion's existing `/api/manifest/dash/id`.
+Live requests are redirected to the companion's `/api/manifest/dash/id`. That is
+the right layering, but **it does not currently produce a working live stream**:
+that route answers live with an empty manifest — 417 bytes, `<Period/>`, zero
+representations, verified against a confirmed-live stream (`isLive=true`, 21
+adaptive formats). The redirect is correct plumbing in front of a gap.
 
-This is pragmatic, not a protocol limit — worth stating plainly because it is
-easy to conclude otherwise. **SABR does carry live**, and yt-dlp implements it:
-~180 references to broadcast handling, with head tracking, end detection, deep
-rewind, seekable-range and target-duration logic. `SabrStream`, the headless
-downloader used here, has none of that and simply stalls (verified against a
-live stream). Meanwhile YouTube publishes a native *dynamic* DASH manifest for
-live (verified: 894KB, `type="dynamic"`, 8 representations) and the companion
-route already serves it, including the fresh-token handling post-live DVR
-needs. Reimplementing the subsystem would be substantial work to arrive back
-where we already are.
+Two routes to fixing it, neither small:
+
+1. **Implement live in SABR.** The protocol carries it and yt-dlp does it, with
+   ~180 references to broadcast handling — head tracking, end detection, deep
+   rewind, seekable-range and target-duration logic. `SabrStream`, the headless
+   downloader used here, has none of it and stalls on a live pull.
+2. **Proxy YouTube's native manifest.** It is real and complete (1MB,
+   `type="dynamic"`, 9 BaseURLs), but its segment URLs are absolute googlevideo
+   addresses with **path-encoded** parameters, while the companion's
+   videoplayback proxy takes query parameters — so every BaseURL needs
+   rewriting.
 
 Delegation triggers on the live flag **or** a missing `sidx`, so a post-live
 recording that does carry an index is served here as ordinary VOD rather than
-being excluded by its label.
+excluded by its label.
 
 ## Whole-file download
 
-`GET /sabr/:videoId/download?itag=` delegates to `/latest_version`, which
-serves a progressive file through the videoplayback proxy with Range support —
-the shape a podcast app fetching an RSS enclosure wants.
+`GET /sabr/:videoId/download?itag=` delegates to `/latest_version`, which serves
+a progressive file through the videoplayback proxy with Range support — the
+shape a podcast app fetching an RSS enclosure wants.
 
-- `itag=140` (audio) **works**: HTTP 206, range honoured. This is the podcast
-  case.
-- `itag=18` (muxed video) redirects, but googlevideo answers **403**. Not yet
-  diagnosed — the companion's player response comes from a TV client, which may
-  not carry a usable muxed format. Open.
+- **`itag=140` (audio) works reliably**: HTTP 206, ranges honoured, including
+  mid-file ranges for resumption. This is the podcast case.
+- **`itag=18` (muxed video) is intermittent**: it returns 403 from googlevideo
+  in bursts. This happens through the untouched `/latest_version` route too, so
+  it is pre-existing companion behaviour rather than something this connector
+  introduces. Resolving the format here from an *uncached* player response was
+  tried — testing whether the rotating po_token explained it, as it does for the
+  DVR fix — and made no difference, so that theory is wrong. Reverted rather
+  than kept.
+- A video with no muxed format returns 400; an unknown itag returns 404.
 
-Muxing the separate SABR video and audio tracks here would need a real muxer,
-which is why this delegates rather than assembling anything.
+Muxing the separate SABR tracks here would need a real muxer, which is why this
+delegates rather than assembling anything.
 
 ## Remaining limitations
 
-- **Muxed video download 403s** (above). Audio-only downloads work.
-- **No live via SABR** — delegated, see above.
-- A **cold seek** costs 46–187ms versus ~10ms from a warm cache. Deliberate.
+- **Live does not work** (above) — the largest remaining gap.
+- **Muxed video download is intermittent** (above); audio is reliable.
+- A **cold seek** costs ~50ms rather than being instant from a cache. Deliberate.
 
 ## Files
 
