@@ -18,6 +18,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { runSqlMigrations } from "@/server/db/run-migrations";
 import * as schema from "@/server/db/schema";
 import { publishFeeds } from "@/server/remote/publish";
+import { reportRecentHistory } from "@/server/remote/report-history";
 
 const defaultPath = path.join(process.cwd(), "data", "owntube.db");
 const dbPath = process.env.DATABASE_PATH ?? defaultPath;
@@ -64,6 +65,13 @@ async function main(): Promise<void> {
     logLine(
       `publish-feeds: pushed ${feedCount} feed(s), ${itemCount} item(s) → ${target}`,
     );
+    // Reconciliation sweep: re-offer recent watch state to pocket-sessions.
+    // Its ahead-only guard drops everything it already knows, so a PCS
+    // outage heals within one push cycle and steady state costs nothing.
+    const { reported, applied } = await reportRecentHistory(db, {
+      onLog: logLine,
+    });
+    logLine(`report-history: ${reported} re-offered, ${applied} applied`);
   } finally {
     sqlite.close();
   }
