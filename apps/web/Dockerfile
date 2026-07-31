@@ -5,8 +5,10 @@
 FROM node:22-bookworm-slim AS base
 WORKDIR /app
 
+# curl: the playback hooks contract (OWNTUBE_HOOKS_DIR) promises shell
+# scripts can talk to the outside world — see hooks/README.md.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
+  && apt-get install -y --no-install-recommends python3 make g++ curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
