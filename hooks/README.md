@@ -40,7 +40,9 @@ Exit status is logged; a failing or slow hook (default timeout 30s,
 | Variable | Default | Purpose |
 |---|---|---|
 | `OWNTUBE_HOOKS_DIR` | *(unset — hooks off)* | Directory of executables (bind-mounted, e.g. `data/hooks`) |
-| `OWNTUBE_HOOK_TIMEOUT_MS` | `30000` | Per-hook time limit |
+| `OWNTUBE_HOOK_TIMEOUT_MS` | `30000` | Per-hook time limit (also the webhook POST timeout) |
+| `OWNTUBE_WEBHOOK_URLS` | *(unset)* | Comma-separated webhook sinks: every event is POSTed as JSON — receivers such as n8n flows subscribe by URL; replays re-deliver, so receivers must be idempotent |
+| `OWNTUBE_WEBHOOK_TOKEN` | *(unset)* | Sent as `X-Webhook-Token` so receivers can verify the sender |
 
 Set on **both** the app container (live events) and the feeds-pusher
 container (replay sweep). Deploy never touches the hooks directory — copy

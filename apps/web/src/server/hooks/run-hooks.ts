@@ -129,10 +129,54 @@ function runOne(script: string, event: HookEvent): Promise<void> {
  * sweep awaits to keep replays orderly.
  */
 export async function runHooks(event: HookEvent): Promise<void> {
+  if (!event.videoId) return;
+  await postWebhooks(event);
   const dir = hooksDir();
-  if (!dir || !event.videoId) return;
+  if (!dir) return;
   for (const script of listHooks(dir)) {
     await runOne(script, event);
+  }
+}
+
+/** Webhook sinks: the same event JSON scripts get on stdin, POSTed to each
+ * URL in OWNTUBE_WEBHOOK_URLS — the Todoist shape: receivers (an n8n flow,
+ * anything) subscribe by URL and the server knows nothing about them. The
+ * replay sweep re-fires through this path too, so receivers get
+ * at-least-once delivery and must be idempotent, like every hook. */
+async function postWebhooks(event: HookEvent): Promise<void> {
+  const urls = (process.env.OWNTUBE_WEBHOOK_URLS ?? "")
+    .split(",")
+    .map((u) => u.trim())
+    .filter(Boolean);
+  if (urls.length === 0) return;
+  const token = process.env.OWNTUBE_WEBHOOK_TOKEN?.trim();
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (token) headers["x-webhook-token"] = token;
+  const body = JSON.stringify(event);
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(HOOK_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        logger.warn("webhook rejected", {
+          url,
+          event: event.event,
+          status: res.status,
+        });
+      }
+    } catch (error) {
+      logger.warn("webhook failed", {
+        url,
+        event: event.event,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 
