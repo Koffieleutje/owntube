@@ -95,6 +95,31 @@ tested against `brainicism/bgutil-ytdlp-pot-provider`.
 | `SABR_READER_IDLE_MS` | 45000 | idle reader abort |
 | `SABR_SESSION_TTL_MS` | 4h | player-response reuse |
 
+## Verified by an independent DASH client
+
+Everything below was checked with **ffmpeg** against the connector over HTTP —
+not with curl — so it exercises manifest parsing, `SegmentTimeline`, segment
+addressing and decode the way a player does.
+
+**VOD** (`dQw4w9WgXcQ`), what the client actually sees:
+
+```
+0,h264,video,256,144      6,aac,audio
+1,h264,video,426,240      7..11,webvtt,subtitle   (5 caption tracks)
+2,h264,video,640,360
+3,h264,video,854,480
+4,h264,video,1280,720
+5,h264,video,1920,1080
+```
+
+- decodes 20s from the start, clean
+- **seeks to 150s** and decodes 15s, clean — exercises the shared timeline and
+  on-demand random access
+- extracts a real frame at 180s (904KB PNG)
+
+**Live**: 6 video rungs to 1080p plus 2 AAC tracks, decodes 15s clean, real
+frame extracted (625KB).
+
 ## Test evidence
 
 - **Ladder + dubs**: `?audio=de,fr` on a 25-minute video yields
