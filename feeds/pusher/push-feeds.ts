@@ -33,6 +33,18 @@ const appOrigin =
   process.env.AUTH_URL?.trim() ||
   "http://localhost:3000";
 
+// The loop calls this often (see docker-compose \`owntube-feeds-pusher\`); a run
+// only publishes when the library actually changed, or when the full interval
+// has elapsed. SQLite triggers stamp feed_publish_state.dirty_at on every
+// write to a table a feed is built from — including writes made by the
+// playback bridge — so "changed" needs no cooperation from the app code.
+const intervalSec = Number.parseInt(
+  process.env.OWNTUBE_PUBLISH_INTERVAL_SEC ?? "1800",
+  10,
+);
+// --force publishes regardless (manual runs, first deploy).
+const force = process.argv.includes("--force");
+
 function logLine(message: string): void {
   process.stdout.write(`${message}\n`);
 }
@@ -56,20 +68,47 @@ async function main(): Promise<void> {
   );
 
   try {
+    const now = Math.floor(Date.now() / 1000);
+    const state = sqlite
+      .prepare(
+        "SELECT dirty_at, published_at FROM feed_publish_state WHERE id = 1",
+      )
+      .get() as { dirty_at: number; published_at: number } | undefined;
+    const dirtyAt = state?.dirty_at ?? 0;
+    const publishedAt = state?.published_at ?? 0;
+    const changed = dirtyAt > publishedAt;
+    const due = now - publishedAt >= intervalSec;
+    if (!force && !changed && !due) {
+      logLine(
+        "push-feeds: nothing changed and interval not elapsed — skipping",
+      );
+      return;
+    }
+    // Stamp with the time the run STARTED: a change made while publishing
+    // stays newer than published_at and triggers the next cycle.
+    const startedAt = now;
+
     const { feedCount, itemCount } = await publishFeeds(db, {
       target,
       secret,
       appOrigin,
       onLog: logLine,
     });
+    sqlite
+      .prepare("UPDATE feed_publish_state SET published_at = ? WHERE id = 1")
+      .run(startedAt);
     logLine(
-      `publish-feeds: pushed ${feedCount} feed(s), ${itemCount} item(s) → ${target}`,
+      `publish-feeds: pushed ${feedCount} feed(s), ${itemCount} item(s) → ${target} (${changed ? "changed" : "interval"})`,
     );
     // Reconciliation sweep: re-fire recent watch state through the generic
     // hooks (OT_SOURCE=replay). Receivers dedupe — pocket-sessions' ahead-only
     // guard drops known state — so an outage heals within one push cycle and
-    // steady state costs a handful of no-op hook runs.
-    await replayRecentHistory(db, { onLog: logLine });
+    // steady state costs a handful of no-op hook runs. Kept on the SLOW
+    // cadence: a change-triggered publish must not re-fire the sweep every
+    // time someone edits a playlist.
+    if (due || force) {
+      await replayRecentHistory(db, { onLog: logLine });
+    }
   } finally {
     sqlite.close();
   }
