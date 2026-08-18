@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { StyleSheet, Text } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
+import { OWNTUBE_BASE_URL } from "@/lib/config";
 import type { Nav } from "@/lib/navigation";
 import { trpcClient } from "@/lib/trpc";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
@@ -27,7 +28,9 @@ export function HistoryScreen({ nav }: { nav: Nav }) {
             items: rows.map((row) => ({
               videoId: row.videoId,
               title: row.videoTitle,
-              thumbnailUrl: row.thumbnailUrl,
+              thumbnailUrl:
+                row.thumbnailUrl ??
+                `${OWNTUBE_BASE_URL}/invidious/vi/${row.videoId}/mqdefault.jpg`,
               channelName: row.channelName,
             })),
             next: rows.length === PAGE_SIZE ? (page ?? 1) + 1 : undefined,
