@@ -165,7 +165,11 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
     ) : section === "home" ? (
       <HomeScreen nav={nav} />
     ) : section === "search" ? (
-      <SearchScreen nav={nav} initialQuery={searchQuery} />
+      <SearchScreen
+        nav={nav}
+        initialQuery={searchQuery}
+        onQueryChange={setSearchQuery}
+      />
     ) : section === "recommended" ? (
       <RecommendedScreen nav={nav} />
     ) : section === "subscriptions" ? (

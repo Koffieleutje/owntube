@@ -20,10 +20,17 @@ import { colors, focus, fontSize, radius, spacing } from "@/theme";
 export function SearchScreen({
   nav,
   initialQuery,
+  onQueryChange,
 }: {
   nav: Nav;
   /** Set when the system hands us a voice search (see plugins/with-tv-search). */
   initialQuery?: string;
+  /**
+   * Lifts the submitted query to the shell. Opening a video unmounts this
+   * screen, so without this the query is gone on the way back and has to be
+   * retyped on an on-screen keyboard.
+   */
+  onQueryChange?: (query: string) => void;
 }) {
   const [text, setText] = useState(initialQuery ?? "");
   const [query, setQuery] = useState(initialQuery ?? "");
@@ -45,7 +52,7 @@ export function SearchScreen({
     const transcript = event.results[0]?.transcript ?? "";
     if (!transcript) return;
     setText(transcript);
-    if (event.isFinal) setQuery(transcript.trim());
+    if (event.isFinal) runQuery(transcript.trim());
   });
   useSpeechRecognitionEvent("end", () => setListening(false));
   useSpeechRecognitionEvent("error", (event) => {
@@ -97,7 +104,13 @@ export function SearchScreen({
     setQuery(initialQuery);
   }, [initialQuery]);
 
-  const submit = () => setQuery(text.trim());
+  /** Every user-initiated search goes through here so the shell keeps it. */
+  const runQuery = (next: string) => {
+    setQuery(next);
+    onQueryChange?.(next);
+  };
+
+  const submit = () => runQuery(text.trim());
 
   return (
     <View style={styles.container}>
