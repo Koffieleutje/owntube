@@ -17,6 +17,19 @@ const CARD_WIDTH = 280;
 const THUMBNAIL_WIDTH = 264;
 const THUMBNAIL_HEIGHT = 148;
 
+/**
+ * Feeds hand out `maxres` (1280x720), which every card then draws at 264x148 dp
+ * — a 3.5 MB decoded bitmap for 39k pixels. Rows keep their cards mounted
+ * (`removeClippedSubviews={false}`, needed for D-pad focus), so those bitmaps
+ * pile up and the decode-and-upload per card is what makes scrolling stutter on
+ * a low-power TV box. `mqdefault` is 320x180: same 16:9 framing, a size that
+ * actually matches the card, ~16x less memory. (`hqdefault` is 4:3 and would
+ * letterbox.) Anything that is not an Invidious thumbnail path is left alone.
+ */
+function cardThumbnailUrl(url: string): string {
+  return url.replace(/\/vi\/([\w-]+)\/[a-z0-9]+\.jpg/i, "/vi/$1/mqdefault.jpg");
+}
+
 type Props = {
   video: UnifiedVideo;
   onPress: (videoId: string) => void;
@@ -58,7 +71,7 @@ export function VideoCard({
       <View style={styles.thumbWrap}>
         {video.thumbnailUrl ? (
           <Image
-            source={{ uri: video.thumbnailUrl }}
+            source={{ uri: cardThumbnailUrl(video.thumbnailUrl) }}
             style={styles.thumb}
             resizeMode="cover"
           />

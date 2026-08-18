@@ -30,6 +30,8 @@ type Route =
   | { name: "watch"; videoId: string; resumeSeconds?: number }
   | { name: "channel"; channelId: string };
 
+const SIDEBAR_ANIM_MS = 140;
+
 export function Shell({ onSignOut }: { onSignOut: () => void }) {
   const [section, setSection] = useState<Section>("home");
   const [stack, setStack] = useState<Route[]>([]);
@@ -40,18 +42,32 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
    * beside it — most visibly the Subscriptions channel list. Shift the content
    * by the same amount instead, so both stay fully visible.
    */
-  const contentInset = useRef(new Animated.Value(RAIL_WIDTH)).current;
+  // Two values, because one cannot be driven by both drivers at once. The
+  // rail's width is a layout prop and has to stay on the JS driver, but that
+  // view is eight rows — cheap to relayout. The content is the whole screen
+  // (every feed and its cards), so it moves with a transform instead: no
+  // layout pass, and the animation runs on the UI thread. Same duration keeps
+  // them visually locked together.
+  const railWidth = useRef(new Animated.Value(RAIL_WIDTH)).current;
+  const contentShift = useRef(new Animated.Value(0)).current;
   const onSidebarExpanded = useCallback(
     (expanded: boolean) => {
       // One value drives both the rail's width and the content's inset, so
       // they can never be mid-animation at different widths.
-      Animated.timing(contentInset, {
-        toValue: expanded ? EXPANDED_WIDTH : RAIL_WIDTH,
-        duration: 140,
-        useNativeDriver: false,
-      }).start();
+      Animated.parallel([
+        Animated.timing(railWidth, {
+          toValue: expanded ? EXPANDED_WIDTH : RAIL_WIDTH,
+          duration: SIDEBAR_ANIM_MS,
+          useNativeDriver: false,
+        }),
+        Animated.timing(contentShift, {
+          toValue: expanded ? EXPANDED_WIDTH - RAIL_WIDTH : 0,
+          duration: SIDEBAR_ANIM_MS,
+          useNativeDriver: true,
+        }),
+      ]).start();
     },
-    [contentInset],
+    [railWidth, contentShift],
   );
 
   useEffect(() => {
@@ -188,7 +204,9 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
   // the content (absolute) and expands rightward over it when focused.
   return (
     <View style={styles.shell}>
-      <Animated.View style={[styles.content, { marginLeft: contentInset }]}>
+      <Animated.View
+        style={[styles.content, { transform: [{ translateX: contentShift }] }]}
+      >
         {body}
       </Animated.View>
       <Sidebar
@@ -196,7 +214,7 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
         onSelect={selectSection}
         sections={sections}
         onExpandedChange={onSidebarExpanded}
-        width={contentInset}
+        width={railWidth}
       />
     </View>
   );
@@ -206,6 +224,8 @@ const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: colors.background },
   content: {
     flex: 1,
+    // Static now that the expansion is a transform; the rail never overlaps.
+    marginLeft: RAIL_WIDTH,
     paddingVertical: spacing.screen,
     paddingRight: spacing.screen,
     paddingLeft: spacing.lg,
