@@ -1,0 +1,57 @@
+name: Publish image
+
+# Builds the web image and pushes it to GHCR, so the NAS only ever pulls a
+# finished image instead of compiling one (better-sqlite3 needs a toolchain).
+# Target is a x86_64 Synology, so a single native linux/amd64 build is enough —
+# no QEMU, no arm runners.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for the built-in GITHUB_TOKEN to push packages; no PAT needed.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Lowercased by the action, which GHCR requires.
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache between runs; the pnpm install and the native build are
+          # the expensive parts and rarely change.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
