@@ -529,7 +529,13 @@ export function PlayerChrome({
                 adapter.seek(t);
               }}
             />
-            <div className="mt-[-18px] flex items-center gap-1.5 text-white sm:mt-1 sm:gap-2">
+            {/* No negative margin: pulling this row up overlapped the scrubber's
+                40px touch target with the top half of these 36px buttons, and
+                the strip just above them still belonged to the scrubber. On a
+                phone the right-hand group sits against the right edge, so a
+                near-miss on fullscreen seeked to ~95% — it looked like the
+                video jumped to the end. */}
+            <div className="mt-1 flex items-center gap-1.5 text-white sm:gap-2">
               {/* Phones use the big center play/pause overlay instead. */}
               <button
                 type="button"
