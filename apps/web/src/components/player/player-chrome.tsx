@@ -288,7 +288,7 @@ export function PlayerChrome({
         // whole player), so every button scales with the video — small inline,
         // large in fullscreen — clamped to sane min/max. Icons are a fraction of
         // their button, so they scale with it.
-        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center gap-[clamp(0.5rem,5cqmin,3.5rem)] [container-type:size]">
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center gap-[clamp(0.5rem,5cqmin,3.5rem)] [container-type:size]">
           {!shortsMode ? (
             <button
               type="button"
