@@ -44,6 +44,7 @@ async function recordPlay(request: Request, videoId: string): Promise<void> {
     await caller.history.upsertEvent({
       videoId,
       channelId: detail.channelId,
+      channelName: detail.channelName,
       videoTitle: detail.title,
       videoDurationSeconds: detail.durationSeconds,
     });
