@@ -4,8 +4,8 @@ import {
   isRecognitionAvailable,
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
-import { useEffect, useState } from "react";
-import { StyleSheet, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { FocusButton } from "@/components/FocusButton";
 import type { Nav } from "@/lib/navigation";
@@ -35,9 +35,14 @@ export function SearchScreen({
   const [text, setText] = useState(initialQuery ?? "");
   const [query, setQuery] = useState(initialQuery ?? "");
   const [inputFocused, setInputFocused] = useState(false);
+  const [fieldFocused, setFieldFocused] = useState(false);
   const [listening, setListening] = useState(false);
-  // Not every TV ships a recogniser — this box has none — so the in-app mic
-  // hides rather than offering a control that can only fail.
+  const inputRef = useRef<TextInput>(null);
+  // The D-pad target that stands in for the text field — see the field Pressable
+  // below for why the TextInput cannot be one itself.
+  const fieldRef = useRef<View>(null);
+  // Not every TV ships a recogniser, so the in-app mic hides rather than
+  // offering a control that can only fail.
   const [micAvailable] = useState(() => {
     try {
       return isRecognitionAvailable();
@@ -117,24 +122,48 @@ export function SearchScreen({
       <View
         style={[
           styles.searchSurface,
-          inputFocused && styles.searchSurfaceFocused,
+          (fieldFocused || inputFocused) && styles.searchSurfaceFocused,
         ]}
       >
-        <Feather name="search" size={28} color={colors.mutedForeground} />
-        <TextInput
-          style={styles.input}
-          placeholder="Search"
-          placeholderTextColor={colors.mutedForeground}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={text}
-          onChangeText={setText}
-          onFocus={() => setInputFocused(true)}
-          onBlur={() => setInputFocused(false)}
-          onSubmitEditing={submit}
-          returnKeyType="search"
+        {/* A TextInput can never be a D-pad target: ReactEditText.requestFocus()
+            is a deliberate no-op (focus is JS-controlled, driven by taps), so
+            Android's focus search asks it to take focus, is told no, and skips
+            it. On a TV there are no taps, so the field was simply unreachable.
+            This Pressable is the focusable stand-in; pressing OK hands focus to
+            the field through the one path that does work, ref.focus() —
+            requestFocusFromJS — which also opens the keyboard. */}
+        <Pressable
+          ref={fieldRef}
+          style={styles.field}
           hasTVPreferredFocus
-        />
+          onPress={() => inputRef.current?.focus()}
+          onFocus={() => setFieldFocused(true)}
+          onBlur={() => setFieldFocused(false)}
+          accessibilityRole="search"
+          accessibilityLabel="Search"
+        >
+          <Feather name="search" size={28} color={colors.mutedForeground} />
+          <TextInput
+            ref={inputRef}
+            style={styles.input}
+            placeholder="Search"
+            placeholderTextColor={colors.mutedForeground}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={text}
+            onChangeText={setText}
+            onFocus={() => setInputFocused(true)}
+            // Leaving the keyboard (submit, or Back) would otherwise strand
+            // focus on the window, where the D-pad does nothing at all. Hand it
+            // back to the stand-in the user was on.
+            onBlur={() => {
+              setInputFocused(false);
+              fieldRef.current?.requestTVFocus?.();
+            }}
+            onSubmitEditing={submit}
+            returnKeyType="search"
+          />
+        </Pressable>
         {micAvailable ? (
           <FocusButton
             label={listening ? "Listening..." : "Speak"}
@@ -185,6 +214,12 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
     elevation: 10,
+  },
+  field: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
   },
   input: {
     flex: 1,
