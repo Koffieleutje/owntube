@@ -288,6 +288,17 @@ function ChannelRow({
 }) {
   const [focused, setFocused] = useState(false);
   const tint = active || focused ? colors.brand : colors.foreground;
+  /**
+   * Navigating straight from `onLongPress` fires while OK is still held down,
+   * so the key-up that follows lands on whatever the new screen just gave focus
+   * to — a card (the player opened) or, if that screen was still loading, Home
+   * in the sidebar (the app jumped back). Record the long press here and act on
+   * release instead: the key-up is then still consumed by this row, and nothing
+   * is in flight when the next screen mounts. Pressability calls `onPressOut`
+   * before `onPress`, and suppresses `onPress` entirely once a long press was
+   * sent, so the short-press path is untouched.
+   */
+  const longPressed = useRef(false);
 
   return (
     <Pressable
@@ -297,7 +308,18 @@ function ChannelRow({
       }}
       onBlur={() => setFocused(false)}
       onPress={onPress}
-      onLongPress={onLongPress}
+      onLongPress={
+        onLongPress
+          ? () => {
+              longPressed.current = true;
+            }
+          : undefined
+      }
+      onPressOut={() => {
+        if (!longPressed.current) return;
+        longPressed.current = false;
+        onLongPress?.();
+      }}
       style={[
         styles.row,
         active && styles.rowActive,

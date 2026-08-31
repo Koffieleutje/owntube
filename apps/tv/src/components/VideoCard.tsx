@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   channelInitial,
@@ -45,6 +45,16 @@ export function VideoCard({
   onFocusChange,
 }: Props) {
   const [focused, setFocused] = useState(false);
+  /**
+   * `hasTVPreferredFocus` calls the native `requestFocus()` the moment the prop
+   * is applied, which is before layout — and a view without a size cannot take
+   * focus, so the request is dropped. On a screen that opens while its feed is
+   * still loading there is nothing else focusable in the content, so focus ends
+   * up on the sidebar and the user has to press back into the page they just
+   * opened. Ask again once, on first layout, when the card actually has a size.
+   */
+  const cardRef = useRef<View>(null);
+  const claimedFocus = useRef(false);
   const badge = formatThumbnailBadge(video);
   const views = formatViews(video.viewCount);
   const published = formatPublishedLabel(
@@ -56,7 +66,13 @@ export function VideoCard({
 
   return (
     <Pressable
+      ref={cardRef}
       hasTVPreferredFocus={hasTVPreferredFocus}
+      onLayout={() => {
+        if (!hasTVPreferredFocus || claimedFocus.current) return;
+        claimedFocus.current = true;
+        cardRef.current?.requestTVFocus?.();
+      }}
       onFocus={() => {
         setFocused(true);
         onFocusChange?.(true);
