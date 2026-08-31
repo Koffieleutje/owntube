@@ -198,6 +198,7 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
                   onPress={() =>
                     selectNow({ kind: "channel", channelId: item.channelId })
                   }
+                  onLongPress={() => nav.openChannel(item.channelId)}
                 />
               )}
               showsVerticalScrollIndicator={false}
@@ -266,6 +267,7 @@ function ChannelRow({
   active,
   onFocus,
   onPress,
+  onLongPress,
 }: {
   label: string;
   avatarUrl?: string | null;
@@ -276,6 +278,13 @@ function ChannelRow({
   active: boolean;
   onFocus: () => void;
   onPress: () => void;
+  /**
+   * Second action on a row, on hold. A short press filters the feed beside the
+   * list — fast, and what this screen is for — so opening the channel's own
+   * page needs somewhere else to live. Rows that have one show a chevron while
+   * focused, since a hold is invisible otherwise.
+   */
+  onLongPress?: () => void;
 }) {
   const [focused, setFocused] = useState(false);
   const tint = active || focused ? colors.brand : colors.foreground;
@@ -288,6 +297,7 @@ function ChannelRow({
       }}
       onBlur={() => setFocused(false)}
       onPress={onPress}
+      onLongPress={onLongPress}
       style={[
         styles.row,
         active && styles.rowActive,
@@ -310,6 +320,8 @@ function ChannelRow({
       </Text>
       {trailingIcon ? (
         <Feather name={trailingIcon} size={16} color={tint} />
+      ) : onLongPress && focused ? (
+        <Feather name="chevron-right" size={16} color={tint} />
       ) : null}
     </Pressable>
   );
