@@ -7,4 +7,6 @@ export type Nav = {
   /** Open the player. `resumeSeconds` seeks on load (used by History). */
   openVideo: (videoId: string, resumeSeconds?: number) => void;
   openChannel: (channelId: string) => void;
+  /** Open a channel's public playlist. `title` avoids an empty heading frame. */
+  openPlaylist: (playlistId: string, title?: string) => void;
 };

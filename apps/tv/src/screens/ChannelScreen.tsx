@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { FocusButton } from "@/components/FocusButton";
+import { PlaylistRow } from "@/components/PlaylistRow";
 import { channelInitial, formatSubscribersLabel } from "@/lib/format";
 import type { Nav } from "@/lib/navigation";
 import { queryClient } from "@/lib/query-client";
@@ -75,9 +76,19 @@ export function ChannelScreen({
     `channel.page:${channelId}`,
   );
 
+  // The web app has had a Playlists tab on the channel page all along; the TV
+  // had no way to reach a channel's playlists at all. Same procedure, shown as
+  // a row above the video shelves so it costs no navigation to notice.
+  const playlists = trpc.channel.playlists.useQuery(
+    { channelId },
+    { staleTime: 10 * 60_000, retry: 1 },
+  );
+  const channelPlaylists = playlists.data?.playlists ?? [];
+
   const subscribersLabel = formatSubscribersLabel(meta.subscriberCount);
   const header = (
-    <View style={styles.header}>
+    <View style={styles.headerBlock}>
+      <View style={styles.header}>
       {meta.avatarUrl ? (
         <Image source={{ uri: meta.avatarUrl }} style={styles.avatar} />
       ) : (
@@ -91,11 +102,21 @@ export function ChannelScreen({
           <Text style={styles.subs}>{subscribersLabel}</Text>
         ) : null}
       </View>
-      {subscribed !== null ? (
-        <FocusButton
-          label={subscribed ? "Subscribed" : "Subscribe"}
-          onPress={toggleSubscription}
-          disabled={pending}
+        {subscribed !== null ? (
+          <FocusButton
+            label={subscribed ? "Subscribed" : "Subscribe"}
+            onPress={toggleSubscription}
+            disabled={pending}
+          />
+        ) : null}
+      </View>
+      {channelPlaylists.length > 0 ? (
+        <PlaylistRow
+          title="Playlists"
+          playlists={channelPlaylists}
+          onSelect={(playlist) =>
+            nav.openPlaylist(playlist.playlistId, playlist.title)
+          }
         />
       ) : null}
     </View>
@@ -112,6 +133,7 @@ export function ChannelScreen({
 }
 
 const styles = StyleSheet.create({
+  headerBlock: { gap: spacing.lg },
   headerText: { flex: 1 },
   header: {
     flexDirection: "row",

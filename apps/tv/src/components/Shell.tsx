@@ -9,6 +9,7 @@ import {
 import type { Nav } from "@/lib/navigation";
 import { loadSidebarPrefs } from "@/lib/sidebar-prefs";
 import { useResumeLookup, useWatchProgressRefresh } from "@/lib/watch-progress";
+import { ChannelPlaylistScreen } from "@/screens/ChannelPlaylistScreen";
 import { ChannelScreen } from "@/screens/ChannelScreen";
 import { HistoryScreen } from "@/screens/HistoryScreen";
 import { HomeScreen } from "@/screens/HomeScreen";
@@ -28,7 +29,8 @@ import { colors, spacing } from "@/theme";
  */
 type Route =
   | { name: "watch"; videoId: string; resumeSeconds?: number }
-  | { name: "channel"; channelId: string };
+  | { name: "channel"; channelId: string }
+  | { name: "playlist"; playlistId: string; title?: string };
 
 const SIDEBAR_ANIM_MS = 140;
 
@@ -93,6 +95,8 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
         ]),
       openChannel: (channelId) =>
         setStack((s) => [...s, { name: "channel", channelId }]),
+      openPlaylist: (playlistId, title) =>
+        setStack((s) => [...s, { name: "playlist", playlistId, title }]),
     }),
     [lookupResume],
   );
@@ -178,6 +182,12 @@ export function Shell({ onSignOut }: { onSignOut: () => void }) {
   const body =
     top?.name === "channel" ? (
       <ChannelScreen channelId={top.channelId} nav={nav} />
+    ) : top?.name === "playlist" ? (
+      <ChannelPlaylistScreen
+        playlistId={top.playlistId}
+        title={top.title}
+        nav={nav}
+      />
     ) : section === "home" ? (
       <HomeScreen nav={nav} />
     ) : section === "search" ? (
