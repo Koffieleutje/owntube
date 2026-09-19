@@ -5,9 +5,11 @@ import type { AppRouter } from "@web/server/trpc/root";
 import superjson from "superjson";
 import { getToken } from "@/lib/auth-token";
 import { TRPC_URL } from "@/lib/config";
+import { sessionExpiryLink } from "@/lib/trpc-links";
 
 export const trpcClient = createTRPCClient<AppRouter>({
   links: [
+    sessionExpiryLink,
     httpBatchLink({
       url: TRPC_URL,
       transformer: superjson,

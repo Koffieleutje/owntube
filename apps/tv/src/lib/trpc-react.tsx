@@ -9,6 +9,7 @@ import superjson from "superjson";
 import { getToken } from "@/lib/auth-token";
 import { TRPC_URL } from "@/lib/config";
 import { CACHE_BUSTER, persister, queryClient } from "@/lib/query-client";
+import { sessionExpiryLink } from "@/lib/trpc-links";
 
 /**
  * Mirrors apps/web/src/trpc/react.tsx so both clients use the same hooks API —
@@ -20,6 +21,7 @@ export function TrpcProvider({ children }: { children: ReactNode }) {
   const [client] = useState(() =>
     trpc.createClient({
       links: [
+        sessionExpiryLink,
         httpBatchLink({
           url: TRPC_URL,
           transformer: superjson,

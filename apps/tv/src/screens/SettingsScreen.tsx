@@ -95,9 +95,13 @@ export function SettingsScreen({
   }
 
   if (error && !settings) {
+    // Sign out has to survive a failed load. This screen is the only way out of
+    // a dead session, and it used to return the bare error here — hiding the
+    // button precisely when the error was "Authentication required".
     return (
       <View style={styles.centered}>
         <Text style={styles.muted}>{error}</Text>
+        <FocusButton label="Sign out" onPress={onSignOut} hasTVPreferredFocus />
       </View>
     );
   }
@@ -197,7 +201,12 @@ function Toggle({
 }
 
 const styles = StyleSheet.create({
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
+  centered: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.lg,
+  },
   title: {
     color: colors.foreground,
     fontSize: fontSize.xxl,
