@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type ReactNode, useMemo } from "react";
 import { VideoCardShort } from "@/components/videos/video-card";
+import { HOME_SHORTS_SHELF_LIMIT } from "@/lib/shorts-feed-presentation";
 import {
   computeHomeShortsShelfLayout,
   LARGE_VIDEO_GRID_COLUMN_GAP_PX,
@@ -10,7 +11,6 @@ import {
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 import { trpc } from "@/trpc/react";
 
-const SHORTS_SHELF_FETCH_LIMIT = 18;
 const SHORTS_SHELF_STALE_MS = 5 * 60_000;
 const SKELETON_SLOT_KEYS = [
   "a",
@@ -123,7 +123,7 @@ export function HomeShortsShelf({
   const shortsQuery = trpc.shorts.feed.useQuery(
     {
       region,
-      limit: SHORTS_SHELF_FETCH_LIMIT,
+      limit: HOME_SHORTS_SHELF_LIMIT,
       purpose: "shelf",
       excludeVideoIds:
         serverExcludeVideoIds.length > 0

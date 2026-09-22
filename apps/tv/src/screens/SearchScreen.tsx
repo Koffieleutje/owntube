@@ -1,16 +1,20 @@
 import { Feather } from "@expo/vector-icons";
+import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import {
   ExpoSpeechRecognitionModule,
   isRecognitionAvailable,
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
-import { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
+import { type ChannelTileData, ChannelTiles } from "@/components/ChannelTiles";
 import { FocusButton } from "@/components/FocusButton";
 import { FocusableTextInput } from "@/components/focusable-text-input";
 import type { Nav } from "@/lib/navigation";
+import { loadRecentSearches, rememberSearch } from "@/lib/recent-searches";
 import { trpcClient } from "@/lib/trpc";
+import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
@@ -79,26 +83,86 @@ export function SearchScreen({
     void startListening();
   };
 
+  // Channels come with the first page only.
+  const [channels, setChannels] = useState<ChannelTileData[]>([]);
   const feed = useInfiniteFeed<string>(
     (continuation) =>
       query
         ? trpcClient.search.videos
             .query({ q: query, continuation })
-            .then((r) => ({
-              items: r.videos,
-              next: r.continuation ?? undefined,
-            }))
+            .then((r) => {
+              if (!continuation) {
+                setChannels(
+                  [...(r.channels ?? [])]
+                    .sort(
+                      (a, b) =>
+                        (b.subscriberCount ?? 0) - (a.subscriberCount ?? 0),
+                    )
+                    .map((c) => ({
+                      channelId: c.channelId,
+                      name: c.name,
+                      avatarUrl: c.avatarUrl,
+                      subscriberCount: c.subscriberCount,
+                    })),
+                );
+              }
+              return { items: r.videos, next: r.continuation ?? undefined };
+            })
         : Promise.resolve({ items: [], next: undefined }),
     [query],
   );
-
   useEffect(() => {
-    if (initialQuery === undefined) return;
-    setText(initialQuery);
-    setQuery(initialQuery);
+    if (!query) setChannels([]);
+  }, [query]);
+
+  // Sorted on the client, as the web's search page does.
+  const [sort, setSort] = useState<SearchSort>("relevance");
+  const sortedVideos = useMemo(
+    () => sortVideos(feed.videos, sort),
+    [feed.videos, sort],
+  );
+
+  // Suggestions follow what's typed (or dictated), a beat after it settles.
+  const [suggestFor, setSuggestFor] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSuggestFor(text.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [text]);
+  const suggestions = trpc.search.suggestions.useQuery(
+    { q: suggestFor },
+    { enabled: suggestFor.length > 1 && suggestFor !== query },
+  );
+
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    loadRecentSearches().then(setRecent);
+  }, []);
+
+  const search = (q: string) => {
+    const trimmed = q.trim();
+    setText(trimmed);
+    setQuery(trimmed);
+    setSort("relevance");
+    if (trimmed) setRecent((r) => rememberSearch(r, trimmed));
+  };
+
+  const searchRef = useRef(search);
+  searchRef.current = search;
+  // A new voice search from the system (see Shell) runs as if typed.
+  useEffect(() => {
+    if (initialQuery !== undefined) searchRef.current(initialQuery);
   }, [initialQuery]);
 
-  const submit = () => setQuery(text.trim());
+  const submit = () => search(text);
+
+  // Under the bar: suggestions while typing, else recent searches when idle.
+  const chipWords =
+    text.trim() && text.trim() !== query
+      ? (suggestions.data?.suggestions ?? []).slice(0, 8)
+      : !query
+        ? recent
+        : [];
+  const chipsLabel = text.trim() && text.trim() !== query ? null : "Recent";
 
   return (
     <View style={styles.container}>
@@ -139,10 +203,56 @@ export function SearchScreen({
           style={styles.searchButton}
         />
       </View>
+      {chipWords.length > 0 ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chips}
+        >
+          {chipsLabel ? (
+            <Text style={styles.chipsLabel}>{chipsLabel}</Text>
+          ) : null}
+          {chipWords.map((word) => (
+            <FocusButton
+              key={word}
+              label={word}
+              onPress={() => search(word)}
+              style={styles.chip}
+            />
+          ))}
+        </ScrollView>
+      ) : null}
       <View style={styles.results}>
         <CarouselFeed
           feed={feed}
-          onSelect={(videoId) => nav.openVideo(videoId)}
+          videos={sortedVideos}
+          onSelect={(videoId, videos) =>
+            nav.openVideo(videoId, { context: { source: "feed", videos } })
+          }
+          header={
+            query ? (
+              <View style={styles.resultsHeader}>
+                <View style={styles.chipsRow}>
+                  {SORTS.map(({ key, label }) => (
+                    <FocusButton
+                      key={key}
+                      label={label}
+                      variant={sort === key ? "primary" : "ghost"}
+                      onPress={() => setSort(key)}
+                      style={styles.chip}
+                    />
+                  ))}
+                </View>
+                {channels.length > 0 ? (
+                  <ChannelTiles
+                    title="Channels"
+                    channels={channels}
+                    onSelect={nav.openChannel}
+                  />
+                ) : null}
+              </View>
+            ) : undefined
+          }
           emptyText={
             voiceError ??
             (query ? "No results." : "Press Speak, or type and press Search.")
@@ -153,8 +263,31 @@ export function SearchScreen({
   );
 }
 
+type SearchSort = "relevance" | "newest" | "views";
+
+const SORTS: { key: SearchSort; label: string }[] = [
+  { key: "relevance", label: "Relevance" },
+  { key: "newest", label: "Newest" },
+  { key: "views", label: "Most viewed" },
+];
+
+/** The web search page's client-side sorts (app/search/page.tsx). */
+function sortVideos(videos: UnifiedVideo[], sort: SearchSort): UnifiedVideo[] {
+  if (sort === "relevance") return videos;
+  const by =
+    sort === "newest"
+      ? (v: UnifiedVideo) => v.publishedAt ?? 0
+      : (v: UnifiedVideo) => v.viewCount ?? 0;
+  return [...videos].sort((a, b) => by(b) - by(a));
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, gap: spacing.lg },
+  chips: { gap: spacing.sm, alignItems: "center", paddingVertical: 4 },
+  chipsRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
+  chip: { minHeight: 40, paddingHorizontal: spacing.md },
+  chipsLabel: { color: colors.mutedForeground, fontSize: fontSize.sm },
+  resultsHeader: { gap: spacing.lg },
   searchSurface: {
     flexDirection: "row",
     alignItems: "center",

@@ -45,6 +45,50 @@ describe("settingsRouter", () => {
     sqlite.close();
   });
 
+  it("leaves settings the patch omits untouched", async () => {
+    const { db, sqlite } = createTestDb();
+    const ts = Math.floor(Date.now() / 1000);
+    const user = db
+      .insert(users)
+      .values({
+        email: "partial@example.com",
+        passwordHash: "x",
+        createdAt: ts,
+        updatedAt: ts,
+      })
+      .returning({ id: users.id })
+      .get();
+
+    const caller = appRouter.createCaller({ db, userId: user.id });
+    await caller.settings.update({
+      theme: "dark",
+      visualTheme: "terminal",
+      enableSwipeGestures: false,
+      swipeGestures: { left: "none", right: "saved" },
+      bottomNav: ["home", "saved"],
+      homeBlocks: [{ id: "only-queue", type: "queue" }],
+      sectionPrefs: {
+        history: { hideCompleted: true, rowSize: "sm" },
+        queue: { hideCompleted: false, rowSize: "md" },
+        saved: { hideCompleted: false, rowSize: "md" },
+      },
+    });
+
+    await caller.settings.update({ autoplayNext: false });
+
+    const fetched = await caller.settings.get();
+    expect(fetched.autoplayNext).toBe(false);
+    expect(fetched.theme).toBe("dark");
+    expect(fetched.visualTheme).toBe("terminal");
+    expect(fetched.enableSwipeGestures).toBe(false);
+    expect(fetched.swipeGestures).toEqual({ left: "none", right: "saved" });
+    expect(fetched.bottomNav).toEqual(["home", "saved"]);
+    expect(fetched.homeBlocks.map((b) => b.id)).toEqual(["only-queue"]);
+    expect(fetched.sectionPrefs.history.hideCompleted).toBe(true);
+
+    sqlite.close();
+  });
+
   it("reports the server-configured upstream, not a per-account one", async () => {
     process.env = {
       ...env,

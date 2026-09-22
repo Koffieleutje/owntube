@@ -45,6 +45,17 @@ export const authRouter = router({
   session: publicProcedure.query(({ ctx }) => ({
     authed: Boolean(ctx.userId),
   })),
+  /** Who is signed in — the TV labels its profiles with this. */
+  me: protectedProcedure.query(({ ctx }) => {
+    const user = ctx.db
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(eq(users.id, ctx.userId))
+      .limit(1)
+      .all()[0];
+    if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
+    return user;
+  }),
   register: publicProcedure
     .input(registerInputSchema)
     .mutation(async ({ ctx, input }) => {

@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { logger } from "@/lib/logger";
-import { watchHistory } from "@/server/db/schema";
+import { interactions, watchHistory } from "@/server/db/schema";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
 import { getPersonalizedFeedVideos } from "@/server/recommendation/engine";
+import { settlePoolBuild } from "@/server/recommendation/pool-invalidation";
 import { trendingTailRelevance } from "@/server/recommendation/scoring";
 import {
   collectUserSignals,
@@ -25,6 +26,7 @@ import {
   type TrendingTailCacheEntry,
   trendingTailPoolCache,
   trendingTailPoolInFlight,
+  trendingTailPoolInvalidation,
 } from "@/server/recommendation/trending-tail-cache";
 import { fetchTrendingVideos } from "@/server/services/proxy";
 import {
@@ -40,6 +42,7 @@ import {
 import {
   getUserSettings,
   normalizeTrendingRegionStored,
+  withoutBlockedChannels,
 } from "@/server/settings/profile";
 import { publicProcedure, router } from "@/server/trpc/init";
 
@@ -189,6 +192,7 @@ async function buildTrendingTailPool(
     const entry = await inFlight;
     if (entry.expiresAt > Date.now()) return entry.pool;
   }
+  const stillCurrent = trendingTailPoolInvalidation.snapshot(userId);
   const task = (async (): Promise<TrendingTailCacheEntry> => {
     const pool = await buildTrendingTailPoolUncached(
       db,
@@ -201,15 +205,13 @@ async function buildTrendingTailPool(
       pool,
     };
   })();
-  trendingTailPoolInFlight.set(cacheKey, task);
-  const settled = task
-    .then((entry) => {
-      trendingTailPoolCache.set(cacheKey, entry);
-      return entry;
-    })
-    .finally(() => {
-      trendingTailPoolInFlight.delete(cacheKey);
-    });
+  const settled = settlePoolBuild(
+    task,
+    cacheKey,
+    trendingTailPoolCache,
+    trendingTailPoolInFlight,
+    stillCurrent,
+  );
   // Stale-while-revalidate, same as the recommendation pool: an expired tail is
   // served instantly and the refresh lands in the background.
   if (cached) {
@@ -309,10 +311,55 @@ function parseHomeStreamRow(
   }
 }
 
+const homeStreamRefreshInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Applies the user's *current* exclusions to a materialized stream. The row
+ * is never invalidated server-side (likes and watches clear the in-memory
+ * pools constantly; recomputing on each would block most loads again), so a
+ * channel blocked or a video disliked / marked "not interested" after the
+ * row was written is dropped here instead. Cheap: one settings read plus one
+ * indexed interactions lookup over the stream's ids.
+ */
+function withCurrentExclusions(
+  db: HomeFeedDb,
+  userId: number,
+  settings: ReturnType<typeof getUserSettings>,
+  stream: UnifiedVideo[],
+): UnifiedVideo[] {
+  const allowed = withoutBlockedChannels(stream, settings);
+  if (allowed.length === 0) return allowed;
+  const rejected = new Set(
+    db
+      .select({ videoId: interactions.videoId })
+      .from(interactions)
+      .where(
+        and(
+          eq(interactions.userId, userId),
+          inArray(interactions.type, ["ignore", "dislike"]),
+          inArray(
+            interactions.videoId,
+            allowed.map((v) => v.videoId),
+          ),
+        ),
+      )
+      .all()
+      .map((r) => r.videoId),
+  );
+  return rejected.size === 0
+    ? allowed
+    : allowed.filter((v) => !rejected.has(v.videoId));
+}
+
 /**
  * Read-through cache for the merged home stream (per user, materialized in
  * SQLite). `cacheOnly` (the SSR prefetch) never computes — a cold miss returns
  * an empty stream so the client fetches it and shows its skeleton only then.
+ *
+ * An expired row still answers immediately while a recompute refreshes it in
+ * the background: the row lives 10 min but the cache-warmer only rebuilds it
+ * every 20, so blocking on the (upstream-heavy) recompute made roughly every
+ * other home load wait. Only a user with no row at all waits.
  */
 async function getHomeStream(
   db: HomeFeedDb,
@@ -325,12 +372,37 @@ async function getHomeStream(
     opts.region,
     settings.personalizedFeedOnly,
   );
-  const fresh = parseHomeStreamRow(readFreshCacheRow(db, key));
+  const cachedStream = (row: { payloadJson: string } | null | undefined) => {
+    const stream = parseHomeStreamRow(row);
+    return stream && withCurrentExclusions(db, userId, settings, stream);
+  };
+  const fresh = cachedStream(readFreshCacheRow(db, key));
   if (fresh) return { stream: fresh, coldStart: false };
+  const stale = cachedStream(readLatestCacheRow(db, key));
   if (opts.cacheOnly) {
-    const stale = parseHomeStreamRow(readLatestCacheRow(db, key));
     if (stale) return { stream: stale, coldStart: false };
     return { stream: [], coldStart: true };
+  }
+  if (stale) {
+    if (!homeStreamRefreshInFlight.has(key)) {
+      const refresh = computeHomeStream(db, userId, opts)
+        .then(({ stream }) => {
+          if (stream.length > 0) {
+            writeCache(db, key, "invidious", stream, "home");
+          }
+        })
+        .catch((error: unknown) => {
+          logger.warn("feed.home_stream_refresh_failed", {
+            userId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          homeStreamRefreshInFlight.delete(key);
+        });
+      homeStreamRefreshInFlight.set(key, refresh);
+    }
+    return { stream: stale, coldStart: false };
   }
   const { stream, coldStart } = await computeHomeStream(db, userId, opts);
   if (stream.length > 0) writeCache(db, key, "invidious", stream, "home");

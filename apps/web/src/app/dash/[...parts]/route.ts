@@ -273,11 +273,17 @@ async function handleGET(
       ? langRaw
       : null;
 
+  // Optional quality cap (TV quality menu / defaultPlaybackQuality): drops
+  // video rungs taller than this.
+  const maxHeightRaw = Number.parseInt(params.get("maxHeight") ?? "", 10);
+  const maxHeight =
+    Number.isFinite(maxHeightRaw) && maxHeightRaw >= 144 ? maxHeightRaw : null;
+
   // Fire and forget: the manifest response shouldn't wait on history.
   void recordPlay(request, videoId);
 
   try {
-    const body = await generateMpd(videoId, family, audioLang);
+    const body = await generateMpd(videoId, family, audioLang, maxHeight);
     return new Response(body, {
       headers: {
         "content-type": MPD_CONTENT_TYPE,

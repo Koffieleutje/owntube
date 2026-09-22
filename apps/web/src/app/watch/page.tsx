@@ -60,6 +60,7 @@ import { videoDetailInputSchema } from "@/server/services/proxy.types";
 import {
   getUserSettings,
   normalizeTrendingRegionStored,
+  withoutBlockedChannels,
 } from "@/server/settings/profile";
 import { createTRPCContext } from "@/server/trpc/context";
 import { appRouter } from "@/server/trpc/root";
@@ -200,7 +201,10 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
   ]) {
     if (v.videoId !== videoId) relatedMerged.set(v.videoId, v);
   }
-  let sidebarVideos = [...relatedMerged.values()].slice(0, 20);
+  let sidebarVideos = withoutBlockedChannels(
+    [...relatedMerged.values()],
+    userSettings,
+  ).slice(0, 20);
 
   let sidebarFromFeedFallback = false;
   if (sidebarVideos.length === 0) {

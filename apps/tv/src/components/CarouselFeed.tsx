@@ -9,6 +9,8 @@ import {
   Text,
   View,
 } from "react-native";
+import type { CardMenuExtras } from "@/components/CardMenu";
+import { FocusButton } from "@/components/FocusButton";
 import { VideoRow } from "@/components/VideoRow";
 import type { InfiniteFeed } from "@/lib/use-infinite-feed";
 import { colors, fontSize, spacing } from "@/theme";
@@ -18,11 +20,16 @@ const ROW_SIZE = 12;
 
 type Props = {
   feed: InfiniteFeed;
-  onSelect: (videoId: string) => void;
+  /** Gets the whole list too, so the player can play on through it. */
+  onSelect: (videoId: string, videos: UnifiedVideo[]) => void;
   header?: ReactNode;
   emptyText?: string;
   videos?: UnifiedVideo[];
   preferFirstRowFocus?: boolean;
+  /** Screen-specific context-menu actions (reorder, remove…). */
+  menuExtras?: CardMenuExtras;
+  /** For cards that aren't videos (a channel's playlists). */
+  disableMenu?: boolean;
 };
 
 /**
@@ -37,7 +44,15 @@ export function CarouselFeed({
   emptyText,
   videos,
   preferFirstRowFocus = true,
+  menuExtras,
+  disableMenu,
 }: Props) {
+  const menuExtrasRef = useRef(menuExtras);
+  menuExtrasRef.current = menuExtras;
+  const extras = useCallback<CardMenuExtras>(
+    (video) => menuExtrasRef.current?.(video) ?? [],
+    [],
+  );
   const listVideos = videos ?? feed.videos;
   const previousRows = useRef<UnifiedVideo[][]>([]);
   const rows = useMemo(() => {
@@ -54,8 +69,10 @@ export function CarouselFeed({
   // from re-rendering on every screen render.
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const listVideosRef = useRef(listVideos);
+  listVideosRef.current = listVideos;
   const handleSelect = useCallback(
-    (videoId: string) => onSelectRef.current(videoId),
+    (videoId: string) => onSelectRef.current(videoId, listVideosRef.current),
     [],
   );
   const renderItem = useCallback<ListRenderItem<UnifiedVideo[]>>(
@@ -64,9 +81,11 @@ export function CarouselFeed({
         videos={item}
         onSelect={handleSelect}
         preferFirstFocus={preferFirstRowFocus && index === 0}
+        menuExtras={extras}
+        disableMenu={disableMenu}
       />
     ),
-    [handleSelect, preferFirstRowFocus],
+    [handleSelect, preferFirstRowFocus, extras, disableMenu],
   );
 
   if (feed.status === "loading") {
@@ -88,6 +107,12 @@ export function CarouselFeed({
         {header}
         <Text style={styles.errorTitle}>Something went wrong</Text>
         <Text style={styles.muted}>{feed.message}</Text>
+        <FocusButton
+          label="Retry"
+          variant="primary"
+          loading={feed.retrying}
+          onPress={feed.retry}
+        />
       </View>
     );
   }

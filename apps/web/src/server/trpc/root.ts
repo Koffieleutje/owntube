@@ -17,6 +17,7 @@ import { subscriptionsRouter } from "@/server/trpc/routers/subscriptions";
 import { takeoutRouter } from "@/server/trpc/routers/takeout";
 import { tasteRouter } from "@/server/trpc/routers/taste";
 import { trendingRouter } from "@/server/trpc/routers/trending";
+import { tvRemoteRouter } from "@/server/trpc/routers/tv-remote";
 import { videoRouter } from "@/server/trpc/routers/video";
 
 export const appRouter = router({
@@ -29,6 +30,7 @@ export const appRouter = router({
   playlists: playlistsRouter,
   queue: queueRouter,
   remote: remoteRouter,
+  tvRemote: tvRemoteRouter,
   search: searchRouter,
   shorts: shortsRouter,
   settings: settingsRouter,

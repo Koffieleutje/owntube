@@ -1103,8 +1103,9 @@ export const subscriptionsRouter = router({
       );
 
       if (channelIds.length === 0) {
+        // Same element type as the full branch, so the output isn't a union.
         return {
-          videos: [] as UnifiedVideo[],
+          videos: [] as (UnifiedVideo & { watched: boolean })[],
           nextCursor: null as string | null,
         };
       }

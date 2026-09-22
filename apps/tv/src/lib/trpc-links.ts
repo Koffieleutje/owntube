@@ -4,7 +4,7 @@ import { observable } from "@trpc/server/observable";
 import type { AppRouter } from "@web/server/trpc/root";
 import superjson from "superjson";
 import { expireSession, getToken } from "@/lib/auth-token";
-import { TRPC_URL } from "@/lib/config";
+import { trpcUrl } from "@/lib/config";
 
 /** Sends the user back to sign-in when the server rejects the stored token. */
 const sessionExpiryLink: TRPCLink<AppRouter> =
@@ -21,12 +21,21 @@ const sessionExpiryLink: TRPCLink<AppRouter> =
       }),
     );
 
+/**
+ * tRPC wants the URL as a string when the link is built, but the server can
+ * change at runtime (Settings → Server). So the link targets this placeholder
+ * and `fetch` swaps in the current server on every request.
+ */
+const PLACEHOLDER = "http://owntube.invalid/api/trpc";
+
 /** Shared by the vanilla and React Query clients so both behave the same. */
 export function createLinks(): TRPCLink<AppRouter>[] {
   return [
     sessionExpiryLink,
     httpBatchLink({
-      url: TRPC_URL,
+      url: PLACEHOLDER,
+      fetch: (input, init) =>
+        fetch(String(input).replace(PLACEHOLDER, trpcUrl()), init),
       transformer: superjson,
       // Read on every request so a fresh login (or logout) takes effect without
       // rebuilding the client. The server falls back to this Bearer token when

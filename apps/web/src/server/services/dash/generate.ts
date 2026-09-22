@@ -94,6 +94,42 @@ export function pickDashVideoFormats(
 }
 
 /**
+ * A rendition's quality rung as YouTube labels it: the 16:9 height its long
+ * side implies, or its short side if taller. So cinemascope 1920x804 is
+ * 1080p (not 804p) and a vertical 1080x1920 short is 1080p too.
+ */
+function qualityHeight(f: AdaptiveFormat): number | null {
+  const [w, h] = (f.size ?? "").split("x").map((n) => Number.parseInt(n, 10));
+  if (!w || !h) return null;
+  return Math.max(Math.min(w, h), Math.round((Math.max(w, h) * 9) / 16));
+}
+
+/**
+ * Drops rungs above `maxHeight` (the TV's quality choice and its
+ * defaultPlaybackQuality cap). If every rung is above it, keeps the lowest
+ * one rather than serving nothing; rungs of unknown size always stay.
+ */
+export function capDashVideoHeight(
+  videos: AdaptiveFormat[],
+  maxHeight: number | null | undefined,
+): AdaptiveFormat[] {
+  if (!maxHeight) return videos;
+  const within = videos.filter((f) => {
+    const height = qualityHeight(f);
+    return height === null || height <= maxHeight;
+  });
+  if (within.length > 0) return within;
+  const lowest = videos.reduce<AdaptiveFormat | undefined>((best, f) => {
+    const height = qualityHeight(f) ?? Number.POSITIVE_INFINITY;
+    const bestHeight = best
+      ? (qualityHeight(best) ?? Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY;
+    return height < bestHeight ? f : best;
+  }, undefined);
+  return lowest ? [lowest] : videos;
+}
+
+/**
  * AAC tracks, one per language, original first/default (see pickAudioTracks —
  * NOT dedupeByItag: every language shares itag 140, so an itag dedupe keeps
  * only the first row, which on auto-dubbed videos is the dub).
@@ -274,6 +310,7 @@ export async function generateMpd(
   videoId: string,
   family: DashVideoFamily,
   audioLang?: string | null,
+  maxHeight?: number | null,
 ): Promise<string> {
   const af = await fetchAdaptiveFormats(videoId);
   let videos = pickDashVideoFormats(af, family);
@@ -282,6 +319,7 @@ export async function generateMpd(
     // playback still works; the ladder just stays ≤1080p.
     videos = pickDashVideoFormats(af, "avc");
   }
+  videos = capDashVideoHeight(videos, maxHeight);
   let audioTracks = pickDashAudioTracks(af);
   if (audioLang && audioTracks.length > 1) {
     const want = audioLang.toLowerCase();

@@ -16,6 +16,9 @@ export const ALL_SECTIONS: Section[] = [
   "queue",
   "subscriptions",
   "recommended",
+  "trending",
+  "shorts",
+  "saved",
   "playlists",
   "history",
   "settings",
@@ -27,6 +30,40 @@ export type SidebarPrefs = {
 };
 
 export const DEFAULT_PREFS: SidebarPrefs = { order: ALL_SECTIONS };
+
+/**
+ * Every section the stored prefs have been offered. A section added since
+ * (Saved and Trending, for one) is shown once, before Settings, rather than
+ * being taken for one the user hid; after that, hiding it sticks.
+ */
+function withNewSections(order: Section[], known: unknown): Section[] {
+  const knownSet = new Set(
+    Array.isArray(known) ? known.filter((k) => typeof k === "string") : [],
+  );
+  // Prefs saved before `known` existed had seen exactly these.
+  if (!Array.isArray(known)) {
+    for (const s of LEGACY_SECTIONS) knownSet.add(s);
+  }
+  const added = ALL_SECTIONS.filter(
+    (s) => !knownSet.has(s) && !order.includes(s),
+  );
+  if (added.length === 0) return order;
+  const settings = order.indexOf("settings");
+  const at = settings >= 0 ? settings : order.length;
+  return [...order.slice(0, at), ...added, ...order.slice(at)];
+}
+
+/** The sections that existed before `known` was stored. */
+const LEGACY_SECTIONS: Section[] = [
+  "home",
+  "search",
+  "queue",
+  "subscriptions",
+  "recommended",
+  "playlists",
+  "history",
+  "settings",
+];
 
 /** Drops unknown sections so a removed feature can't strand the sidebar. */
 function sanitize(order: unknown): SidebarPrefs {
@@ -49,7 +86,9 @@ export async function loadSidebarPrefs(): Promise<SidebarPrefs> {
   try {
     const raw = await SecureStore.getItemAsync(KEY);
     if (!raw) return DEFAULT_PREFS;
-    return sanitize(JSON.parse(raw)?.order);
+    const stored = JSON.parse(raw);
+    const prefs = sanitize(stored?.order);
+    return { order: withNewSections(prefs.order, stored?.known) };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -57,7 +96,10 @@ export async function loadSidebarPrefs(): Promise<SidebarPrefs> {
 
 export async function saveSidebarPrefs(prefs: SidebarPrefs): Promise<void> {
   try {
-    await SecureStore.setItemAsync(KEY, JSON.stringify(sanitize(prefs.order)));
+    await SecureStore.setItemAsync(
+      KEY,
+      JSON.stringify({ ...sanitize(prefs.order), known: ALL_SECTIONS }),
+    );
   } catch {
     // Prefs are a convenience; a storage failure shouldn't surface as an error.
   }

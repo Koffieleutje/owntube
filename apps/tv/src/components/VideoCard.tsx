@@ -33,6 +33,8 @@ function cardThumbnailUrl(url: string): string {
 type Props = {
   video: UnifiedVideo;
   onPress: (videoId: string) => void;
+  /** Long-press OK: the card's context menu. */
+  onLongPress?: (video: UnifiedVideo) => void;
   hasTVPreferredFocus?: boolean;
   /** Position in the parent row, passed back through `onFocusChange`. */
   index?: number;
@@ -48,6 +50,7 @@ type Props = {
 export const VideoCard = memo(function VideoCard({
   video,
   onPress,
+  onLongPress,
   hasTVPreferredFocus,
   index = 0,
   onFocusChange,
@@ -90,19 +93,28 @@ export const VideoCard = memo(function VideoCard({
         onFocusChange?.(false, index);
       }}
       onPress={() => onPress(video.videoId)}
+      onLongPress={onLongPress ? () => onLongPress(video) : undefined}
       style={[styles.card, focused && styles.cardFocused]}
     >
       <View style={styles.thumbWrap}>
         {video.thumbnailUrl ? (
           <Image
             source={{ uri: cardThumbnailUrl(video.thumbnailUrl) }}
-            style={styles.thumb}
+            // Finished videos recede, like the web's watched cards; focus
+            // brings one back to full strength.
+            style={[
+              styles.thumb,
+              watched?.completed && !focused && styles.thumbWatched,
+            ]}
             resizeMode="cover"
             // Decode at view size: Android otherwise keeps the full upstream
             // bitmap (up to 1280x720) per card, which churns memory and GC.
             resizeMethod="resize"
           />
         ) : (
+          // No upstream thumbnail: a placeholder, never a constructed
+          // i.ytimg.com URL — that would fetch from Google straight from the
+          // TV box instead of going through the instance's image proxy.
           <View style={[styles.thumb, styles.thumbPlaceholder]} />
         )}
         {focused ? (
@@ -226,7 +238,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.muted,
   },
   thumb: { width: "100%", height: "100%" },
-  thumbPlaceholder: { backgroundColor: colors.muted },
+  thumbWatched: { opacity: 0.45 },
+  thumbPlaceholder: { backgroundColor: colors.surface },
   // Sits on the thumbnail's bottom edge, like the web app's watched bar.
   progressTrack: {
     position: "absolute",

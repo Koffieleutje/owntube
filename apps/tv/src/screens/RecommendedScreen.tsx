@@ -1,7 +1,9 @@
-import { StyleSheet, Text } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
+import { VideoRow } from "@/components/VideoRow";
 import type { Nav } from "@/lib/navigation";
 import { trpcClient } from "@/lib/trpc";
+import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
 import { colors, fontSize } from "@/theme";
 
@@ -28,17 +30,38 @@ export function RecommendedScreen({ nav }: { nav: Nav }) {
     "feed.home:recommended",
   );
 
+  // The web's Shorts shelf sits on this page too; OK opens the Shorts player
+  // at that short.
+  const shorts = trpc.shorts.feed.useQuery({ limit: 12, purpose: "shelf" });
+  const shortsVideos = shorts.data?.videos ?? [];
+
   return (
     <CarouselFeed
       feed={feed}
-      onSelect={(videoId) => nav.openVideo(videoId)}
-      header={<Text style={styles.heading}>Recommended</Text>}
+      onSelect={(videoId, videos) =>
+        nav.openVideo(videoId, { context: { source: "feed", videos } })
+      }
+      header={
+        <View style={styles.header}>
+          <Text style={styles.heading}>Recommended</Text>
+          {shortsVideos.length > 0 ? (
+            <VideoRow
+              title="Shorts"
+              videos={shortsVideos}
+              onSelect={(videoId) =>
+                nav.openShorts(shortsVideos.find((v) => v.videoId === videoId))
+              }
+            />
+          ) : null}
+        </View>
+      }
       emptyText="Nothing recommended yet — watch a few videos first."
     />
   );
 }
 
 const styles = StyleSheet.create({
+  header: { gap: 20 },
   heading: {
     color: colors.foreground,
     fontSize: fontSize.xxl,

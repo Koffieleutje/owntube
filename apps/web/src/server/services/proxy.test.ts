@@ -4,11 +4,13 @@ import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
 import {
   fetchChannelPage,
   fetchRelatedVideos,
+  fetchShortsFeed,
   fetchTrendingVideos,
   fetchVideoComments,
   fetchVideoDetail,
   searchVideos,
 } from "@/server/services/proxy";
+import { shortsFeedCacheKey } from "@/server/services/proxy/cache";
 import { resetRateLimiterForTests } from "@/server/services/rate-limiter";
 import { createTestDb } from "@/test/db";
 
@@ -642,6 +644,71 @@ describe("fetchVideoComments", () => {
       'href="https://www.youtube.com/watch?v=cHocYnA_JVY&amp;t=102"',
     );
     expect(r.comments[0]?.text).toContain("1:42");
+    sqlite.close();
+  });
+});
+
+describe("fetchShortsFeed", () => {
+  beforeEach(() => {
+    resetRateLimiterForTests();
+    process.env.INVIDIOUS_BASE_URL = "https://inv.test";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.INVIDIOUS_BASE_URL;
+  });
+
+  function seedShelf(
+    db: ReturnType<typeof createTestDb>["db"],
+    input: { region: string; limit: number; purpose: "shelf" },
+    expiresIn: number,
+  ) {
+    const now = Math.floor(Date.now() / 1000);
+    db.insert(videoCache)
+      .values({
+        cacheKey: shortsFeedCacheKey(input),
+        source: "invidious",
+        kind: "shorts",
+        payloadJson: JSON.stringify({
+          videos: [{ videoId: "abcdefghijk", title: "Cached short" }],
+          continuation: null,
+          sourceUsed: "invidious",
+        }),
+        fetchedAt: now - 60,
+        expiresAt: now + expiresIn,
+      })
+      .run();
+  }
+
+  it("answers a thin fresh shelf from cache while it refetches", async () => {
+    const { db, sqlite } = createTestDb();
+    const input = { region: "FR", limit: 36, purpose: "shelf" as const };
+    seedShelf(db, input, 600);
+
+    const result = await fetchShortsFeed(db, input);
+
+    expect(result.sourceUsed).toBe("cache");
+    expect(result.videos).toHaveLength(1);
+    // The row is thin, so a refetch is under way (it never settles here).
+    expect(fetch).toHaveBeenCalled();
+    sqlite.close();
+  });
+
+  it("answers an expired shelf from cache while it refetches", async () => {
+    const { db, sqlite } = createTestDb();
+    const input = { region: "DE", limit: 36, purpose: "shelf" as const };
+    seedShelf(db, input, -60);
+
+    const result = await fetchShortsFeed(db, input);
+
+    expect(result.stale).toBe(true);
+    expect(result.warning).toBeUndefined();
+    expect(result.videos).toHaveLength(1);
     sqlite.close();
   });
 });

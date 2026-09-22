@@ -1,4 +1,7 @@
-import type { SponsorBlockSegment } from "@web/lib/sponsorblock";
+import type {
+  SponsorBlockCategory,
+  SponsorBlockSegment,
+} from "@web/lib/sponsorblock";
 import {
   chapterIndexAt,
   parseChaptersFromDescription,
@@ -12,8 +15,8 @@ import type {
   VideoDetail,
   VideoStoryboard,
 } from "@web/server/services/proxy.types";
-import { useKeepAwake } from "expo-keep-awake";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { useVideoPlayer, type VideoPlayer, VideoView } from "expo-video";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,35 +30,93 @@ import {
   useTVEventHandler,
   View,
 } from "react-native";
+import { DetailsPanel } from "@/components/DetailsPanel";
 import { FocusButton } from "@/components/FocusButton";
 import { IconButton } from "@/components/IconButton";
+import {
+  type MenuItem,
+  type MenuPage,
+  MenuPanel,
+} from "@/components/MenuPanel";
+import { UpNext } from "@/components/UpNext";
 import { VideoRow } from "@/components/VideoRow";
 import {
   audioLanguageOptions,
   urlLooksLikeOriginalAudio,
 } from "@/lib/audio-languages";
 import { getToken } from "@/lib/auth-token";
-import { OWNTUBE_BASE_URL } from "@/lib/config";
+import { baseUrl } from "@/lib/config";
+import { errorMessage } from "@/lib/error-message";
 import { channelInitial, formatTime, formatViews } from "@/lib/format";
+import {
+  contextNeighbours,
+  type OpenVideoOptions,
+  type PlayContext,
+} from "@/lib/navigation";
+import {
+  formatRate,
+  loadPlayerPrefs,
+  PLAYBACK_RATES,
+  playerPrefs,
+  savePlayerPrefs,
+} from "@/lib/player-prefs";
+import { usePlaylistMenu } from "@/lib/playlist-menu";
 import { queryClient } from "@/lib/query-client";
+import { useRecordWatchProgress } from "@/lib/record-watch-progress";
+import {
+  SPONSORBLOCK_COLORS,
+  SPONSORBLOCK_LABELS,
+} from "@/lib/sponsorblock-labels";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
-import { errorMessage } from "@/lib/use-query";
 import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
+import { removeWatchNext, upsertWatchNext } from "../../modules/watch-next";
 
-// Skip-type categories auto-skipped on TV (filler excluded — too aggressive).
-const SKIP_CATEGORIES = [
+// Used only when settings fail to load; mirrors the web's
+// DEFAULT_SPONSORBLOCK_CATEGORIES (a runtime import would bundle zod).
+const DEFAULT_SKIP_CATEGORIES: SponsorBlockCategory[] = [
   "sponsor",
   "selfpromo",
+  "interaction",
   "intro",
   "outro",
-  "interaction",
   "preview",
-] as const;
+  "hook",
+];
+
+/**
+ * Why a video won't play, for a message that says what to do: wait for an
+ * upcoming stream, sign in to YouTube elsewhere for an age gate, or give up
+ * on a removed video. The server maps these onto tRPC codes (video.detail).
+ */
+type PlaybackProblem =
+  | { kind: "upcoming"; startsAt?: number }
+  | { kind: "age" }
+  | { kind: "unavailable" }
+  | { kind: "other" };
+
+function classifyError(err: unknown): PlaybackProblem {
+  const data = (
+    err as { data?: { code?: string; premiereTimestamp?: number | null } }
+  )?.data;
+  switch (data?.code) {
+    case "PRECONDITION_FAILED":
+      return {
+        kind: "upcoming",
+        startsAt: data.premiereTimestamp ?? undefined,
+      };
+    case "UNPROCESSABLE_CONTENT":
+      return { kind: "age" };
+    case "NOT_FOUND":
+      return { kind: "unavailable" };
+    default:
+      return { kind: "other" };
+  }
+}
 
 type LoadState =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error"; message: string; problem: PlaybackProblem }
   | {
       status: "ready";
       detail: VideoDetail;
@@ -73,6 +134,20 @@ type PlaybackOption = {
   | { kind: "auto" | "muxed"; audioUrl?: never }
   | { kind: "split"; audioUrl: string }
 );
+
+/** expo-video 2.0 doesn't export the track type by name. */
+type SubtitleTrack = NonNullable<VideoPlayer["subtitleTrack"]>;
+
+type Toast = {
+  text: string;
+  /** Shown while the controls are hidden, when OK does something. */
+  hint?: string;
+  segment?: SponsorBlockSegment;
+  action?: "undo" | "skip";
+};
+
+/** How long a toast stays up; a SponsorBlock undo is offered for this long. */
+const TOAST_MS = 5000;
 
 /** Seconds moved per D-pad press, and per tick while a direction is held. */
 const SCRUB_STEP_SECONDS = 10;
@@ -103,15 +178,16 @@ function heightForQuality(quality: string | undefined): number {
 /**
  * Picks the stream to start with.
  *
- * HLS ("Auto") wins whenever the server offers it: it is a single media source
- * that adapts up to 1080p, so ExoPlayer keeps audio and video in sync itself.
+ * The adaptive "Auto" source (server DASH, listed first) wins whenever the
+ * server offers it: it is a single media source that adapts across renditions,
+ * so ExoPlayer keeps audio and video in sync itself.
  *
  * Everything else is a compromise. YouTube's muxed (video+audio) progressive
  * streams stop at 360p; every higher rendition is adaptive and arrives as a
  * separate video-only + audio pair, which this screen plays as two ExoPlayer
  * instances nudged into alignment. Two players drift, and correcting drift by
  * seeking the audio player is audible — sound drops out and returns out of
- * step. So without HLS we take the best muxed stream and accept 360p rather
+ * step. So without Auto we take the best muxed stream and accept 360p rather
  * than ship broken audio; split sources are a last resort when nothing muxed
  * exists.
  */
@@ -145,25 +221,52 @@ function pickDefaultOptionIndex(
  * offset, auto-skips SponsorBlock segments, records watch progress to history,
  * and shows a related-videos rail + channel link when paused.
  *
- * Stream selection prefers HLS auto quality, then muxed progressive MP4 streams.
- * Adaptive-only HD rows are played as synchronized video-only + audio sources.
+ * Stream selection prefers server DASH, then HLS, then muxed progressive MP4
+ * streams. Adaptive-only HD rows are played as synchronized video-only + audio
+ * sources.
+ *
+ * At the end it offers the next video of its play context (queue, playlist,
+ * feed), or the first related video when it has none; the remote's next and
+ * previous keys move through the same list.
  */
 export function WatchScreen({
   videoId,
   resumeSeconds,
+  context,
   onOpenVideo,
+  onReplaceVideo,
   onOpenChannel,
   onBack,
+  active = true,
 }: {
   videoId: string;
   resumeSeconds?: number;
+  context?: PlayContext;
   onOpenVideo: (videoId: string) => void;
+  /** Swaps this video for another in place (next/previous). */
+  onReplaceVideo: (videoId: string, options?: OpenVideoOptions) => void;
   onOpenChannel: (channelId: string) => void;
   onBack: () => void;
+  /**
+   * False while a channel page sits on top: the shell keeps the player
+   * mounted (so Back returns to the same spot without reloading) but it must
+   * be paused and ignore the remote.
+   */
+  active?: boolean;
 }) {
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
   // Android TV drops into its screensaver on ~5 minutes without input, and a
-  // playing video is not input. Hold the screen on for the whole screen.
-  useKeepAwake();
+  // playing video is not input. Hold the screen on while the player is shown.
+  useEffect(() => {
+    if (!active) return;
+    const tag = `watch:${videoId}`;
+    void activateKeepAwakeAsync(tag);
+    return () => {
+      void deactivateKeepAwake(tag);
+    };
+  }, [active, videoId]);
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [isPlaying, setIsPlaying] = useState(true);
@@ -172,10 +275,6 @@ export function WatchScreen({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [channelFocused, setChannelFocused] = useState(false);
-  // Subtitle tracks only appear once the stream is ready, so the CC button
-  // stays disabled until ExoPlayer reports some.
-  const [hasSubtitles, setHasSubtitles] = useState(false);
-  const [subtitlesOn, setSubtitlesOn] = useState(false);
   /**
    * Audio language for multi-audio (dubbed) videos, as an index into
    * audioLanguageOptions (0 = the original — also the server manifest's
@@ -183,8 +282,54 @@ export function WatchScreen({
    * the DASH manifest URL for one filtered to the picked language (`&lang=`).
    */
   const [audioLangIndex, setAudioLangIndex] = useState(0);
-  const [audioToast, setAudioToast] = useState<string | null>(null);
-  const audioToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * One transient message at a time, top right. SponsorBlock toasts carry an
+   * action that OK performs while the controls are hidden: undo a skip, or
+   * skip a segment when auto-skip is off.
+   */
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastRef = useRef<Toast | null>(null);
+  toastRef.current = toast;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((next: Toast, ms = TOAST_MS) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(next);
+    toastTimerRef.current = setTimeout(() => setToast(null), ms);
+  }, []);
+  /** The settings panel (gear button). */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menuOpen;
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  /**
+   * Quality ceiling picked in the panel, in pixels; null follows the
+   * defaultPlaybackQuality setting. Applied to the server DASH manifest.
+   */
+  const [qualityCap, setQualityCap] = useState<number | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(
+    () => playerPrefs().playbackRate,
+  );
+  const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>([]);
+  const [subtitleTrack, setSubtitleTrack] = useState<SubtitleTrack | null>(
+    null,
+  );
+  const [statsOn, setStatsOn] = useState(false);
+  const [segments, setSegments] = useState<SponsorBlockSegment[]>([]);
+  /** Segments the viewer chose to watch (undo), so they aren't skipped again. */
+  const keptSegmentsRef = useRef(new Set<string>());
+  /** Set when OK was spent on a SponsorBlock toast, so it doesn't also pause. */
+  const swallowPressRef = useRef(false);
+  /** Playback reached the end (and wasn't dismissed since). */
+  const [ended, setEnded] = useState(false);
+  /** Bumped by Retry on the error screen to load the video again. */
+  const [reloadKey, setReloadKey] = useState(0);
+  /** Description and comments beside the picture. */
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsOpenRef = useRef(false);
+  detailsOpenRef.current = detailsOpen;
+  const closeDetails = useCallback(() => setDetailsOpen(false), []);
+  /** Live: seconds behind the live edge, while the controls show. */
+  const [behindLive, setBehindLive] = useState(0);
   // Scrubbing: left/right move a pending position that only commits on release,
   // so holding the D-pad sweeps the bar instead of firing a seek per press.
   const [scrubSeconds, setScrubSeconds] = useState<number | null>(null);
@@ -231,10 +376,14 @@ export function WatchScreen({
     maxHeight: number;
     sponsorBlockEnabled: boolean;
     sponsorBlockAutoSkip: boolean;
+    sponsorBlockCategories: SponsorBlockCategory[];
+    autoplayNext: boolean;
   }>({
     maxHeight: DEFAULT_HEIGHT,
     sponsorBlockEnabled: true,
     sponsorBlockAutoSkip: true,
+    sponsorBlockCategories: DEFAULT_SKIP_CATEGORIES,
+    autoplayNext: true,
   });
   const scrubRef = useRef<number | null>(null);
   const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -312,11 +461,11 @@ export function WatchScreen({
   });
 
   // Playback detail (blocking) + SponsorBlock/related (best-effort, parallel).
+  // Re-runs on reloadKey too: Retry on the error screen.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey is a trigger
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    setHasSubtitles(false);
-    setSubtitlesOn(false);
     setAudioLangIndex(0);
     detailRef.current = null;
     currentTimeRef.current = 0;
@@ -335,6 +484,8 @@ export function WatchScreen({
           maxHeight: heightForQuality(st.defaultPlaybackQuality),
           sponsorBlockEnabled: st.sponsorBlockEnabled,
           sponsorBlockAutoSkip: st.sponsorBlockAutoSkip,
+          sponsorBlockCategories: st.sponsorBlockCategories,
+          autoplayNext: st.autoplayNext,
         };
       })
       // Defaults already sit in the ref; a settings failure shouldn't block play.
@@ -348,12 +499,16 @@ export function WatchScreen({
       .then((detail) => {
         if (cancelled) return;
         detailRef.current = detail;
+        setChannelId(detail.channelId ?? null);
         const playbackOptions = buildPlaybackOptions(detail);
         const maxHeight = settingsRef.current.maxHeight;
         if (playbackOptions.length === 0) {
           setState({
             status: "error",
             message: "This video has no playable stream available.",
+            problem: detail.isUpcoming
+              ? { kind: "upcoming" }
+              : { kind: "other" },
           });
           return;
         }
@@ -367,31 +522,39 @@ export function WatchScreen({
           ),
         });
 
-        if (!settingsRef.current.sponsorBlockEnabled) return;
+        const { sponsorBlockEnabled, sponsorBlockCategories: categories } =
+          settingsRef.current;
+        if (!sponsorBlockEnabled || categories.length === 0) return;
         queryClient
           .fetchQuery({
-            queryKey: [["sponsorblock", "segments"], { videoId }],
+            queryKey: [["sponsorblock", "segments"], { videoId, categories }],
             queryFn: () =>
               trpcClient.sponsorblock.segments.query({
                 videoId,
-                categories: [...SKIP_CATEGORIES],
+                categories,
                 durationSeconds: detail.durationSeconds,
               }),
           })
           .then((segments) => {
-            if (!cancelled) segmentsRef.current = segments;
+            if (cancelled) return;
+            segmentsRef.current = segments;
+            setSegments(segments);
           })
           .catch(() => {});
       })
       .catch((err: unknown) => {
         if (!cancelled)
-          setState({ status: "error", message: errorMessage(err) });
+          setState({
+            status: "error",
+            message: errorMessage(err),
+            problem: classifyError(err),
+          });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [videoId]);
+  }, [videoId, reloadKey]);
 
   useEffect(() => {
     Animated.timing(relatedHeight, {
@@ -435,8 +598,66 @@ export function WatchScreen({
     };
   }, [videoId]);
 
+  // Channel subscribe button: unknown state hides it (see ChannelScreen).
+  const [channelId, setChannelId] = useState<string | null>(null);
+  const subscription = trpc.subscriptions.status.useQuery(
+    { channelId: channelId ?? "" },
+    { enabled: channelId !== null },
+  );
+  const [subscribedOverride, setSubscribedOverride] = useState<boolean | null>(
+    null,
+  );
+  const subscribed =
+    subscribedOverride ?? subscription.data?.subscribed ?? null;
+  const [subscribePending, setSubscribePending] = useState(false);
+  const toggleSubscribed = () => {
+    if (!channelId || subscribed === null || subscribePending) return;
+    const next = !subscribed;
+    setSubscribePending(true);
+    setSubscribedOverride(next);
+    (next
+      ? trpcClient.subscriptions.add.mutate({ channelId })
+      : trpcClient.subscriptions.remove.mutate({ channelId })
+    )
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ["feed"] });
+        void queryClient.invalidateQueries({
+          queryKey: [["subscriptions"]],
+        });
+      })
+      .catch(() => setSubscribedOverride(!next))
+      .finally(() => setSubscribePending(false));
+  };
+
+  // Save to playlist: only fetched once the panel opens.
+  const playlistMenu = usePlaylistMenu({
+    video: { videoId, channelId },
+    enabled: menuOpen,
+    notify: (text) => showToast({ text }),
+    onCreated: closeMenu,
+  });
+
   const relatedQuery = trpc.video.related.useQuery({ videoId });
   const related: UnifiedVideo[] = relatedQuery.data?.videos ?? NO_VIDEOS;
+
+  // A context ends where it ends; only a video opened on its own runs on into
+  // its related videos.
+  const neighbours = contextNeighbours(context, videoId);
+  const nextVideo = context ? neighbours.next : related[0];
+  const previousVideo = neighbours.previous;
+  const playNext = useCallback(() => {
+    if (nextVideo) onReplaceVideo(nextVideo.videoId, { context });
+  }, [nextVideo, context, onReplaceVideo]);
+  const playNextRef = useRef(playNext);
+  playNextRef.current = playNext;
+  // Only an end with somewhere to go shows the card; without one the controls
+  // simply stay up, paused at the end.
+  const showUpNext = ended && nextVideo !== undefined;
+  const showUpNextRef = useRef(false);
+  showUpNextRef.current = showUpNext;
+
+  const playbackRateRef = useRef(playbackRate);
+  playbackRateRef.current = playbackRate;
 
   // Load the stream and resume from the saved offset.
   useEffect(() => {
@@ -445,31 +666,58 @@ export function WatchScreen({
     if (!selectedOption) return;
 
     selectedOptionRef.current = selectedOption;
+    // Shown on the system's now-playing card and to the Assistant.
+    const metadata = {
+      title: state.detail.title,
+      artist: state.detail.channelName,
+      artwork: state.detail.thumbnailUrl,
+    };
     if (selectedOption.kind === "split") {
       player.muted = true;
-      player.replace({ uri: selectedOption.videoUrl, headers: authHeader });
+      player.replace({
+        uri: selectedOption.videoUrl,
+        headers: authHeader,
+        metadata,
+      });
       audioPlayer.replace(selectedOption.audioUrl);
     } else {
       // A non-default audio language narrows the server DASH manifest to that
       // language (index 0 is the original — already the manifest default).
       let uri = selectedOption.videoUrl;
-      if (selectedOption.id === "dash-vp9" && audioLangIndex > 0) {
-        const langs = audioLanguageOptions(state.detail.audioSources ?? []);
-        const picked = langs[audioLangIndex];
-        if (picked) uri = `${uri}&lang=${encodeURIComponent(picked.lang)}`;
+      if (selectedOption.id === "dash-vp9") {
+        if (audioLangIndex > 0) {
+          const langs = audioLanguageOptions(state.detail.audioSources ?? []);
+          const picked = langs[audioLangIndex];
+          if (picked) uri = `${uri}&lang=${encodeURIComponent(picked.lang)}`;
+        }
+        // The panel's choice, else the shared defaultPlaybackQuality. Servers
+        // without the parameter ignore it and serve the full ladder.
+        const cap = qualityCap ?? settingsRef.current.maxHeight;
+        if (Number.isFinite(cap)) uri = `${uri}&maxHeight=${cap}`;
       }
       player.muted = false;
-      player.replace({ uri, headers: authHeader });
+      player.replace({ uri, headers: authHeader, metadata });
       audioPlayer.pause();
       audioPlayer.replace(null);
     }
-    const startSeconds = pendingSeekRef.current ?? resumeSeconds;
+    const pendingSeek = pendingSeekRef.current;
     pendingSeekRef.current = null;
+    // A saved position in the last seconds would end the video on arrival —
+    // start it over instead. (The resume lookup can't always tell: some
+    // progress rows carry no duration.)
+    const total = state.detail.durationSeconds ?? 0;
+    const resumeUsable =
+      resumeSeconds !== undefined &&
+      !(total > 0 && resumeSeconds > total - RESUME_END_GUARD_SECONDS);
+    const startSeconds =
+      pendingSeek ?? (resumeUsable ? resumeSeconds : undefined);
     if (startSeconds && startSeconds > 5) {
       player.currentTime = startSeconds;
       if (selectedOption.kind === "split")
         audioPlayer.currentTime = startSeconds;
     }
+    player.playbackRate = playbackRateRef.current;
+    audioPlayer.playbackRate = playbackRateRef.current;
     const shouldPlay = shouldPlayAfterReplaceRef.current;
     shouldPlayAfterReplaceRef.current = true;
     if (shouldPlay) {
@@ -480,7 +728,46 @@ export function WatchScreen({
       audioPlayer.pause();
     }
     setIsPlaying(shouldPlay);
-  }, [state, player, audioPlayer, resumeSeconds, authHeader, audioLangIndex]);
+  }, [
+    state,
+    player,
+    audioPlayer,
+    resumeSeconds,
+    authHeader,
+    audioLangIndex,
+    qualityCap,
+  ]);
+
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
+  /**
+   * Records the stream's subtitle tracks and, the first time any appear,
+   * turns on the device's preferred caption language if the video has it.
+   */
+  const captionsAppliedRef = useRef(false);
+  const applySubtitleTracks = (tracks: SubtitleTrack[]) => {
+    setSubtitleTracks(tracks);
+    if (captionsAppliedRef.current || tracks.length === 0) return;
+    captionsAppliedRef.current = true;
+    const preferred = playerPrefs().captionLanguage;
+    const match = preferred ? findTrack(tracks, preferred) : undefined;
+    if (match) {
+      player.subtitleTrack = match;
+      setSubtitleTrack(match);
+    }
+  };
+  const applySubtitleTracksRef = useRef(applySubtitleTracks);
+  applySubtitleTracksRef.current = applySubtitleTracks;
+
+  useEffect(() => {
+    loadPlayerPrefs().then((prefs) => {
+      if (prefs.playbackRate === playbackRateRef.current) return;
+      setPlaybackRate(prefs.playbackRate);
+      player.playbackRate = prefs.playbackRate;
+      audioPlayer.playbackRate = prefs.playbackRate;
+    });
+  }, [player, audioPlayer]);
 
   // SponsorBlock auto-skip: on each tick, jump past any segment we're inside.
   useEffect(() => {
@@ -489,10 +776,15 @@ export function WatchScreen({
       // The clock only feeds the overlay. While it's hidden, skip the state
       // update: each one re-renders this whole screen, once a second, for
       // nothing on screen. Revealing the overlay resyncs it (see below).
-      if (controlsVisibleRef.current) setCurrentTime(currentTime);
+      if (controlsVisibleRef.current) {
+        setCurrentTime(currentTime);
+        if (player.isLive) setBehindLive(player.currentOffsetFromLive ?? 0);
+      }
       const hit = segmentsRef.current.find(
         (s) =>
-          currentTime >= s.startSeconds && currentTime < s.endSeconds - 0.5,
+          currentTime >= s.startSeconds &&
+          currentTime < s.endSeconds - 0.5 &&
+          !keptSegmentsRef.current.has(s.uuid),
       );
       const selectedOption = selectedOptionRef.current;
       if (hit && settingsRef.current.sponsorBlockAutoSkip) {
@@ -500,7 +792,28 @@ export function WatchScreen({
         if (selectedOption?.kind === "split") {
           audioPlayer.currentTime = hit.endSeconds;
         }
+        showToastRef.current({
+          text: `Skipped ${SPONSORBLOCK_LABELS[hit.category] ?? "segment"}`,
+          hint: "OK to undo",
+          segment: hit,
+          action: "undo",
+        });
         return;
+      }
+      // Auto-skip off: offer the skip for as long as the segment plays.
+      const offered = toastRef.current?.action === "skip";
+      if (hit && !offered) {
+        showToastRef.current(
+          {
+            text: SPONSORBLOCK_LABELS[hit.category] ?? "Segment",
+            hint: "OK to skip",
+            segment: hit,
+            action: "skip",
+          },
+          (hit.endSeconds - currentTime) * 1000,
+        );
+      } else if (!hit && offered) {
+        setToast(null);
       }
       if (selectedOption?.kind === "split") {
         const audioDelta = Math.abs(audioPlayer.currentTime - currentTime);
@@ -518,6 +831,12 @@ export function WatchScreen({
    */
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      // In the background (under a channel page): Back belongs to the shell.
+      if (!activeRef.current) return false;
+      if (showUpNextRef.current) {
+        setEnded(false);
+        return true;
+      }
       if (!controlsVisibleRef.current) return false;
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       setControlsVisible(false);
@@ -526,50 +845,69 @@ export function WatchScreen({
     return () => sub.remove();
   }, []);
 
+  // The Android TV home screen's Continue watching row: a video left part
+  // way through goes in (opening it resumes via owntube://watch), and one
+  // watched to the end comes out.
+  useEffect(
+    () => () => {
+      const detail = detailRef.current;
+      if (!detail || detail.isLive) return;
+      const duration = detail.durationSeconds ?? 0;
+      const position = currentTimeRef.current;
+      if (duration <= 0) return;
+      const fraction = position / duration;
+      if (fraction >= WATCH_NEXT_DONE_FRACTION) {
+        removeWatchNext(detail.videoId);
+      } else if (fraction >= WATCH_NEXT_MIN_FRACTION) {
+        upsertWatchNext({
+          videoId: detail.videoId,
+          title: detail.title,
+          channelName: detail.channelName,
+          posterUrl: detail.thumbnailUrl,
+          positionMs: Math.floor(position * 1000),
+          durationMs: Math.floor(duration * 1000),
+        });
+      }
+    },
+    [],
+  );
+
+  // Progress to history on an interval and on leave: the resume point, and
+  // time actually played as the recommender's signal (see the hook).
+  useRecordWatchProgress({
+    detail: detailRef,
+    position: currentTimeRef,
+    playing: isPlayingRef,
+  });
+
   /**
-   * Report progress periodically, not only when leaving: a session that ends by
-   * pulling the plug (or the box sleeping) would otherwise record nothing, and
-   * the web app's resume position would sit stale.
+   * The end: record the video as watched straight away (the server also drops
+   * it from the queue then), and offer what comes next.
    */
   useEffect(() => {
-    const timer = setInterval(() => {
+    const sub = player.addListener("playToEnd", () => {
       const detail = detailRef.current;
-      const watched = Math.floor(currentTimeRef.current);
-      if (!detail?.channelId || watched < PROGRESS_MIN_SECONDS) return;
-      if (!isPlayingRef.current) return;
-      trpcClient.history.upsertEvent
-        .mutate({
-          videoId,
-          channelId: detail.channelId,
-          durationWatched: watched,
-          positionSeconds: watched,
-          videoDurationSeconds: detail.durationSeconds,
-          videoTitle: detail.title,
-        })
-        .catch(() => {});
-    }, PROGRESS_REPORT_MS);
-    return () => clearInterval(timer);
-  }, [videoId]);
-
-  // Record watch progress to history on leave (feeds the recommender).
-  useEffect(() => {
-    return () => {
-      const detail = detailRef.current;
-      const watched = Math.floor(currentTimeRef.current);
-      if (!detail?.channelId || watched < 5) return;
-      const duration = detail.durationSeconds;
-      trpcClient.history.upsertEvent
-        .mutate({
-          videoId: detail.videoId,
-          channelId: detail.channelId,
-          durationWatched: watched,
-          completed: duration != null && watched >= duration * 0.9,
-          videoDurationSeconds: duration,
-          isShort: false,
-        })
-        .catch(() => {});
-    };
-  }, []);
+      if (detail?.channelId) {
+        trpcClient.history.upsertEvent
+          .mutate({
+            videoId: detail.videoId,
+            channelId: detail.channelId,
+            // The server keeps the larger of this and the recorded play time;
+            // what matters here is `completed`, which also dequeues it.
+            durationWatched: 0,
+            positionSeconds: Math.floor(currentTimeRef.current),
+            completed: true,
+            videoDurationSeconds: detail.durationSeconds,
+            videoTitle: detail.title,
+            channelName: detail.channelName,
+          })
+          .catch(() => {});
+      }
+      removeWatchNext(videoId);
+      setEnded(true);
+    });
+    return () => sub.remove();
+  }, [player, videoId]);
 
   const fallbackToStablePlayback = useCallback(() => {
     if (state.status !== "ready") return;
@@ -596,8 +934,8 @@ export function WatchScreen({
       setIsBuffering(status === "loading");
       if (status === "readyToPlay") {
         setDuration(player.duration);
-        setHasSubtitles(player.availableSubtitleTracks.length > 0);
-        setSubtitlesOn(player.subtitleTrack !== null);
+        applySubtitleTracksRef.current(player.availableSubtitleTracks);
+        setSubtitleTrack(player.subtitleTrack);
       }
       if (status === "error") fallbackToStablePlayback();
     });
@@ -620,13 +958,13 @@ export function WatchScreen({
     const available = player.addListener(
       "availableSubtitleTracksChange",
       ({ availableSubtitleTracks }) => {
-        setHasSubtitles(availableSubtitleTracks.length > 0);
+        applySubtitleTracksRef.current(availableSubtitleTracks);
       },
     );
     const selected = player.addListener(
       "subtitleTrackChange",
       ({ subtitleTrack }) => {
-        setSubtitlesOn(subtitleTrack !== null);
+        setSubtitleTrack(subtitleTrack);
       },
     );
     return () => {
@@ -645,6 +983,15 @@ export function WatchScreen({
     }, 4000);
   }, []);
 
+  // Closing the settings panel remounts the controls; show them, with the
+  // usual auto-hide, rather than leaving whatever state they were in.
+  const menuWasOpenRef = useRef(false);
+  useEffect(() => {
+    const open = menuOpen || detailsOpen;
+    if (menuWasOpenRef.current && !open) revealControls();
+    menuWasOpenRef.current = open;
+  }, [menuOpen, detailsOpen, revealControls]);
+
   // Android's MediaSession (registered by expo-video for the hardware
   // Play/Pause key) claims that key before it reaches our TVEventHandler, so
   // pressing it pauses/resumes the player without ever calling
@@ -654,12 +1001,31 @@ export function WatchScreen({
     const sub = player.addListener(
       "playingChange",
       ({ isPlaying: playing }) => {
+        // The MediaSession still owns the hardware Play/Pause key while the
+        // player sits behind a channel page; don't let it resume there.
+        if (playing && !activeRef.current) {
+          player.pause();
+          audioPlayer.pause();
+          return;
+        }
         setIsPlaying(playing);
         revealControls();
       },
     );
     return () => sub.remove();
-  }, [player, revealControls]);
+  }, [player, audioPlayer, revealControls]);
+
+  // Sent to the background (a channel page opened on top): pause, and close
+  // any panel so its own Back handler can't claim presses meant for the page.
+  // Coming back leaves it paused with the controls up, ready for OK.
+  useEffect(() => {
+    if (active) return;
+    player.pause();
+    audioPlayer.pause();
+    setIsPlaying(false);
+    setMenuOpen(false);
+    setDetailsOpen(false);
+  }, [active, player, audioPlayer]);
 
   // Any remote key re-shows the controls (fires regardless of focus target).
   // While paused the overlay stays pinned; while playing it auto-hides.
@@ -734,6 +1100,10 @@ export function WatchScreen({
   };
 
   const commitScrubOrToggle = () => {
+    if (swallowPressRef.current) {
+      swallowPressRef.current = false;
+      return;
+    }
     const target = scrubRef.current;
     if (target === null) {
       togglePlayback();
@@ -789,6 +1159,18 @@ export function WatchScreen({
       .catch(() => {});
   };
 
+  /** Previous restarts the video unless it has barely begun, like a CD player. */
+  const playPrevious = () => {
+    if (currentTimeRef.current > RESTART_THRESHOLD_SECONDS || !previousVideo) {
+      player.currentTime = 0;
+      if (selectedOptionRef.current?.kind === "split") {
+        audioPlayer.currentTime = 0;
+      }
+      return;
+    }
+    onReplaceVideo(previousVideo.videoId, { context });
+  };
+
   const seekBy = (seconds: number) => {
     player.seekBy(seconds);
     if (selectedOptionRef.current?.kind === "split") {
@@ -802,10 +1184,32 @@ export function WatchScreen({
    * this the remote's play/pause does nothing.
    */
   useTVEventHandler((event) => {
+    if (!activeRef.current) return;
     if (event.eventType === "focus" || event.eventType === "blur") return;
-    revealControls();
+    // The up-next card and the settings panel own the screen; their buttons
+    // take the D-pad.
+    if (
+      showUpNextRef.current ||
+      menuOpenRef.current ||
+      detailsOpenRef.current
+    ) {
+      return;
+    }
     // ACTION_UP is 1; the same long-press event fires on press and release.
     const isKeyUp = Number(event.eventKeyAction) === 1;
+    // OK with the controls hidden acts on a SponsorBlock toast (undo / skip)
+    // instead of pausing. The key-down event arrives before the focused
+    // scrubber's onPress, which then swallows the same press.
+    if (
+      event.eventType === "select" &&
+      !isKeyUp &&
+      !controlsVisibleRef.current &&
+      actOnToastRef.current()
+    ) {
+      swallowPressRef.current = true;
+      return;
+    }
+    revealControls();
     const canScrub = focusedButtonsRef.current === 0;
     switch (event.eventType) {
       case "playPause":
@@ -822,6 +1226,12 @@ export function WatchScreen({
         break;
       case "rewind":
         seekBy(-10);
+        break;
+      case "next":
+        if (!isKeyUp) playNextRef.current();
+        break;
+      case "previous":
+        if (!isKeyUp) playPrevious();
         break;
       // Left/right scrubs when the overlay is hidden (nothing to navigate) or
       // when the scrubber itself holds focus; anywhere else it moves between
@@ -853,38 +1263,132 @@ export function WatchScreen({
    * Subtitles come from the stream's own tracks, so the toggle is only useful
    * once ExoPlayer has surfaced at least one.
    */
+  /** Picks a caption track (null = off) and remembers its language. */
+  const chooseSubtitles = (track: SubtitleTrack | null) => {
+    player.subtitleTrack = track;
+    setSubtitleTrack(track);
+    savePlayerPrefs({ captionLanguage: track?.language ?? null });
+  };
+
+  /** The CC button: off, or back on in the remembered (else first) language. */
   const toggleSubtitles = () => {
-    const tracks = player.availableSubtitleTracks;
-    if (tracks.length === 0) return;
-    const next = player.subtitleTrack ? null : tracks[0];
-    player.subtitleTrack = next;
-    setSubtitlesOn(next !== null);
+    if (subtitleTrack) {
+      chooseSubtitles(null);
+      return;
+    }
+    const preferred = playerPrefs().captionLanguage;
+    chooseSubtitles(
+      (preferred ? findTrack(subtitleTracks, preferred) : undefined) ??
+        subtitleTracks[0] ??
+        null,
+    );
   };
 
   /**
-   * Cycle the audio language of a multi-audio video. Position and play state
-   * survive the manifest swap through the same pending-seek mechanism the
-   * error fallback uses.
+   * Swaps the playing source (quality, audio language) keeping position and
+   * play state, through the same pending-seek mechanism the error fallback
+   * uses.
    */
-  const cycleAudioLanguage = () => {
-    if (state.status !== "ready") return;
-    const langs = audioLanguageOptions(state.detail.audioSources ?? []);
-    if (langs.length < 2) return;
-    const next = (audioLangIndex + 1) % langs.length;
+  const keepPositionAcrossSwap = () => {
     pendingSeekRef.current = currentTimeRef.current;
     shouldPlayAfterReplaceRef.current = isPlayingRef.current;
-    setAudioLangIndex(next);
-    setAudioToast(`Audio: ${langs[next]?.label ?? ""}`);
-    if (audioToastTimerRef.current) clearTimeout(audioToastTimerRef.current);
-    audioToastTimerRef.current = setTimeout(() => setAudioToast(null), 2500);
+  };
+
+  const chooseAudioLanguage = (index: number) => {
+    if (state.status !== "ready" || index === audioLangIndex) return;
+    const langs = audioLanguageOptions(state.detail.audioSources ?? []);
+    keepPositionAcrossSwap();
+    setAudioLangIndex(index);
+    showToast({ text: `Audio: ${langs[index]?.label ?? ""}` });
+  };
+
+  /** Quality: a ceiling on the server DASH source, or another source. */
+  const chooseQuality = (cap: number | null) => {
+    if (state.status !== "ready") return;
+    const dashIndex = state.playbackOptions.findIndex(
+      (o) => o.id === "dash-vp9",
+    );
+    if (dashIndex < 0) return;
+    if (cap === qualityCap && dashIndex === state.selectedOptionIndex) return;
+    keepPositionAcrossSwap();
+    setQualityCap(cap);
+    setState((previous) =>
+      previous.status === "ready"
+        ? { ...previous, selectedOptionIndex: dashIndex }
+        : previous,
+    );
+  };
+
+  const chooseSource = (index: number) => {
+    if (state.status !== "ready" || index === state.selectedOptionIndex) return;
+    keepPositionAcrossSwap();
+    setState((previous) =>
+      previous.status === "ready"
+        ? { ...previous, selectedOptionIndex: index }
+        : previous,
+    );
+  };
+
+  const chooseRate = (rate: number) => {
+    setPlaybackRate(rate);
+    player.playbackRate = rate;
+    audioPlayer.playbackRate = rate;
+    savePlayerPrefs({ playbackRate: rate });
+  };
+
+  const seekTo = (seconds: number) => {
+    player.currentTime = seconds;
+    if (selectedOptionRef.current?.kind === "split") {
+      audioPlayer.currentTime = seconds;
+    }
+  };
+
+  /** OK on a SponsorBlock toast: undo the skip, or take the offered one. */
+  const actOnToast = (): boolean => {
+    const current = toastRef.current;
+    if (!current?.segment || !current.action) return false;
+    if (current.action === "undo") {
+      keptSegmentsRef.current.add(current.segment.uuid);
+      seekTo(current.segment.startSeconds);
+    } else {
+      seekTo(current.segment.endSeconds);
+    }
+    setToast(null);
+    return true;
+  };
+
+  const actOnToastRef = useRef(actOnToast);
+  actOnToastRef.current = actOnToast;
+
+  const markWatched = () => {
+    const detail = detailRef.current;
+    if (!detail) return;
+    trpcClient.subscriptions.markWatched
+      .mutate({ videoId, channelId: detail.channelId ?? undefined })
+      .then(() => {
+        showToast({ text: "Marked as watched" });
+        void queryClient.invalidateQueries({
+          queryKey: [["history", "progressAll"]],
+        });
+      })
+      .catch(() => showToast({ text: "Couldn't mark as watched" }));
   };
 
   useEffect(
     () => () => {
-      if (audioToastTimerRef.current) clearTimeout(audioToastTimerRef.current);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     },
     [],
   );
+
+  // An upcoming stream checks again every minute, so it starts by itself.
+  const upcoming =
+    state.status === "error" && state.problem.kind === "upcoming";
+  useEffect(() => {
+    if (!upcoming) return;
+    const timer = setInterval(() => setReloadKey((k) => k + 1), 60_000);
+    return () => clearInterval(timer);
+  }, [upcoming]);
 
   if (state.status === "loading") {
     return (
@@ -896,11 +1400,44 @@ export function WatchScreen({
   }
 
   if (state.status === "error") {
+    const { problem } = state;
+    const title =
+      problem.kind === "upcoming"
+        ? "Not started yet"
+        : problem.kind === "age"
+          ? "Age-restricted"
+          : problem.kind === "unavailable"
+            ? "Video unavailable"
+            : "Playback unavailable";
+    const body =
+      problem.kind === "upcoming"
+        ? problem.startsAt
+          ? `Starts ${new Date(problem.startsAt * 1000).toLocaleString()}. This screen checks again every minute.`
+          : "This stream or premiere hasn't started. This screen checks again every minute."
+        : problem.kind === "age"
+          ? "YouTube only shows this video to signed-in adults, so it can't play here."
+          : problem.kind === "unavailable"
+            ? "It may have been removed or made private."
+            : state.message;
     return (
       <View style={styles.centered}>
-        <Text style={styles.errorTitle}>Playback unavailable</Text>
-        <Text style={styles.muted}>{state.message}</Text>
-        <FocusButton label="Back" onPress={onBack} hasTVPreferredFocus />
+        <Text style={styles.errorTitle}>{title}</Text>
+        <Text style={[styles.muted, styles.errorBody]}>{body}</Text>
+        <View style={styles.errorButtons}>
+          {problem.kind !== "unavailable" ? (
+            <FocusButton
+              label="Retry"
+              variant="primary"
+              onPress={() => setReloadKey((k) => k + 1)}
+              hasTVPreferredFocus
+            />
+          ) : null}
+          <FocusButton
+            label="Back"
+            onPress={onBack}
+            hasTVPreferredFocus={problem.kind === "unavailable"}
+          />
+        </View>
       </View>
     );
   }
@@ -926,6 +1463,214 @@ export function WatchScreen({
   const chapterIndex = chapterIndexAt(chapters, scrubTarget);
   const chapterTitle = chapterIndex >= 0 ? chapters[chapterIndex]?.title : null;
 
+  const selectedOption = state.playbackOptions[state.selectedOptionIndex];
+  const onDash = selectedOption?.id === "dash-vp9";
+  const effectiveCap = qualityCap ?? settingsRef.current.maxHeight;
+  const qualityLabelNow = !onDash
+    ? (selectedOption?.label ?? "")
+    : qualityCap === null
+      ? Number.isFinite(effectiveCap)
+        ? `Auto (up to ${effectiveCap}p)`
+        : "Auto"
+      : `${qualityCap}p`;
+  const heights = qualityHeights(detail);
+  const subtitleLabel = (track: SubtitleTrack) =>
+    track.label || track.language || "Unknown";
+
+  /** The settings panel's pages, rebuilt from current state on each render. */
+  const buildPage = (key: string): MenuPage => {
+    switch (key) {
+      case "quality":
+        return {
+          title: "Quality",
+          items: [
+            {
+              key: "auto",
+              label: Number.isFinite(settingsRef.current.maxHeight)
+                ? `Auto (up to ${settingsRef.current.maxHeight}p)`
+                : "Auto",
+              selected: onDash && qualityCap === null,
+              onPress: () => chooseQuality(null),
+            },
+            ...heights.map<MenuItem>((height) => ({
+              key: `h${height}`,
+              label: `${height}p`,
+              selected: onDash && qualityCap === height,
+              onPress: () => chooseQuality(height),
+            })),
+            // The fallback sources, for when DASH misbehaves on a device.
+            ...state.playbackOptions
+              .map((option, index) => ({ option, index }))
+              .filter(({ option }) => option.id !== "dash-vp9")
+              .map<MenuItem>(({ option, index }) => ({
+                key: option.id,
+                label: sourceMenuLabel(option),
+                selected: index === state.selectedOptionIndex,
+                onPress: () => chooseSource(index),
+              })),
+          ],
+        };
+      case "captions":
+        return {
+          title: "Captions",
+          items: [
+            {
+              key: "off",
+              label: "Off",
+              selected: subtitleTrack === null,
+              onPress: () => chooseSubtitles(null),
+            },
+            ...subtitleTracks.map<MenuItem>((track) => ({
+              key: track.id,
+              label: subtitleLabel(track),
+              selected: subtitleTrack?.id === track.id,
+              onPress: () => chooseSubtitles(track),
+            })),
+          ],
+        };
+      case "audio":
+        return {
+          title: "Audio language",
+          items: audioLangs.map<MenuItem>((lang, index) => ({
+            key: lang.lang,
+            label: lang.label,
+            selected: index === audioLangIndex,
+            onPress: () => chooseAudioLanguage(index),
+          })),
+        };
+      case "speed":
+        return {
+          title: "Speed",
+          items: PLAYBACK_RATES.map<MenuItem>((rate) => ({
+            key: String(rate),
+            label: formatRate(rate),
+            selected: rate === playbackRate,
+            onPress: () => chooseRate(rate),
+          })),
+        };
+      case "chapters":
+        return {
+          title: "Chapters",
+          items: chapters.map<MenuItem>((chapter, index) => ({
+            key: String(chapter.startSeconds),
+            label: chapter.title,
+            detail: formatTime(chapter.startSeconds),
+            selected: index === chapterIndex,
+            onPress: () => {
+              seekTo(chapter.startSeconds);
+              setMenuOpen(false);
+            },
+          })),
+        };
+      case "playlists":
+      case "newPlaylist":
+        return playlistMenu.buildPage(key) ?? { title: "", items: [] };
+      default:
+        return {
+          title: "Settings",
+          items: [
+            {
+              key: "quality",
+              label: "Quality",
+              detail: qualityLabelNow,
+              submenu: "quality",
+            },
+            ...(subtitleTracks.length > 0
+              ? [
+                  {
+                    key: "captions",
+                    label: "Captions",
+                    detail: subtitleTrack
+                      ? subtitleLabel(subtitleTrack)
+                      : "Off",
+                    submenu: "captions",
+                  },
+                ]
+              : []),
+            ...(canChooseAudioLanguage
+              ? [
+                  {
+                    key: "audio",
+                    label: "Audio language",
+                    detail: audioLangs[audioLangIndex]?.label,
+                    submenu: "audio",
+                  },
+                ]
+              : []),
+            {
+              key: "speed",
+              label: "Speed",
+              detail: formatRate(playbackRate),
+              submenu: "speed",
+            },
+            ...(chapters.length > 0
+              ? [{ key: "chapters", label: "Chapters", submenu: "chapters" }]
+              : []),
+            {
+              key: "playlists",
+              label: "Save to playlist",
+              submenu: "playlists",
+            },
+            {
+              key: "watched",
+              label: "Mark as watched",
+              onPress: () => {
+                markWatched();
+                setMenuOpen(false);
+              },
+            },
+            {
+              key: "ignore",
+              label: "Not interested",
+              onPress: () => {
+                setMenuOpen(false);
+                trpcClient.interactions.set
+                  .mutate({
+                    videoId,
+                    channelId: detail.channelId ?? undefined,
+                    type: "ignore",
+                    active: true,
+                    title: detail.title,
+                  })
+                  .then(() =>
+                    showToast({ text: "Got it — you'll see less like this" }),
+                  )
+                  .catch(() => {});
+              },
+            },
+            ...(detail.channelId
+              ? [
+                  {
+                    key: "block",
+                    label: "Don't recommend channel",
+                    onPress: () => {
+                      setMenuOpen(false);
+                      trpcClient.interactions.blockRecommendationChannel
+                        .mutate({ channelId: detail.channelId as string })
+                        .then(() =>
+                          showToast({
+                            text: `Won't recommend ${detail.channelName ?? "this channel"}`,
+                          }),
+                        )
+                        .catch(() => {});
+                    },
+                  },
+                ]
+              : []),
+            {
+              key: "stats",
+              label: "Stats for nerds",
+              detail: statsOn ? "On" : "Off",
+              onPress: () => {
+                setStatsOn((on) => !on);
+                return "stay";
+              },
+            },
+          ],
+        };
+    }
+  };
+
   return (
     <View style={styles.container}>
       <VideoView
@@ -939,234 +1684,309 @@ export function WatchScreen({
           <ActivityIndicator size="large" color={colors.brand} />
         </View>
       ) : null}
-      {audioToast ? (
-        <View style={styles.audioToast} pointerEvents="none">
-          <Text style={styles.audioToastText}>{audioToast}</Text>
-        </View>
-      ) : null}
-
-      {/* Controls stay mounted (so a focused button always catches the next key
-          to re-reveal them); visibility is just opacity. */}
-      <View
-        style={[StyleSheet.absoluteFill, { opacity: controlsVisible ? 1 : 0 }]}
-        pointerEvents="box-none"
-      >
-        <View style={styles.topInfo} pointerEvents="none">
-          <Text style={styles.title} numberOfLines={2}>
-            {detail.title}
-          </Text>
-          <Text style={styles.meta} numberOfLines={1}>
-            {[detail.channelName, formatViews(detail.viewCount)]
-              .filter(Boolean)
-              .join(" \u2022 ")}
-          </Text>
-        </View>
-
-        <View style={styles.overlay}>
-          <View style={styles.timesRow}>
-            <Text style={styles.time}>{formatTime(scrubTarget)}</Text>
-            {chapterTitle ? (
-              <Text style={styles.chapterTitle} numberOfLines={1}>
-                {chapterTitle}
-              </Text>
-            ) : null}
-            <Text style={styles.time}>{formatTime(totalSeconds)}</Text>
-          </View>
-          {/* Wrapper so the preview anchors to the bar, not the whole overlay. */}
-          <View style={styles.trackWrap}>
-            {scrubSeconds !== null && detail.storyboard ? (
-              <View
-                style={[
-                  styles.previewRow,
-                  { left: `${clampPreviewPct(progressPct)}%` },
-                ]}
-                pointerEvents="none"
-              >
-                <ScrubPreview
-                  storyboard={detail.storyboard}
-                  atSeconds={scrubSeconds}
-                />
-              </View>
-            ) : null}
-            <Pressable
-              ref={scrubberRef}
-              onLayout={() => {
-                if (scrubberHandle === null) {
-                  setScrubberHandle(findNodeHandle(scrubberRef.current));
-                }
-              }}
-              nextFocusLeft={scrubberHandle ?? undefined}
-              nextFocusRight={scrubberHandle ?? undefined}
-              hasTVPreferredFocus
-              onFocus={() => setScrubberFocused(true)}
-              onBlur={() => setScrubberFocused(false)}
-              onPress={commitScrubOrToggle}
-              style={styles.scrubber}
-            >
-              <View
-                style={[styles.track, scrubberFocused && styles.trackActive]}
-              >
-                <View
-                  style={[
-                    styles.trackFill,
-                    scrubberFocused && styles.trackFillActive,
-                    { width: `${progressPct}%` },
-                  ]}
-                />
-              </View>
-              {totalSeconds > 0
-                ? chapters.map((chapter) => (
-                    <View
-                      key={chapter.startSeconds}
-                      pointerEvents="none"
-                      style={[
-                        styles.chapterTick,
-                        {
-                          left: `${Math.min(
-                            100,
-                            (chapter.startSeconds / totalSeconds) * 100,
-                          )}%`,
-                        },
-                      ]}
-                    />
-                  ))
-                : null}
-              {scrubberFocused ? (
-                <View
-                  style={[styles.knob, { left: `${progressPct}%` }]}
-                  pointerEvents="none"
-                />
-              ) : null}
-            </Pressable>
-          </View>
-
-          <View style={styles.controlRow}>
-            <View style={styles.sideCluster}>
-              {detail.channelId ? (
-                <Pressable
-                  onFocus={() => {
-                    setChannelFocused(true);
-                    onButtonFocusChange(true);
-                  }}
-                  onBlur={() => {
-                    setChannelFocused(false);
-                    onButtonFocusChange(false);
-                  }}
-                  onPress={() => onOpenChannel(detail.channelId as string)}
-                  style={[
-                    styles.avatarButton,
-                    channelFocused && styles.avatarButtonFocused,
-                  ]}
-                >
-                  {detail.channelAvatarUrl ? (
-                    <Image
-                      source={{ uri: detail.channelAvatarUrl }}
-                      style={styles.avatar}
-                    />
-                  ) : (
-                    <View style={[styles.avatar, styles.avatarFallback]}>
-                      <Text style={styles.avatarInitial}>
-                        {channelInitial(detail.channelName)}
-                      </Text>
-                    </View>
-                  )}
-                </Pressable>
-              ) : null}
-            </View>
-
-            <View style={styles.transport}>
-              <IconButton
-                icon="rotate-ccw"
-                action="skip"
-                onPress={() => seekBy(-10)}
-                onFocusChange={onButtonFocusChange}
-              />
-              <IconButton
-                icon={isPlaying ? "pause" : "play"}
-                action={isPlaying ? "pause" : "play"}
-                large
-                onPress={togglePlayback}
-                onFocusChange={onButtonFocusChange}
-              />
-              <IconButton
-                icon="rotate-cw"
-                action="skipForward"
-                onPress={() => seekBy(10)}
-                onFocusChange={onButtonFocusChange}
-              />
-            </View>
-
-            {/* Mirrors the web player's action set. */}
-            <View style={styles.actions}>
-              <IconButton
-                icon="thumbs-up"
-                action="like"
-                active={rating === "like"}
-                onPress={() => setRatingValue("like")}
-                onFocusChange={onButtonFocusChange}
-              />
-              <IconButton
-                icon="thumbs-down"
-                action="dislike"
-                active={rating === "dislike"}
-                onPress={() => setRatingValue("dislike")}
-                onFocusChange={onButtonFocusChange}
-              />
-              <IconButton
-                icon={queued ? "check" : "plus"}
-                active={queued}
-                onPress={toggleQueued}
-                onFocusChange={onButtonFocusChange}
-              />
-              <IconButton
-                icon="bookmark"
-                active={saved}
-                onPress={toggleSaved}
-                onFocusChange={onButtonFocusChange}
-              />
-              {/* Only offered when the stream actually carries subtitles. */}
-              {hasSubtitles ? (
-                <IconButton
-                  icon="type"
-                  action="captions"
-                  active={subtitlesOn}
-                  onPress={toggleSubtitles}
-                  onFocusChange={onButtonFocusChange}
-                />
-              ) : null}
-              {/* Dubbed videos: cycle audio language (original is default). */}
-              {canChooseAudioLanguage ? (
-                <IconButton
-                  icon="globe"
-                  active={audioLangIndex > 0}
-                  onPress={cycleAudioLanguage}
-                  onFocusChange={onButtonFocusChange}
-                />
-              ) : null}
-            </View>
-          </View>
-
-          {related.length > 0 ? (
-            <Animated.View
-              style={[styles.relatedRow, { height: relatedHeight }]}
-            >
-              {/* Clipping doesn't affect child layout, so this reports the
-                  row's full height even while cropped. */}
-              <View
-                onLayout={(e) => {
-                  relatedFullHeight.current = e.nativeEvent.layout.height;
-                }}
-              >
-                <VideoRow
-                  videos={related}
-                  onSelect={onOpenVideo}
-                  onCardFocusChange={onRelatedCardFocusChange}
-                />
-              </View>
-            </Animated.View>
+      {toast ? (
+        <View style={styles.toast} pointerEvents="none">
+          <Text style={styles.toastText}>{toast.text}</Text>
+          {toast.hint && !controlsVisible ? (
+            <Text style={styles.toastHint}>{toast.hint}</Text>
           ) : null}
         </View>
-      </View>
+      ) : null}
+      {statsOn ? (
+        <StatsOverlay
+          player={player}
+          option={selectedOption}
+          cap={onDash ? effectiveCap : undefined}
+          subtitles={subtitleTrack ? subtitleLabel(subtitleTrack) : "off"}
+        />
+      ) : null}
+
+      {showUpNext && nextVideo ? (
+        <UpNext
+          video={nextVideo}
+          contextLabel={context?.label}
+          autoplay={settingsRef.current.autoplayNext}
+          onPlay={playNext}
+          onCancel={() => setEnded(false)}
+        />
+      ) : menuOpen ? (
+        <MenuPanel buildPage={buildPage} onClose={closeMenu} />
+      ) : detailsOpen ? (
+        <DetailsPanel detail={detail} onClose={closeDetails} />
+      ) : (
+        // Controls stay mounted (so a focused button always catches the next key
+        // to re-reveal them); visibility is just opacity. The up-next card
+        // replaces them, so focus can't wander into hidden buttons behind it.
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { opacity: controlsVisible ? 1 : 0 },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.topInfo} pointerEvents="none">
+            {detail.isLive ? (
+              <View style={styles.liveBadge}>
+                <Text style={styles.liveBadgeText}>LIVE</Text>
+              </View>
+            ) : null}
+            <Text style={styles.title} numberOfLines={2}>
+              {detail.title}
+            </Text>
+            <Text style={styles.meta} numberOfLines={1}>
+              {[detail.channelName, formatViews(detail.viewCount)]
+                .filter(Boolean)
+                .join(" \u2022 ")}
+            </Text>
+          </View>
+
+          <View style={styles.overlay}>
+            <View style={styles.timesRow}>
+              <Text style={styles.time}>{formatTime(scrubTarget)}</Text>
+              {chapterTitle ? (
+                <Text style={styles.chapterTitle} numberOfLines={1}>
+                  {chapterTitle}
+                </Text>
+              ) : null}
+              <Text style={styles.time}>{formatTime(totalSeconds)}</Text>
+            </View>
+            {/* Wrapper so the preview anchors to the bar, not the whole overlay. */}
+            <View style={styles.trackWrap}>
+              {scrubSeconds !== null && detail.storyboard ? (
+                <View
+                  style={[
+                    styles.previewRow,
+                    { left: `${clampPreviewPct(progressPct)}%` },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <ScrubPreview
+                    storyboard={detail.storyboard}
+                    atSeconds={scrubSeconds}
+                  />
+                </View>
+              ) : null}
+              <Pressable
+                ref={scrubberRef}
+                onLayout={() => {
+                  if (scrubberHandle === null) {
+                    setScrubberHandle(findNodeHandle(scrubberRef.current));
+                  }
+                }}
+                nextFocusLeft={scrubberHandle ?? undefined}
+                nextFocusRight={scrubberHandle ?? undefined}
+                hasTVPreferredFocus
+                onFocus={() => setScrubberFocused(true)}
+                onBlur={() => setScrubberFocused(false)}
+                onPress={commitScrubOrToggle}
+                style={styles.scrubber}
+              >
+                <View
+                  style={[styles.track, scrubberFocused && styles.trackActive]}
+                >
+                  <View
+                    style={[
+                      styles.trackFill,
+                      scrubberFocused && styles.trackFillActive,
+                      { width: `${progressPct}%` },
+                    ]}
+                  />
+                </View>
+                {totalSeconds > 0
+                  ? segments.map((segment) => (
+                      <View
+                        key={segment.uuid}
+                        pointerEvents="none"
+                        style={[
+                          styles.segmentMark,
+                          {
+                            left: `${Math.min(100, (segment.startSeconds / totalSeconds) * 100)}%`,
+                            width: `${Math.max(0.3, ((segment.endSeconds - segment.startSeconds) / totalSeconds) * 100)}%`,
+                            backgroundColor:
+                              SPONSORBLOCK_COLORS[segment.category] ??
+                              colors.success,
+                          },
+                        ]}
+                      />
+                    ))
+                  : null}
+                {totalSeconds > 0
+                  ? chapters.map((chapter) => (
+                      <View
+                        key={chapter.startSeconds}
+                        pointerEvents="none"
+                        style={[
+                          styles.chapterTick,
+                          {
+                            left: `${Math.min(
+                              100,
+                              (chapter.startSeconds / totalSeconds) * 100,
+                            )}%`,
+                          },
+                        ]}
+                      />
+                    ))
+                  : null}
+                {scrubberFocused ? (
+                  <View
+                    style={[styles.knob, { left: `${progressPct}%` }]}
+                    pointerEvents="none"
+                  />
+                ) : null}
+              </Pressable>
+            </View>
+
+            <View style={styles.controlRow}>
+              <View style={styles.sideCluster}>
+                {detail.channelId ? (
+                  <Pressable
+                    onFocus={() => {
+                      setChannelFocused(true);
+                      onButtonFocusChange(true);
+                    }}
+                    onBlur={() => {
+                      setChannelFocused(false);
+                      onButtonFocusChange(false);
+                    }}
+                    onPress={() => onOpenChannel(detail.channelId as string)}
+                    style={[
+                      styles.avatarButton,
+                      channelFocused && styles.avatarButtonFocused,
+                    ]}
+                  >
+                    {detail.channelAvatarUrl ? (
+                      <Image
+                        source={{ uri: detail.channelAvatarUrl }}
+                        style={styles.avatar}
+                      />
+                    ) : (
+                      <View style={[styles.avatar, styles.avatarFallback]}>
+                        <Text style={styles.avatarInitial}>
+                          {channelInitial(detail.channelName)}
+                        </Text>
+                      </View>
+                    )}
+                  </Pressable>
+                ) : null}
+                {subscribed !== null ? (
+                  <FocusButton
+                    label={subscribed ? "Subscribed" : "Subscribe"}
+                    variant={subscribed ? "ghost" : "primary"}
+                    onPress={toggleSubscribed}
+                    onFocusChange={onButtonFocusChange}
+                    style={styles.subscribe}
+                  />
+                ) : null}
+              </View>
+
+              <View style={styles.transport}>
+                <IconButton
+                  icon="rotate-ccw"
+                  action="skip"
+                  onPress={() => seekBy(-10)}
+                  onFocusChange={onButtonFocusChange}
+                />
+                <IconButton
+                  icon={isPlaying ? "pause" : "play"}
+                  action={isPlaying ? "pause" : "play"}
+                  large
+                  onPress={togglePlayback}
+                  onFocusChange={onButtonFocusChange}
+                />
+                <IconButton
+                  icon="rotate-cw"
+                  action="skipForward"
+                  onPress={() => seekBy(10)}
+                  onFocusChange={onButtonFocusChange}
+                />
+                {/* Same threshold as the web (LIVE_EDGE_SECONDS). */}
+                {detail.isLive && behindLive >= LIVE_EDGE_SECONDS ? (
+                  <FocusButton
+                    label="Go live"
+                    onPress={() => {
+                      player.currentTime = player.duration;
+                      setBehindLive(0);
+                    }}
+                    onFocusChange={onButtonFocusChange}
+                    style={styles.goLive}
+                  />
+                ) : null}
+              </View>
+
+              {/* Mirrors the web player's action set. */}
+              <View style={styles.actions}>
+                <IconButton
+                  icon="thumbs-up"
+                  action="like"
+                  active={rating === "like"}
+                  onPress={() => setRatingValue("like")}
+                  onFocusChange={onButtonFocusChange}
+                />
+                <IconButton
+                  icon="thumbs-down"
+                  action="dislike"
+                  active={rating === "dislike"}
+                  onPress={() => setRatingValue("dislike")}
+                  onFocusChange={onButtonFocusChange}
+                />
+                <IconButton
+                  icon={queued ? "check" : "plus"}
+                  active={queued}
+                  onPress={toggleQueued}
+                  onFocusChange={onButtonFocusChange}
+                />
+                <IconButton
+                  icon="bookmark"
+                  active={saved}
+                  onPress={toggleSaved}
+                  onFocusChange={onButtonFocusChange}
+                />
+                {/* Only offered when the stream actually carries subtitles. */}
+                {subtitleTracks.length > 0 ? (
+                  <IconButton
+                    icon="type"
+                    action="captions"
+                    active={subtitleTrack !== null}
+                    onPress={toggleSubtitles}
+                    onFocusChange={onButtonFocusChange}
+                  />
+                ) : null}
+                <IconButton
+                  icon="info"
+                  onPress={() => setDetailsOpen(true)}
+                  onFocusChange={onButtonFocusChange}
+                />
+                {/* Quality, captions, audio language, speed, chapters… */}
+                <IconButton
+                  icon="settings"
+                  onPress={() => setMenuOpen(true)}
+                  onFocusChange={onButtonFocusChange}
+                />
+              </View>
+            </View>
+
+            {related.length > 0 ? (
+              <Animated.View
+                style={[styles.relatedRow, { height: relatedHeight }]}
+              >
+                {/* Clipping doesn't affect child layout, so this reports the
+                  row's full height even while cropped. */}
+                <View
+                  onLayout={(e) => {
+                    relatedFullHeight.current = e.nativeEvent.layout.height;
+                  }}
+                >
+                  <VideoRow
+                    videos={related}
+                    onSelect={onOpenVideo}
+                    onCardFocusChange={onRelatedCardFocusChange}
+                  />
+                </View>
+              </Animated.View>
+            ) : null}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1189,9 +2009,18 @@ function clampPreviewPct(pct: number): number {
 /** Layout width in dp of a 1080p TV panel (density 2). */
 const TV_WIDTH_DP = 960;
 
-/** How often playback position is pushed to the server, and the floor for it. */
-const PROGRESS_REPORT_MS = 15_000;
-const PROGRESS_MIN_SECONDS = 5;
+/** Seconds behind the live edge before "Go live" shows (the web's value). */
+const LIVE_EDGE_SECONDS = 15;
+
+/** Watch Next row bounds: worth resuming, and as good as finished. */
+const WATCH_NEXT_MIN_FRACTION = 0.03;
+const WATCH_NEXT_DONE_FRACTION = 0.95;
+
+/** A resume point this close to the end starts the video over instead. */
+const RESUME_END_GUARD_SECONDS = 15;
+
+/** Past this, "previous" restarts the video instead of going back one. */
+const RESTART_THRESHOLD_SECONDS = 5;
 
 /** Playhead knob shown while the scrubber holds focus. */
 const SCRUB_KNOB = 18;
@@ -1332,16 +2161,54 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  audioToast: {
+  toast: {
     position: "absolute",
     top: 36,
     right: 36,
+    alignItems: "flex-end",
     backgroundColor: "rgba(0, 0, 0, 0.75)",
     borderRadius: radius.shell,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
-  audioToastText: { color: colors.foreground, fontSize: fontSize.md },
+  toastText: { color: colors.foreground, fontSize: fontSize.md },
+  toastHint: { color: colors.mutedForeground, fontSize: fontSize.sm },
+  subscribe: { minHeight: 40, marginLeft: spacing.sm },
+  goLive: { minHeight: 40, paddingHorizontal: spacing.md },
+  liveBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.brand,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginBottom: spacing.xs,
+  },
+  liveBadgeText: {
+    color: colors.primaryForeground,
+    fontSize: fontSize.sm,
+    fontWeight: "800",
+  },
+  errorBody: { maxWidth: 720, textAlign: "center" },
+  errorButtons: { flexDirection: "row", gap: spacing.md },
+  stats: {
+    position: "absolute",
+    top: 36,
+    left: 36,
+    padding: spacing.sm,
+    borderRadius: radius.shell,
+    backgroundColor: "rgba(0, 0, 0, 0.75)",
+  },
+  statsText: {
+    color: colors.foreground,
+    fontSize: fontSize.sm,
+    fontFamily: monoFont,
+  },
+  segmentMark: {
+    position: "absolute",
+    top: SCRUB_PAD,
+    height: TRACK_HEIGHT,
+    opacity: 0.85,
+  },
   info: { gap: spacing.xs },
   progressRow: {
     flexDirection: "row",
@@ -1446,6 +2313,93 @@ const styles = StyleSheet.create({
   muted: { color: colors.mutedForeground, fontSize: fontSize.md },
 });
 
+/** A track in the wanted language, matching "en" to "en-US" and back. */
+function findTrack(
+  tracks: SubtitleTrack[],
+  language: string,
+): SubtitleTrack | undefined {
+  const base = language.split("-")[0];
+  return (
+    tracks.find((t) => t.language === language) ??
+    tracks.find((t) => t.language.split("-")[0] === base)
+  );
+}
+
+/**
+ * The quality rungs the video offers, tallest first — what the panel lists as
+ * ceilings for the DASH source. By YouTube's label ("1080p"), which the
+ * server's `maxHeight` also goes by; the frame height of a cinemascope
+ * rendition (804, 608…) would list odd rungs.
+ */
+function qualityHeights(detail: VideoDetail): number[] {
+  const heights = new Set<number>();
+  for (const source of detail.videoSources) {
+    const labelled = source.quality?.match(/(\d{3,4})p/)?.[1];
+    const height = labelled ? Number.parseInt(labelled, 10) : source.height;
+    if (typeof height === "number" && height >= 144) heights.add(height);
+  }
+  return [...heights].sort((a, b) => b - a);
+}
+
+function sourceMenuLabel(option: PlaybackOption): string {
+  if (option.kind === "split") return `${option.label} (separate audio)`;
+  if (option.kind === "muxed") return `${option.label} (MP4)`;
+  return option.label;
+}
+
+/**
+ * Stats for nerds: what is actually playing, for debugging real TVs. Polls the
+ * player once a second on its own, so the screen around it doesn't re-render.
+ */
+function StatsOverlay({
+  player,
+  option,
+  cap,
+  subtitles,
+}: {
+  player: VideoPlayer;
+  option: PlaybackOption | undefined;
+  cap: number | undefined;
+  subtitles: string;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const buffered = Math.max(0, player.bufferedPosition - player.currentTime);
+  const host = (() => {
+    try {
+      return new URL(option?.videoUrl ?? "").host;
+    } catch {
+      return "?";
+    }
+  })();
+  const rows: [string, string][] = [
+    ["Source", `${option?.id ?? "?"} · ${option?.label ?? ""}`],
+    ["Host", host],
+    ["Cap", cap === undefined || !Number.isFinite(cap) ? "none" : `${cap}p`],
+    ["Status", `${player.status}${player.playing ? " · playing" : ""}`],
+    [
+      "Position",
+      `${formatTime(player.currentTime)} / ${formatTime(player.duration)}`,
+    ],
+    ["Buffer", `${buffered.toFixed(1)} s`],
+    ["Speed", formatRate(player.playbackRate)],
+    ["Live", player.isLive ? "yes" : "no"],
+    ["Captions", subtitles],
+  ];
+  return (
+    <View style={styles.stats} pointerEvents="none">
+      {rows.map(([label, value]) => (
+        <Text key={label} style={styles.statsText} numberOfLines={1}>
+          {label.padEnd(9)} {value}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 function buildPlaybackOptions(detail: VideoDetail): PlaybackOption[] {
   const options: PlaybackOption[] = [];
   const seen = new Set<string>();
@@ -1470,7 +2424,7 @@ function buildPlaybackOptions(detail: VideoDetail): PlaybackOption[] {
     addOption({
       id: "live-dash",
       label: "Live",
-      videoUrl: `${OWNTUBE_BASE_URL}/dash/${encodeURIComponent(detail.videoId)}/live.mpd`,
+      videoUrl: `${baseUrl()}/dash/${encodeURIComponent(detail.videoId)}/live.mpd`,
       kind: "auto",
     });
     if (detail.hlsUrl) {
@@ -1491,7 +2445,7 @@ function buildPlaybackOptions(detail: VideoDetail): PlaybackOption[] {
   addOption({
     id: "dash-vp9",
     label: "Auto",
-    videoUrl: `${OWNTUBE_BASE_URL}/dash/${detail.videoId}/manifest.mpd?video=vp9`,
+    videoUrl: `${baseUrl()}/dash/${detail.videoId}/manifest.mpd?video=vp9`,
     kind: "auto",
   });
 

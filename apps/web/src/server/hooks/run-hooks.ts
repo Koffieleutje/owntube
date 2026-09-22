@@ -150,7 +150,7 @@ export async function runHooks(event: HookEvent): Promise<void> {
 async function postWebhooks(event: HookEvent): Promise<void> {
   const urls = (process.env.OWNTUBE_WEBHOOK_URLS ?? "")
     .split(",")
-    .map((u) => u.trim())
+    .map((u: string) => u.trim())
     .filter(Boolean);
   if (urls.length === 0) return;
   const token = process.env.OWNTUBE_WEBHOOK_TOKEN?.trim();

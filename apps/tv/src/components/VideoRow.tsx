@@ -7,7 +7,9 @@ import {
   Text,
   View,
 } from "react-native";
+import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
 import { VIDEO_CARD_WIDTH, VideoCard } from "@/components/VideoCard";
+import { setLongPressTarget, takeSuppressedPress } from "@/lib/long-press";
 import { colors, fontSize, spacing } from "@/theme";
 
 type Props = {
@@ -18,6 +20,10 @@ type Props = {
   preferFirstFocus?: boolean;
   /** Bubbles card focus so a parent can bring the row fully into view. */
   onCardFocusChange?: (focused: boolean) => void;
+  /** Screen-specific context-menu actions for a card. */
+  menuExtras?: CardMenuExtras;
+  /** Cards that aren't videos (playlists) have no video context menu. */
+  disableMenu?: boolean;
 };
 
 /**
@@ -35,33 +41,57 @@ export const VideoRow = memo(function VideoRow({
   onSelect,
   preferFirstFocus,
   onCardFocusChange,
+  menuExtras,
+  disableMenu,
 }: Props) {
+  const cardMenu = useCardMenu();
+  const menuRef = useRef({ cardMenu, menuExtras, videos, disableMenu });
+  menuRef.current = { cardMenu, menuExtras, videos, disableMenu };
+  // The focused card's long press, registered for the Shell's dispatcher.
+  const longPressRef = useRef<(() => void) | null>(null);
+  const handleLongPress = useCallback((video: UnifiedVideo) => {
+    const { cardMenu, menuExtras } = menuRef.current;
+    cardMenu.open(video, menuExtras?.(video));
+  }, []);
   const listRef = useRef<FlatList<UnifiedVideo>>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const onCardFocusChangeRef = useRef(onCardFocusChange);
   onCardFocusChangeRef.current = onCardFocusChange;
 
-  const handlePress = useCallback(
-    (videoId: string) => onSelectRef.current(videoId),
-    [],
-  );
+  const handlePress = useCallback((videoId: string) => {
+    if (takeSuppressedPress()) return;
+    onSelectRef.current(videoId);
+  }, []);
 
   /**
    * TV focus can move to a card outside the viewport without the list
    * scrolling, so the card lands off screen. Drive the scroll from focus and
    * centre the focused card.
    */
-  const handleFocusChange = useCallback((focused: boolean, index: number) => {
-    if (focused) {
-      listRef.current?.scrollToIndex({
-        index,
-        animated: true,
-        viewPosition: 0.5,
-      });
-    }
-    onCardFocusChangeRef.current?.(focused);
-  }, []);
+  const handleFocusChange = useCallback(
+    (focused: boolean, index: number) => {
+      const { videos, disableMenu } = menuRef.current;
+      const video = videos[index];
+      if (focused && video && !disableMenu) {
+        const action = () => handleLongPress(video);
+        longPressRef.current = action;
+        setLongPressTarget(action);
+      } else if (!focused && longPressRef.current) {
+        setLongPressTarget(null, longPressRef.current);
+        longPressRef.current = null;
+      }
+      if (focused) {
+        listRef.current?.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.5,
+        });
+      }
+      onCardFocusChangeRef.current?.(focused);
+    },
+    [handleLongPress],
+  );
 
   const renderItem = useCallback<ListRenderItem<UnifiedVideo>>(
     ({ item, index }) => (
@@ -69,11 +99,18 @@ export const VideoRow = memo(function VideoRow({
         video={item}
         index={index}
         onPress={handlePress}
+        onLongPress={disableMenu ? undefined : handleLongPress}
         hasTVPreferredFocus={preferFirstFocus && index === 0}
         onFocusChange={handleFocusChange}
       />
     ),
-    [handlePress, handleFocusChange, preferFirstFocus],
+    [
+      handlePress,
+      handleLongPress,
+      handleFocusChange,
+      preferFirstFocus,
+      disableMenu,
+    ],
   );
 
   return (

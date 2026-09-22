@@ -145,7 +145,7 @@ export function VideoCard({
           </div>
         </MaybeSwipe>
       ) : (
-        <Link href={href} className="block">
+        <Link prefetch={false} href={href} className="block">
           <div className={thumbShell}>
             {thumbnailUrl ? (
               <VideoCardThumbnailImg
@@ -180,7 +180,7 @@ export function VideoCard({
       )}
       <div className="ot-video-card-meta flex items-start gap-3 px-4 sm:px-0">
         {channelHref ? (
-          <Link href={channelHref} className="mt-0.5 shrink-0">
+          <Link prefetch={false} href={channelHref} className="mt-0.5 shrink-0">
             <ChannelAvatarCircle
               imageUrl={channelAvatarUrl}
               label={channel}
@@ -196,7 +196,7 @@ export function VideoCard({
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="relative min-w-0 pr-8">
-            <Link href={href} className="block min-w-0">
+            <Link prefetch={false} href={href} className="block min-w-0">
               <h2 className="ot-video-card-title m-0 text-[15px] font-semibold leading-snug tracking-tight text-[hsl(var(--foreground))] transition group-hover:text-[hsl(var(--primary))]">
                 {title}
               </h2>
@@ -217,6 +217,7 @@ export function VideoCard({
           <p className="ot-video-card-byline line-clamp-1 text-[13px] text-[hsl(var(--muted-foreground))]">
             {channelHref ? (
               <Link
+                prefetch={false}
                 href={channelHref}
                 className="hover:text-[hsl(var(--foreground))] hover:underline"
               >
@@ -320,7 +321,7 @@ export function VideoCardShort({
   return (
     <article className="ot-video-card ot-video-card--short group flex flex-col gap-2 text-left text-[hsl(var(--foreground))]">
       <div className={thumbShellClass}>
-        <Link href={href} className="block">
+        <Link prefetch={false} href={href} className="block">
           <div className="ot-video-card-thumbnail relative aspect-[9/16] w-full overflow-hidden rounded-[var(--radius-card)] bg-[hsl(var(--muted))] shadow-none transition duration-300 group-hover:-translate-y-0.5 group-hover:shadow-[var(--shadow-card-hover)]">
             {thumbnailUrl ? (
               <VideoCardThumbnailImg
@@ -371,7 +372,7 @@ export function VideoCardShort({
       </div>
       <div className="px-0.5">
         <div className="relative min-w-0 pr-8">
-          <Link href={href} className="block min-w-0">
+          <Link prefetch={false} href={href} className="block min-w-0">
             <p className={titleClass}>{title}</p>
           </Link>
           {videoId ? (
@@ -390,6 +391,7 @@ export function VideoCardShort({
             <p className="mt-0.5 line-clamp-1 text-[11px] text-[hsl(var(--muted-foreground))]">
               {channelHref ? (
                 <Link
+                  prefetch={false}
                   href={channelHref}
                   className="hover:text-[hsl(var(--foreground))] hover:underline"
                 >
@@ -489,7 +491,7 @@ export function VideoCardCompact({
     <article className="ot-video-card ot-video-card--compact group rounded-xl p-2 transition hover:bg-[hsl(var(--muted)_/_0.45)]">
       <div className="flex items-start gap-3 text-left">
         <div className="relative shrink-0">
-          <Link href={href} className="block">
+          <Link prefetch={false} href={href} className="block">
             <div
               className={`ot-video-card-thumbnail relative aspect-video overflow-hidden rounded-xl bg-[hsl(var(--muted))] ${thumbSizeClass}`}
             >
@@ -534,7 +536,11 @@ export function VideoCardCompact({
           >
             {showChannelAvatar ? (
               channelHref ? (
-                <Link href={channelHref} className="mt-0.5 shrink-0">
+                <Link
+                  prefetch={false}
+                  href={channelHref}
+                  className="mt-0.5 shrink-0"
+                >
                   <ChannelAvatarCircle
                     imageUrl={channelAvatarUrl}
                     label={channel}
@@ -551,7 +557,7 @@ export function VideoCardCompact({
                 </span>
               )
             ) : null}
-            <Link href={href} className="min-w-0">
+            <Link prefetch={false} href={href} className="min-w-0">
               <p className={titleClass}>{title}</p>
             </Link>
             {videoId ? (
@@ -571,6 +577,7 @@ export function VideoCardCompact({
           >
             {channelHref ? (
               <Link
+                prefetch={false}
                 href={channelHref}
                 className="hover:text-[hsl(var(--foreground))] hover:underline"
               >

@@ -244,6 +244,21 @@ function nowUnix(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+/**
+ * Drops videos from channels the user asked not to be recommended. Applies to
+ * every recommendation-like list (home pool, watch-page related), not only the
+ * personalised feed.
+ */
+export function withoutBlockedChannels<T extends { channelId?: string | null }>(
+  videos: T[],
+  settings: Pick<AppSettings, "blockedRecommendationChannels"> | null,
+): T[] {
+  const blocked = settings?.blockedRecommendationChannels;
+  if (!blocked || blocked.length === 0) return videos;
+  const set = new Set(blocked);
+  return videos.filter((v) => !(v.channelId && set.has(v.channelId)));
+}
+
 function normalizeBlockedRecommendationChannels(
   input: string[] | undefined,
 ): string[] | undefined {

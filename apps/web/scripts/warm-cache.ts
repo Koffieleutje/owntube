@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { HOME_SHORTS_SHELF_LIMIT } from "../src/lib/shorts-feed-presentation";
 import { pruneAssetCache } from "../src/server/assets/cache";
 import { refreshChannelsLatestVideoAt } from "../src/server/channel-meta/recency";
 import { refreshChannelMetaIfStale } from "../src/server/channel-meta/store";
@@ -15,6 +16,7 @@ import * as schema from "../src/server/db/schema";
 import { watchQueue } from "../src/server/db/schema";
 import { RateLimitExceededError } from "../src/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "../src/server/errors/upstream-unavailable";
+import { shelfUpstreamLimit } from "../src/server/recommendation/shorts-feed";
 import {
   getChannelRssEntries,
   refreshChannelRss,
@@ -179,11 +181,17 @@ async function warmTrending(db: AppDb): Promise<boolean> {
 
 async function warmShortsShelf(db: AppDb): Promise<boolean> {
   try {
-    const result = await fetchShortsFeed(db, {
-      region,
-      limit: 14,
-      purpose: "shelf",
-    });
+    // The upstream page behind the home shelf, so the warmed row is the one
+    // the shelf reads.
+    const result = await fetchShortsFeed(
+      db,
+      {
+        region,
+        limit: shelfUpstreamLimit(HOME_SHORTS_SHELF_LIMIT),
+        purpose: "shelf",
+      },
+      { revalidate: "wait" },
+    );
     logLine(
       `warm-cache: shorts shelf — ${result.videos.length} videos (${result.sourceUsed}, region=${region})`,
     );

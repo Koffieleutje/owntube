@@ -1,146 +1,82 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
-import { CarouselFeed } from "@/components/CarouselFeed";
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { ContinueWatchingRow } from "@/components/ContinueWatchingRow";
+import { HomeBlockRow } from "@/components/HomeBlockRow";
 import { HomeHero } from "@/components/HomeHero";
+import { baseUrl } from "@/lib/config";
 import type { Nav } from "@/lib/navigation";
-import { trpcClient } from "@/lib/trpc";
-import { useInfiniteFeed } from "@/lib/use-infinite-feed";
-import { colors, fontSize, monoFont, spacing } from "@/theme";
-
-type HomeLabels = {
-  hero: string;
-  rail: string;
-  subtitle: string;
-};
-
-const DEFAULT_LABELS: HomeLabels = {
-  hero: "Trending now",
-  rail: "Trending",
-  subtitle: "Preparing your feed...",
-};
+import { useScreenActive } from "@/lib/screen-active";
+import { trpc } from "@/lib/trpc-react";
+import { colors, fontSize, spacing } from "@/theme";
 
 /**
- * Personalized home feed as stacked carousels. The server handles cold start
- * (falls back to trending), and pages are 1-indexed with a `hasMore` flag.
+ * Home mirrors the web home: the blocks the user arranged there
+ * (`settings.homeBlocks`), one row each, in their order. Above them sit the
+ * TV's own hero — the top recommendation — and Continue watching. The web
+ * stays the editor; the footer says where.
  */
 export function HomeScreen({ nav }: { nav: Nav }) {
-  const mountedRef = useRef(true);
-  const [labels, setLabels] = useState<HomeLabels>(DEFAULT_LABELS);
-
-  useEffect(
-    () => () => {
-      mountedRef.current = false;
-    },
-    [],
+  // Kept mounted while hidden: stop listening, refetch stale data on return.
+  const subscribed = useScreenActive();
+  const settings = trpc.settings.get.useQuery(undefined, { subscribed });
+  const region = settings.data?.trendingRegion ?? "US";
+  const top = trpc.feed.home.useQuery(
+    { page: 1, pageSize: 12, region },
+    { subscribed },
   );
 
-  const feed = useInfiniteFeed<number>(
-    (page) =>
-      trpcClient.feed.home.query({ page: page ?? 1 }).then((result) => {
-        if (page === undefined && mountedRef.current) {
-          const personalized =
-            result.kind === "personalized" && result.coldStart !== true;
-          setLabels({
-            hero: personalized ? "Top pick for you" : "Trending now",
-            rail: personalized ? "For You" : "Trending",
-            subtitle: personalized
-              ? "Based on the channels you watched recently."
-              : `Trending ${result.region}`,
-          });
-        }
-        return {
-          items: result.videos,
-          next: result.hasMore ? (page ?? 1) + 1 : undefined,
-        };
-      }),
-    [],
-    "feed.home",
-  );
+  const heroVideo = top.data?.videos[0];
+  const personalized =
+    top.data?.kind === "personalized" && top.data.coldStart !== true;
+  const blocks = settings.data?.homeBlocks ?? [];
 
-  useEffect(() => {
-    if (
-      feed.status === "ready" &&
-      feed.videos.length === 1 &&
-      feed.hasMore &&
-      !feed.loadingMore
-    ) {
-      feed.loadMore();
-    }
-  }, [
-    feed.status,
-    feed.videos.length,
-    feed.hasMore,
-    feed.loadingMore,
-    feed.loadMore,
-  ]);
-
-  const heroVideo = feed.videos[0];
-  // Memoized so the carousel sees the same array until the feed changes.
-  const railVideos = useMemo(() => feed.videos.slice(1), [feed.videos]);
-  const header = heroVideo ? (
-    <View style={styles.header}>
-      <HomeHero
-        video={heroVideo}
-        label={labels.hero}
-        onPress={(videoId) => nav.openVideo(videoId)}
-      />
-      {railVideos.length > 0 ? (
-        <View style={styles.railHeader}>
-          <View>
-            <Text style={styles.heading}>{labels.rail}</Text>
-            <Text style={styles.subtitle}>{labels.subtitle}</Text>
-          </View>
-          <Text style={styles.count}>
-            {feed.videos.length} video{feed.videos.length === 1 ? "" : "s"}
-          </Text>
-        </View>
-      ) : null}
-    </View>
-  ) : (
-    <Text style={styles.heading}>Home</Text>
-  );
+  if (!heroVideo && (top.isPending || settings.isPending)) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color={colors.brand} />
+      </View>
+    );
+  }
 
   return (
-    <CarouselFeed
-      feed={feed}
-      onSelect={(videoId) => nav.openVideo(videoId)}
-      header={header}
-      videos={railVideos}
-      preferFirstRowFocus={false}
-      emptyText={
-        heroVideo
-          ? "Scroll to load more rows."
-          : "No recommendations yet - watch a few videos to get started."
-      }
-    />
+    <ScrollView
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {heroVideo ? (
+        <HomeHero
+          video={heroVideo}
+          label={personalized ? "Top pick for you" : "Trending now"}
+          onPress={(videoId) =>
+            nav.openVideo(videoId, {
+              context: { source: "feed", videos: top.data?.videos ?? [] },
+            })
+          }
+        />
+      ) : null}
+      <ContinueWatchingRow nav={nav} />
+      {blocks.map((block) => (
+        <HomeBlockRow key={block.id} block={block} region={region} nav={nav} />
+      ))}
+      <Text style={styles.hint}>
+        Customise these rows on the web: {baseUrl().replace(/^https?:\/\//, "")}
+      </Text>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  header: {
-    gap: spacing.lg,
+  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+  content: {
+    gap: spacing.xl,
     paddingTop: 8,
     paddingHorizontal: 8,
+    paddingBottom: spacing.screen,
   },
-  railHeader: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: spacing.lg,
-  },
-  heading: {
-    color: colors.foreground,
-    fontSize: fontSize.xl,
-    fontWeight: "700",
-  },
-  subtitle: {
-    color: colors.mutedForeground,
-    fontSize: fontSize.sm,
-    marginTop: 4,
-  },
-  count: {
-    color: colors.mutedForeground,
-    fontSize: fontSize.sm,
-    fontFamily: monoFont,
-  },
+  hint: { color: colors.mutedForeground, fontSize: fontSize.sm },
 });

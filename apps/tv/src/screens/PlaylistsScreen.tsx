@@ -1,12 +1,18 @@
+import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import { useEffect, useMemo, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
+import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { FocusButton } from "@/components/FocusButton";
-import type { Nav } from "@/lib/navigation";
+import { errorMessage } from "@/lib/error-message";
+import type { Nav, PlayContext } from "@/lib/navigation";
+import { playAllStart } from "@/lib/play-all";
+import { queryClient } from "@/lib/query-client";
+import { moveId } from "@/lib/reorder";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
-import { errorMessage } from "@/lib/use-query";
+import { useProgressLookup } from "@/lib/watch-progress";
 import { colors, fontSize, spacing } from "@/theme";
 
 const PANE_WIDTH = 220;
@@ -56,6 +62,48 @@ export function PlaylistsScreen({ nav }: { nav: Nav }) {
   );
 
   const heading = playlists.find((p) => p.id === selected)?.name ?? "Playlists";
+  const progress = useProgressLookup();
+  const play = (videoId: string, videos: UnifiedVideo[]) => {
+    const context: PlayContext = { source: "playlist", label: heading, videos };
+    nav.openVideo(videoId, { context });
+  };
+  const first = playAllStart(feed.videos, progress);
+
+  const { notify } = useCardMenu();
+  const menuExtras: CardMenuExtras = (video) => {
+    if (selected === null) return [];
+    const playlistId = selected;
+    const refresh = () =>
+      queryClient.invalidateQueries({
+        queryKey: ["feed", `playlists.itemsDetailed:${playlistId}`],
+      });
+    const ids = feed.videos.map((v) => v.videoId);
+    const move = (delta: -1 | 1) => {
+      const next = moveId(ids, video.videoId, delta);
+      if (!next) return;
+      trpcClient.playlists.reorderItems
+        .mutate({ playlistId, videoIds: next })
+        .then(refresh)
+        .catch(() => notify("Couldn't reorder the playlist"));
+    };
+    return [
+      {
+        key: "remove",
+        label: `Remove from ${heading}`,
+        onPress: () => {
+          trpcClient.playlists.removeItem
+            .mutate({ playlistId, videoId: video.videoId })
+            .then(() => {
+              notify(`Removed from ${heading}`);
+              return refresh();
+            })
+            .catch(() => notify("Couldn't update the playlist"));
+        },
+      },
+      { key: "up", label: "Move up", onPress: () => move(-1) },
+      { key: "down", label: "Move down", onPress: () => move(1) },
+    ];
+  };
 
   return (
     <View style={styles.screen}>
@@ -90,8 +138,20 @@ export function PlaylistsScreen({ nav }: { nav: Nav }) {
         <View style={styles.feed}>
           <CarouselFeed
             feed={feed}
-            onSelect={(videoId) => nav.openVideo(videoId)}
-            header={<Text style={styles.heading}>{heading}</Text>}
+            onSelect={play}
+            menuExtras={menuExtras}
+            header={
+              <View style={styles.feedHeader}>
+                <Text style={styles.heading}>{heading}</Text>
+                {first ? (
+                  <FocusButton
+                    label="Play all"
+                    variant="primary"
+                    onPress={() => play(first.videoId, feed.videos)}
+                  />
+                ) : null}
+              </View>
+            }
             emptyText="This playlist is empty."
             preferFirstRowFocus={false}
           />
@@ -117,6 +177,7 @@ const styles = StyleSheet.create({
     borderRightColor: colors.border,
   },
   feed: { flex: 1, paddingLeft: spacing.xl },
+  feedHeader: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
   heading: {
     color: colors.mutedForeground,
     fontSize: fontSize.lg,

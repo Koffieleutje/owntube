@@ -2,13 +2,54 @@
   "expo": {
     "name": "owntube TV",
     "slug": "owntube-tv",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "landscape",
     "userInterfaceStyle": "dark",
     "platforms": ["android"],
     "android": {
       "package": "com.mdbraber.owntube.tv",
-      "icon": "./assets/icon.png"
+      "icon": "./assets/icon.png",
+      "versionCode": 2,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            {
+              "scheme": "https",
+              "host": "www.youtube.com"
+            },
+            {
+              "scheme": "https",
+              "host": "youtube.com"
+            },
+            {
+              "scheme": "https",
+              "host": "m.youtube.com"
+            },
+            {
+              "scheme": "https",
+              "host": "music.youtube.com"
+            },
+            {
+              "scheme": "https",
+              "host": "youtu.be"
+            },
+            {
+              "scheme": "http",
+              "host": "www.youtube.com"
+            },
+            {
+              "scheme": "http",
+              "host": "youtube.com"
+            },
+            {
+              "scheme": "http",
+              "host": "youtu.be"
+            }
+          ]
+        }
+      ]
     },
     "plugins": [
       [
@@ -27,7 +68,8 @@
         }
       ],
       "expo-speech-recognition",
-      "./plugins/with-tv-search"
+      "./plugins/with-tv-search",
+      "./plugins/with-release-signing"
     ],
     "extra": {
       "owntubeUrl": "http://10.0.2.2:3000"

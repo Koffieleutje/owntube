@@ -27,7 +27,12 @@ const SHORTS_SHELF_MAX_LIMIT = 20;
 /** Channel Shorts tab fetches when building the home shelf pool (cold). */
 const SHORTS_SHELF_MAX_CHANNELS = 6;
 
-const SHORTS_SHELF_DISCOVERY_PAGES = 3;
+/**
+ * Upstream pages the shelf may walk before settling. One over-fetched page
+ * fills the row in practice; more pages only add blocking upstream calls on a
+ * cold cache, and the top-up below still covers a starved row.
+ */
+const SHORTS_SHELF_DISCOVERY_PAGES = 1;
 
 const MAX_EMPTY_REC_PAGE_SKIPS = 10;
 
@@ -332,6 +337,11 @@ function fetchTasteDiscoveryShorts(
   );
 }
 
+/** The `fetchShortsFeed` limit behind a shelf of `limit` shorts. */
+export function shelfUpstreamLimit(limit: number): number {
+  return Math.min(40, limit * 2);
+}
+
 /**
  * Home Shorts shelf: at most one generic upstream fetch; personalized rows only
  * when the shorts pool is already warm (e.g. after visiting `/shorts`).
@@ -387,7 +397,7 @@ async function fetchShortsShelfFeed(
         region,
         // Over-fetch: channel diversity (≤2/channel) and seen/watched filtering
         // thin the result, so pull a wider pool to keep the row full.
-        limit: Math.min(40, limit * 2),
+        limit: shelfUpstreamLimit(limit),
         continuation,
         purpose: "shelf",
         excludeVideoIds: input.excludeVideoIds,
@@ -416,7 +426,7 @@ async function fetchShortsShelfFeed(
       try {
         const fallback = await fetchShortsFeed(db, {
           region,
-          limit: Math.min(40, limit * 2),
+          limit: shelfUpstreamLimit(limit),
           purpose: "shelf",
         });
         const homeFeedIds = new Set(

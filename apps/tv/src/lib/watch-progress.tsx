@@ -19,6 +19,9 @@ import { trpc } from "@/lib/trpc-react";
 /** Below this the bar is noise; above it the video counts as finished. */
 const MIN_FRACTION = 0.01;
 const COMPLETE_FRACTION = 0.97;
+/** Continue watching: started in earnest, but not yet (nearly) done. */
+const CONTINUE_MIN_FRACTION = 0.05;
+const CONTINUE_MAX_FRACTION = 0.9;
 /** Don't resume from the first few seconds — starting over is what's wanted. */
 const MIN_RESUME_SECONDS = 5;
 
@@ -64,9 +67,7 @@ export function WatchProgressProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** Progress for one video, or null when there is nothing worth drawing. */
-export function useWatchProgress(videoId: string): WatchProgress | null {
-  const row = useContext(ProgressContext).get(videoId);
+function progressOf(row: ProgressRow | undefined): WatchProgress | null {
   if (!row) return null;
   if (row.completed) return { fraction: 1, completed: true };
   const duration = row.videoDurationSeconds;
@@ -74,6 +75,48 @@ export function useWatchProgress(videoId: string): WatchProgress | null {
   const fraction = row.positionSeconds / duration;
   if (fraction < MIN_FRACTION) return null;
   return { fraction: Math.min(fraction, 1), completed: false };
+}
+
+/** Progress for one video, or null when there is nothing worth drawing. */
+export function useWatchProgress(videoId: string): WatchProgress | null {
+  return progressOf(useContext(ProgressContext).get(videoId));
+}
+
+/**
+ * Progress for any video, looked up on demand (e.g. "Play all" skipping what
+ * is already watched). Stable, like useResumeLookup.
+ */
+export function useProgressLookup(): (videoId: string) => WatchProgress | null {
+  const ref = useContext(ProgressRefContext);
+  return useCallback(
+    (videoId: string) => progressOf(ref.current.get(videoId)),
+    [ref],
+  );
+}
+
+/**
+ * Videos started but not finished, newest first — the Continue watching row.
+ * Ids only: the progress rows carry no titles, so callers join them against
+ * history.list.
+ */
+export function useInProgressIds(): string[] {
+  const byId = useContext(ProgressContext);
+  return useMemo(() => {
+    const ids: string[] = [];
+    // Map iteration follows insertion order, which is newest first.
+    for (const [videoId, row] of byId) {
+      const progress = progressOf(row);
+      if (
+        progress &&
+        !progress.completed &&
+        progress.fraction > CONTINUE_MIN_FRACTION &&
+        progress.fraction < CONTINUE_MAX_FRACTION
+      ) {
+        ids.push(videoId);
+      }
+    }
+    return ids;
+  }, [byId]);
 }
 
 /**
@@ -102,12 +145,16 @@ export function useResumeLookup(): (videoId: string) => number | undefined {
   );
 }
 
-/** Leaving the player writes new progress; pull it so the bars update. */
+/**
+ * Leaving the player writes new progress; pull it so the bars (and the
+ * Continue watching row, which also reads history.list) update.
+ */
 export function useWatchProgressRefresh(): () => void {
   const queryClient = useQueryClient();
   return useCallback(() => {
     void queryClient.invalidateQueries({
       queryKey: [["history", "progressAll"]],
     });
+    void queryClient.invalidateQueries({ queryKey: [["history", "list"]] });
   }, [queryClient]);
 }

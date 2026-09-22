@@ -58,6 +58,7 @@ export const shortsRouter = router({
           limit: requestedLimit,
           continuation: input.continuation ?? input.cursor ?? undefined,
           excludeVideoIds: input.excludeVideoIds,
+          purpose: input.purpose,
         });
         return {
           videos: prepareShortsFeedVideos(result.videos, requestedLimit),

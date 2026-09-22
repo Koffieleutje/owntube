@@ -497,6 +497,7 @@ export function VideoCardThumbnailInteractive({
       onMouseLeave={() => setPointerInside(false)}
     >
       <Link
+        prefetch={false}
         href={href}
         className="relative block h-full w-full min-h-0"
         onClick={onThumbClick}

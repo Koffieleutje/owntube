@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMpd,
+  capDashVideoHeight,
   pickDashVideoFormats,
 } from "@/server/services/dash/generate";
 import {
@@ -63,6 +64,44 @@ describe("pickDashVideoFormats", () => {
 
   it("returns empty when the family is not offered", () => {
     expect(pickDashVideoFormats([avc_1080, aac], "av01")).toEqual([]);
+  });
+});
+
+describe("capDashVideoHeight", () => {
+  const vp9_720: AdaptiveFormat = {
+    ...vp9_1080,
+    itag: 247,
+    size: "1280x720",
+    bitrate: 1_200_000,
+  };
+  const ladder = [vp9_2160, vp9_1080, vp9_720];
+
+  it("keeps everything without a cap", () => {
+    expect(capDashVideoHeight(ladder, null)).toEqual(ladder);
+  });
+
+  it("drops rungs above the cap", () => {
+    expect(capDashVideoHeight(ladder, 1080).map((f) => f.itag)).toEqual([
+      248, 247,
+    ]);
+  });
+
+  it("keeps the lowest rung when every rung is above the cap", () => {
+    expect(capDashVideoHeight(ladder, 360).map((f) => f.itag)).toEqual([247]);
+  });
+
+  it("rates cinemascope rungs by YouTube's label, not frame height", () => {
+    const scope = { ...vp9_1080, size: "1920x804" };
+    expect(capDashVideoHeight([scope, vp9_720], 720)).toEqual([vp9_720]);
+    expect(capDashVideoHeight([scope, vp9_720], 1080)).toEqual([
+      scope,
+      vp9_720,
+    ]);
+  });
+
+  it("rates vertical video by its short side", () => {
+    const vertical = { ...vp9_1080, size: "1080x1920" };
+    expect(capDashVideoHeight([vertical], 1080)).toEqual([vertical]);
   });
 });
 

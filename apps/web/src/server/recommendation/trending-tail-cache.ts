@@ -1,3 +1,4 @@
+import { createPoolInvalidation } from "@/server/recommendation/pool-invalidation";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 /**
@@ -18,6 +19,7 @@ export const trendingTailPoolInFlight = new Map<
   string,
   Promise<TrendingTailCacheEntry>
 >();
+export const trendingTailPoolInvalidation = createPoolInvalidation();
 
 /**
  * Drop a user's cached tail so the next feed load rebuilds it — e.g. right
@@ -26,6 +28,7 @@ export const trendingTailPoolInFlight = new Map<
  * With no id (or an invalid one) the whole cache is cleared.
  */
 export function clearTrendingTailCacheForUser(userId?: number): void {
+  trendingTailPoolInvalidation.invalidate(userId);
   if (typeof userId !== "number" || !Number.isFinite(userId) || userId <= 0) {
     trendingTailPoolCache.clear();
     trendingTailPoolInFlight.clear();

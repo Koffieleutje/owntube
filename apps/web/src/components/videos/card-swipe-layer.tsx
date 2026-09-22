@@ -61,7 +61,8 @@ export function CardSwipeLayer({
   surface?: VideoActionSurface;
   children: ReactNode;
 }) {
-  const settings = trpc.settings.get.useQuery();
+  const authed = trpc.auth.session.useQuery().data?.authed ?? false;
+  const settings = trpc.settings.get.useQuery(undefined, { enabled: authed });
   const enabled = settings.data?.enableSwipeGestures ?? false;
   const gestures = settings.data?.swipeGestures;
 

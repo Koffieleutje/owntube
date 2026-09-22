@@ -7,6 +7,7 @@ import {
   formatPublishedLabel,
   formatThumbnailBadge,
   formatViews,
+  heroThumbnailUrls,
 } from "@/lib/format";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
@@ -18,6 +19,11 @@ type HomeHeroProps = {
 
 export function HomeHero({ video, label, onPress }: HomeHeroProps) {
   const [focused, setFocused] = useState(false);
+  // Steps down the candidates on each load error; reset for a new video.
+  const thumbnails = heroThumbnailUrls(video);
+  const [attempt, setAttempt] = useState({ videoId: video.videoId, index: 0 });
+  const thumbIndex = attempt.videoId === video.videoId ? attempt.index : 0;
+  const thumbnail = thumbnails[thumbIndex];
   const badge = formatThumbnailBadge(video);
   const views = formatViews(video.viewCount);
   const published = formatPublishedLabel(
@@ -34,12 +40,15 @@ export function HomeHero({ video, label, onPress }: HomeHeroProps) {
       onPress={() => onPress(video.videoId)}
       style={[styles.hero, focused && styles.heroFocused]}
     >
-      {video.thumbnailUrl ? (
+      {thumbnail ? (
         <Image
-          source={{ uri: video.thumbnailUrl }}
+          source={{ uri: thumbnail }}
           style={styles.image}
           resizeMode="cover"
           resizeMethod="resize"
+          onError={() =>
+            setAttempt({ videoId: video.videoId, index: thumbIndex + 1 })
+          }
         />
       ) : (
         <View style={[styles.image, styles.placeholder]} />

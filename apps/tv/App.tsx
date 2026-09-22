@@ -2,25 +2,101 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet } from "react-native";
 import { Shell } from "@/components/Shell";
-import { clearToken, getToken, onSessionExpired } from "@/lib/auth-token";
+import {
+  clearAllProfiles,
+  clearToken,
+  getToken,
+  labelActiveProfile,
+  listProfiles,
+  onSessionExpired,
+} from "@/lib/auth-token";
+import { loadServerUrl } from "@/lib/config";
+import { persister, queryClient } from "@/lib/query-client";
+import { trpcClient } from "@/lib/trpc";
 import { TrpcProvider } from "@/lib/trpc-react";
 import { WatchProgressProvider } from "@/lib/watch-progress";
 import { LoginScreen } from "@/screens/LoginScreen";
+import { ProfilesScreen } from "@/screens/ProfilesScreen";
+import { ServerScreen } from "@/screens/ServerScreen";
 import { colors } from "@/theme";
 
-type AuthState = "checking" | "signedOut" | "signedIn";
+/**
+ * "server": choosing (or changing) the OwnTube server, before sign-in.
+ * "profiles": Who's watching, when the TV holds more than one account.
+ */
+type AuthState = "checking" | "server" | "profiles" | "signedOut" | "signedIn";
+
+/** Nothing of one account (or server) may show under the next. */
+async function dropCache(): Promise<void> {
+  queryClient.clear();
+  await persister.removeClient();
+}
+
+/** Once a profile signs out: pick another if the TV has one, else sign in. */
+async function nextAfterLeaving(): Promise<AuthState> {
+  const rest = await listProfiles();
+  return rest.length > 0 ? "profiles" : "signedOut";
+}
 
 export default function App() {
   const [auth, setAuth] = useState<AuthState>("checking");
 
   useEffect(() => {
-    getToken().then((token) => setAuth(token ? "signedIn" : "signedOut"));
+    Promise.all([loadServerUrl(), getToken(), listProfiles()]).then(
+      ([server, token, profiles]) => {
+        // Ask for a server only on a fresh install: a TV already signed in
+        // predates the setting and keeps using the server it was built for.
+        setAuth(
+          profiles.length > 1
+            ? "profiles"
+            : token
+              ? "signedIn"
+              : server
+                ? "signedOut"
+                : "server",
+        );
+      },
+    );
   }, []);
 
-  useEffect(() => onSessionExpired(() => setAuth("signedOut")), []);
+  // Name the active profile after its account, once signed in.
+  useEffect(() => {
+    if (auth !== "signedIn") return;
+    trpcClient.auth.me
+      .query()
+      .then((me) => labelActiveProfile(me.email))
+      .catch(() => {});
+  }, [auth]);
 
+  /** Where to go once the active profile is gone. */
+  const afterLeaving = () => nextAfterLeaving().then((next) => setAuth(next));
+
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        void dropCache();
+        void nextAfterLeaving().then((next) => setAuth(next));
+      }),
+    [],
+  );
+
+  /** Signs this profile out; any others stay on the TV. */
   const signOut = () => {
-    clearToken().then(() => setAuth("signedOut"));
+    clearToken()
+      .then(dropCache)
+      .finally(() => void afterLeaving());
+  };
+
+  const switchProfile = () => {
+    void dropCache();
+    setAuth("profiles");
+  };
+
+  /** Another server's accounts don't apply: every profile goes. */
+  const changeServer = () => {
+    clearAllProfiles()
+      .then(dropCache)
+      .finally(() => setAuth("server"));
   };
 
   return (
@@ -35,10 +111,24 @@ export default function App() {
           />
         ) : auth === "signedIn" ? (
           <WatchProgressProvider>
-            <Shell onSignOut={signOut} />
+            <Shell
+              onSignOut={signOut}
+              onChangeServer={changeServer}
+              onSwitchProfile={switchProfile}
+            />
           </WatchProgressProvider>
+        ) : auth === "profiles" ? (
+          <ProfilesScreen
+            onChosen={() => setAuth("signedIn")}
+            onAdd={() => setAuth("signedOut")}
+          />
+        ) : auth === "server" ? (
+          <ServerScreen onDone={() => setAuth("signedOut")} />
         ) : (
-          <LoginScreen onLoggedIn={() => setAuth("signedIn")} />
+          <LoginScreen
+            onLoggedIn={() => setAuth("signedIn")}
+            onChangeServer={() => setAuth("server")}
+          />
         )}
       </SafeAreaView>
     </TrpcProvider>

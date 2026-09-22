@@ -16,6 +16,10 @@ import {
 } from "@/server/recommendation/deterministic-jitter";
 import { maximalMarginalRelevance } from "@/server/recommendation/diversity";
 import {
+  createPoolInvalidation,
+  settlePoolBuild,
+} from "@/server/recommendation/pool-invalidation";
+import {
   keepCandidateForPersonalizedFeed,
   keepShortsDiscoveryCandidate,
   type RecommendationScoreContext,
@@ -66,6 +70,7 @@ const SHORTS_POOL_CACHE_TTL_MS = 90_000;
 const SHORTS_SEEN_SOFT_PENALTY = 0.12;
 const shortsPoolCache = new Map<string, ShortsPoolCacheEntry>();
 const shortsPoolInFlight = new Map<string, Promise<ShortsPoolCacheEntry>>();
+const shortsPoolInvalidation = createPoolInvalidation();
 
 function shortsPoolCacheKey(
   userId: number,
@@ -149,6 +154,7 @@ export async function getShortsRecommendations(
     }
   }
 
+  const stillCurrent = shortsPoolInvalidation.snapshot(userId);
   const task = (async (): Promise<ShortsPoolCacheEntry> => {
     const watchedEver = loadWatchedVideoIdsForRecommendations(db, userId);
     for (const id of loadShortSeenVideoIds(db, userId)) {
@@ -317,15 +323,13 @@ export async function getShortsRecommendations(
     };
   })();
 
-  shortsPoolInFlight.set(cacheKey, task);
-  const settled = task
-    .then((pool) => {
-      shortsPoolCache.set(cacheKey, pool);
-      return pool;
-    })
-    .finally(() => {
-      shortsPoolInFlight.delete(cacheKey);
-    });
+  const settled = settlePoolBuild(
+    task,
+    cacheKey,
+    shortsPoolCache,
+    shortsPoolInFlight,
+    stillCurrent,
+  );
 
   // Serve-stale-while-revalidate: an expired pool answers instantly while the
   // rebuild above replaces it in the background. Blocking here was the
@@ -341,6 +345,7 @@ export async function getShortsRecommendations(
 }
 
 export function clearShortsRecommendationCacheForUser(userId?: number): void {
+  shortsPoolInvalidation.invalidate(userId);
   if (typeof userId !== "number" || !Number.isFinite(userId) || userId <= 0) {
     shortsPoolCache.clear();
     shortsPoolInFlight.clear();

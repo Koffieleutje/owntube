@@ -22,6 +22,10 @@ import {
   deterministicColdStartJitter,
 } from "@/server/recommendation/deterministic-jitter";
 import { maximalMarginalRelevance } from "@/server/recommendation/diversity";
+import {
+  createPoolInvalidation,
+  settlePoolBuild,
+} from "@/server/recommendation/pool-invalidation";
 import { deriveRecommendationReason } from "@/server/recommendation/reason";
 import {
   isUnvettedKeywordSpam,
@@ -71,6 +75,7 @@ const recommendationPoolInFlight = new Map<
   string,
   Promise<RecommendationPoolCacheEntry>
 >();
+const recommendationPoolInvalidation = createPoolInvalidation();
 
 function recommendationPoolCacheKey(
   userId: number,
@@ -183,6 +188,7 @@ export function enrichVideosWithStoredChannelAvatars(
 export function clearRecommendationCachesForUser(userId?: number): void {
   clearShortsRecommendationCacheForUser(userId);
   clearTrendingTailCacheForUser(userId);
+  recommendationPoolInvalidation.invalidate(userId);
   if (typeof userId !== "number" || !Number.isFinite(userId) || userId <= 0) {
     recommendationPoolCache.clear();
     recommendationPoolInFlight.clear();
@@ -332,6 +338,7 @@ async function ensureRecommendationPool(
     }
   }
 
+  const stillCurrent = recommendationPoolInvalidation.snapshot(userId);
   const task = (async (): Promise<RecommendationPoolCacheEntry> => {
     const watchedRows = db
       .select({ videoId: watchHistory.videoId })
@@ -618,15 +625,13 @@ async function ensureRecommendationPool(
       coldStart,
     };
   })();
-  recommendationPoolInFlight.set(cacheKey, task);
-  const settled = task
-    .then((pool) => {
-      recommendationPoolCache.set(cacheKey, pool);
-      return pool;
-    })
-    .finally(() => {
-      recommendationPoolInFlight.delete(cacheKey);
-    });
+  const settled = settlePoolBuild(
+    task,
+    cacheKey,
+    recommendationPoolCache,
+    recommendationPoolInFlight,
+    stillCurrent,
+  );
   // Stale-while-revalidate: a rebuild can take dozens of upstream fetches when
   // the 10-min channel caches are cold, so an expired pool is served instantly
   // and the fresh one lands in the background for the next load.

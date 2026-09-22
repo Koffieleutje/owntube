@@ -1,7 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BackHandler,
   FlatList,
   Image,
   Pressable,
@@ -9,18 +8,23 @@ import {
   Text,
   View,
 } from "react-native";
+import { useCardMenu } from "@/components/CardMenu";
 import { CarouselFeed } from "@/components/CarouselFeed";
+import { MenuPanel } from "@/components/MenuPanel";
+import { errorMessage } from "@/lib/error-message";
 import { channelInitial } from "@/lib/format";
+import { setLongPressTarget, takeSuppressedPress } from "@/lib/long-press";
 import type { Nav } from "@/lib/navigation";
+import { queryClient } from "@/lib/query-client";
+import { useActiveBackHandler } from "@/lib/screen-active";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
-import { errorMessage } from "@/lib/use-query";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
-/** Server caps listSidebar at 50; asking for more is a validation error. */
-const CHANNEL_LIMIT = 50;
 const FEED_PAGE_SIZE = 24;
+/** A channel that uploaded within this long gets a "new" dot. */
+const NEW_WINDOW_SECONDS = 3 * 24 * 60 * 60;
 /**
  * dp. The YouTube TV app's channel column is ~440 physical px of a 1920-wide
  * panel; at density 2 that is 220dp, with 27dp avatars on a 39dp row pitch.
@@ -59,10 +63,38 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
   const [level, setLevel] = useState<PaneLevel>("root");
   const selectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const sidebar = trpc.subscriptions.listSidebar.useQuery({
-    limit: CHANNEL_LIMIT,
-  });
-  const channels = sidebar.data ?? [];
+  // Every subscription (listSidebar stops at 50), ordered the way the sidebar
+  // is: newest upload first, then newest subscription.
+  const sidebar = trpc.subscriptions.listDetailed.useQuery();
+  const channels = useMemo(
+    () =>
+      [...(sidebar.data ?? [])].sort(
+        (a, b) =>
+          (b.latestVideoAt ?? 0) - (a.latestVideoAt ?? 0) ||
+          b.subscribedAt - a.subscribedAt,
+      ),
+    [sidebar.data],
+  );
+  const nowSeconds = Date.now() / 1000;
+  const { notify } = useCardMenu();
+  /** Long-press on a channel row: its menu (open, unsubscribe). */
+  const [channelMenu, setChannelMenu] = useState<{
+    channelId: string;
+    name: string;
+  } | null>(null);
+  const unsubscribe = (channelId: string, name: string) => {
+    trpcClient.subscriptions.remove
+      .mutate({ channelId })
+      .then(() => {
+        notify(`Unsubscribed from ${name}`);
+        if (selected.kind === "channel" && selected.channelId === channelId) {
+          setSelected({ kind: "all" });
+        }
+        void sidebar.refetch();
+        void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      })
+      .catch(() => notify("Couldn't unsubscribe"));
+  };
   const channelsError = sidebar.error ? errorMessage(sidebar.error) : null;
 
   const tagList = trpc.channelTags.listAll.useQuery();
@@ -80,14 +112,11 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
 
   // Back leaves the tag submenu before it leaves Subscriptions, matching the
   // player's controls-then-video order.
-  useEffect(() => {
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (level !== "tags") return false;
-      setLevel("root");
-      return true;
-    });
-    return () => sub.remove();
-  }, [level]);
+  useActiveBackHandler(() => {
+    if (level !== "tags") return false;
+    setLevel("root");
+    return true;
+  });
 
   // Drop a pending selection if the screen goes away mid-debounce.
   useEffect(
@@ -185,6 +214,16 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
                 <ChannelRow
                   label={item.channelName}
                   avatarUrl={item.avatarUrl}
+                  fresh={
+                    item.latestVideoAt !== null &&
+                    nowSeconds - item.latestVideoAt < NEW_WINDOW_SECONDS
+                  }
+                  onLongPress={() =>
+                    setChannelMenu({
+                      channelId: item.channelId,
+                      name: item.channelName,
+                    })
+                  }
                   active={
                     selected.kind === "channel" &&
                     selected.channelId === item.channelId
@@ -198,7 +237,6 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
                   onPress={() =>
                     selectNow({ kind: "channel", channelId: item.channelId })
                   }
-                  onLongPress={() => nav.openChannel(item.channelId)}
                 />
               )}
               showsVerticalScrollIndicator={false}
@@ -242,7 +280,9 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
         <View style={styles.feed}>
           <CarouselFeed
             feed={feed}
-            onSelect={(videoId) => nav.openVideo(videoId)}
+            onSelect={(videoId, videos) =>
+              nav.openVideo(videoId, { context: { source: "feed", videos } })
+            }
             header={<Text style={styles.heading}>{heading}</Text>}
             emptyText={
               selected.kind === "all"
@@ -255,6 +295,33 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
           />
         </View>
       </View>
+      {channelMenu ? (
+        <MenuPanel
+          onClose={() => setChannelMenu(null)}
+          buildPage={() => ({
+            title: channelMenu.name,
+            items: [
+              {
+                key: "open",
+                label: "Open channel",
+                onPress: () => {
+                  setChannelMenu(null);
+                  nav.openChannel(channelMenu.channelId);
+                },
+              },
+              {
+                key: "unsubscribe",
+                label: "Unsubscribe",
+                confirm: `Unsubscribe from ${channelMenu.name}?`,
+                onPress: () => {
+                  setChannelMenu(null);
+                  unsubscribe(channelMenu.channelId, channelMenu.name);
+                },
+              },
+            ],
+          })}
+        />
+      ) : null}
     </View>
   );
 }
@@ -265,6 +332,7 @@ function ChannelRow({
   icon,
   trailingIcon,
   active,
+  fresh,
   onFocus,
   onPress,
   onLongPress,
@@ -276,49 +344,31 @@ function ChannelRow({
   /** Marks a row that drills into a submenu. */
   trailingIcon?: keyof typeof Feather.glyphMap;
   active: boolean;
+  /** Uploaded recently: shows a dot, like the web sidebar's. */
+  fresh?: boolean;
   onFocus: () => void;
   onPress: () => void;
-  /**
-   * Second action on a row, on hold. A short press filters the feed beside the
-   * list — fast, and what this screen is for — so opening the channel's own
-   * page needs somewhere else to live. Rows that have one show a chevron while
-   * focused, since a hold is invisible otherwise.
-   */
   onLongPress?: () => void;
 }) {
   const [focused, setFocused] = useState(false);
   const tint = active || focused ? colors.brand : colors.foreground;
-  /**
-   * Navigating straight from `onLongPress` fires while OK is still held down,
-   * so the key-up that follows lands on whatever the new screen just gave focus
-   * to — a card (the player opened) or, if that screen was still loading, Home
-   * in the sidebar (the app jumped back). Record the long press here and act on
-   * release instead: the key-up is then still consumed by this row, and nothing
-   * is in flight when the next screen mounts. Pressability calls `onPressOut`
-   * before `onPress`, and suppresses `onPress` entirely once a long press was
-   * sent, so the short-press path is untouched.
-   */
-  const longPressed = useRef(false);
+  const longPressRef = useRef(onLongPress);
+  longPressRef.current = onLongPress;
+  const [longPressAction] = useState(() => () => longPressRef.current?.());
 
   return (
     <Pressable
       onFocus={() => {
         setFocused(true);
+        if (onLongPress) setLongPressTarget(longPressAction);
         onFocus();
       }}
-      onBlur={() => setFocused(false)}
-      onPress={onPress}
-      onLongPress={
-        onLongPress
-          ? () => {
-              longPressed.current = true;
-            }
-          : undefined
-      }
-      onPressOut={() => {
-        if (!longPressed.current) return;
-        longPressed.current = false;
-        onLongPress?.();
+      onBlur={() => {
+        setFocused(false);
+        setLongPressTarget(null, longPressAction);
+      }}
+      onPress={() => {
+        if (!takeSuppressedPress()) onPress();
       }}
       style={[
         styles.row,
@@ -340,10 +390,9 @@ function ChannelRow({
       <Text style={[styles.rowLabel, { color: tint }]} numberOfLines={1}>
         {label}
       </Text>
+      {fresh ? <View style={styles.freshDot} /> : null}
       {trailingIcon ? (
         <Feather name={trailingIcon} size={16} color={tint} />
-      ) : onLongPress && focused ? (
-        <Feather name="chevron-right" size={16} color={tint} />
       ) : null}
     </Pressable>
   );
@@ -382,6 +431,12 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   groupGap: { height: spacing.lg },
+  freshDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.brand,
+  },
   paneError: {
     color: colors.mutedForeground,
     fontSize: fontSize.sm,

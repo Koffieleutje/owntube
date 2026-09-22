@@ -159,18 +159,35 @@ function nextInvidiousShortsContinuation(
 export async function fetchShortsFeed(
   db: AppDb,
   input: ShortsFeedInput,
+  /**
+   * `wait`: never answer from a stale or thin cached page while refetching —
+   * for the cache-warmer, which closes the DB when its run ends.
+   */
+  opts: { revalidate?: "background" | "wait" } = {},
 ): Promise<ShortsFeedResult> {
   const region = input.region.toUpperCase();
   const limit = Math.min(40, input.limit ?? 20);
   const key = shortsFeedCacheKey({ ...input, region, limit });
   const fresh = readFreshShortsFeedCache(db, key);
-  // Shelf needs ~14 items; a thin cached page (e.g. from warm-cache) must not block refetch.
-  if (fresh && (input.purpose !== "shelf" || fresh.videos.length >= limit)) {
-    return fresh;
-  }
+  // A thin fresh shelf page (the row wants `limit` items) still answers
+  // immediately, but also kicks off the refetch below to fill the row.
+  const freshIsThinShelf =
+    fresh !== null && input.purpose === "shelf" && fresh.videos.length < limit;
+  if (fresh && !freshIsThinShelf) return fresh;
+
+  // Serve-stale-and-revalidate: whatever cached page we have answers now while
+  // the refetch runs. An empty stale shelf is no answer, so that one waits.
+  const servableCached = (): ShortsFeedResult | null => {
+    if (opts.revalidate === "wait") return null;
+    if (fresh) return fresh;
+    const stale = readStaleShortsFeedCache(db, key);
+    if (!stale) return null;
+    if (input.purpose === "shelf" && stale.videos.length === 0) return null;
+    return { ...stale, warning: undefined };
+  };
 
   const inFlight = inFlightShortsFeed.get(key);
-  if (inFlight) return inFlight;
+  if (inFlight) return servableCached() ?? inFlight;
 
   const task = (async (): Promise<ShortsFeedResult> => {
     const { invidiousBases } = resolveProxyBaseCandidates();
@@ -324,13 +341,5 @@ export async function fetchShortsFeed(
   })();
 
   registerInFlight(inFlightShortsFeed, key, task);
-
-  // Serve-stale-and-revalidate: an expired row answers instantly while the
-  // task above refreshes the cache in the background. Mirrors the fresh-read
-  // shelf condition — a thin cached shelf page must not mask the refetch.
-  const stale = readStaleShortsFeedCache(db, key);
-  if (stale && (input.purpose !== "shelf" || stale.videos.length >= limit)) {
-    return { ...stale, warning: undefined };
-  }
-  return task;
+  return servableCached() ?? task;
 }

@@ -8,7 +8,7 @@ import {
   type FocusableTextInputHandle,
 } from "@/components/focusable-text-input";
 import { setToken } from "@/lib/auth-token";
-import { OWNTUBE_BASE_URL } from "@/lib/config";
+import { baseUrl } from "@/lib/config";
 import { trpcClient } from "@/lib/trpc";
 import { colors, fontSize, monoFont, radius, spacing } from "@/theme";
 
@@ -67,11 +67,20 @@ function QrMatrix({ modules }: { modules: QrModules }) {
 }
 
 /**
- * V1 TV login: email + password typed on the remote's virtual keyboard, calls
- * the `auth.deviceLogin` procedure, and stores the returned device JWT. A
- * device-pairing flow (TV shows a code, confirm from phone) replaces this later.
+ * TV sign-in. Device pairing is the main path: the TV shows a code and QR
+ * (`auth.startDevicePairing`), polls `auth.pollDevicePairing` until the user
+ * confirms on another device, and replaces an expired code automatically.
+ * Email + password on the remote's keyboard (`auth.deviceLogin`) remains as a
+ * fallback. Either way the returned device JWT is stored.
  */
-export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
+export function LoginScreen({
+  onLoggedIn,
+  onChangeServer,
+}: {
+  onLoggedIn: () => void;
+  /** Back to the server screen, for a TV pointed at the wrong server. */
+  onChangeServer?: () => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +96,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     setPairingState({ status: "loading" });
     try {
       const pairing = await trpcClient.auth.startDevicePairing.mutate();
-      const verificationUrl = `${OWNTUBE_BASE_URL}${pairing.verificationPath}`;
+      const verificationUrl = `${baseUrl()}${pairing.verificationPath}`;
       setPairingState({
         status: "ready",
         userCode: pairing.userCode,
@@ -246,11 +255,25 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
           </View>
         </View>
       </View>
+      {/* Outside the panel, which already fills the screen's height. */}
+      {onChangeServer ? (
+        <FocusButton
+          label={`Server: ${baseUrl().replace(/^https?:\/\//, "")} · Change`}
+          onPress={onChangeServer}
+          style={styles.serverButton}
+        />
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  serverButton: {
+    position: "absolute",
+    right: spacing.screen,
+    bottom: spacing.screen,
+    minHeight: 40,
+  },
   container: {
     flex: 1,
     alignItems: "center",

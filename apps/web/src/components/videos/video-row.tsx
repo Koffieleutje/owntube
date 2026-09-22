@@ -108,7 +108,7 @@ export function VideoRow({
       ) : null}
 
       <div className="relative w-full shrink-0 sm:w-auto">
-        <Link href={target} className="block">
+        <Link prefetch={false} href={target} className="block">
           <div
             className={cn(
               "relative aspect-video w-full overflow-hidden rounded-xl bg-[hsl(var(--muted))]",
@@ -156,7 +156,11 @@ export function VideoRow({
               {dragHandle ?? leading}
             </span>
           ) : null}
-          <Link href={target} className="mt-1 block min-w-0 flex-1">
+          <Link
+            prefetch={false}
+            href={target}
+            className="mt-1 block min-w-0 flex-1"
+          >
             <p className="m-0 line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight transition group-hover:text-[hsl(var(--primary))]">
               {title}
             </p>
@@ -195,6 +199,7 @@ export function VideoRow({
         <p className="mt-0.5 line-clamp-1 text-xs text-[hsl(var(--muted-foreground))]">
           {channelId ? (
             <Link
+              prefetch={false}
               href={`/channel/${encodeURIComponent(channelId)}`}
               className="hover:text-[hsl(var(--foreground))] hover:underline"
             >

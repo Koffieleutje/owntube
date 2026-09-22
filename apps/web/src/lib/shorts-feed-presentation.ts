@@ -1,6 +1,9 @@
 import { diversifyVideosByChannel } from "@/lib/video-channel-diversity";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 
+/** Shorts the home shelf asks for; the cache-warmer warms the same request. */
+export const HOME_SHORTS_SHELF_LIMIT = 18;
+
 /** Max shorts per channel in a single feed page (home shelf and /shorts). */
 export const SHORTS_FEED_MAX_PER_CHANNEL = 2;
 

@@ -9,10 +9,19 @@ import {
 } from "react-native";
 import { FocusButton } from "@/components/FocusButton";
 import type { Section } from "@/components/Sidebar";
+import {
+  APP_VERSION,
+  type AvailableUpdate,
+  BUILD_ID,
+  checkForUpdate,
+  VERSION_CODE,
+} from "@/lib/app-version";
+import { getActiveProfile, type Profile } from "@/lib/auth-token";
+import { baseUrl } from "@/lib/config";
+import { errorMessage } from "@/lib/error-message";
 import { queryClient } from "@/lib/query-client";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
-import { errorMessage } from "@/lib/use-query";
 import { SidebarSettingsScreen } from "@/screens/SidebarSettingsScreen";
 import { colors, fontSize, radius, spacing } from "@/theme";
 
@@ -41,11 +50,25 @@ const QUALITIES: DefaultPlaybackQuality[] = [
 export function SettingsScreen({
   onSidebarChange,
   onSignOut,
+  onChangeServer,
+  onSwitchProfile,
 }: {
   /** Lets the shell re-render its rail as soon as the order changes. */
   onSidebarChange?: (order: Section[]) => void;
   onSignOut: () => void;
+  /** Signs out and returns to the server screen. */
+  onChangeServer: () => void;
+  /** Who's watching: another profile, or add one. */
+  onSwitchProfile: () => void;
 }) {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  useEffect(() => {
+    getActiveProfile().then(setProfile);
+  }, []);
+  const [update, setUpdate] = useState<AvailableUpdate | null>(null);
+  useEffect(() => {
+    checkForUpdate().then(setUpdate);
+  }, []);
   const [page, setPage] = useState<"root" | "sidebar">("root");
   const [settings, setSettings] = useState<TvSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +197,32 @@ export function SettingsScreen({
 
       <Text style={styles.section}>Account</Text>
       <View style={styles.row}>
+        {profile ? <Text style={styles.value}>{profile.label}</Text> : null}
+        <FocusButton label="Switch or add profile" onPress={onSwitchProfile} />
         <FocusButton label="Sign out" onPress={onSignOut} />
+      </View>
+
+      <Text style={styles.section}>Server</Text>
+      <View style={styles.row}>
+        <Text style={styles.value}>{baseUrl()}</Text>
+        <FocusButton label="Change server" onPress={onChangeServer} />
+      </View>
+
+      <Text style={styles.section}>About</Text>
+      <View style={styles.about}>
+        <Text style={styles.aboutText}>
+          OwnTube TV {APP_VERSION} ({VERSION_CODE})
+          {BUILD_ID ? ` · build ${BUILD_ID.slice(0, 7)}` : ""}
+        </Text>
+        {update ? (
+          <Text style={styles.update}>
+            Update available: {update.version}. Install it from {update.apkUrl}{" "}
+            (for example with the Downloader app).
+            {update.notes ? `\n${update.notes}` : ""}
+          </Text>
+        ) : (
+          <Text style={styles.muted}>Up to date.</Text>
+        )}
       </View>
 
       {error ? <Text style={styles.muted}>{error}</Text> : null}
@@ -233,4 +281,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   muted: { color: colors.mutedForeground, fontSize: fontSize.md },
+  value: {
+    color: colors.foreground,
+    fontSize: fontSize.md,
+    alignSelf: "center",
+    marginRight: spacing.md,
+  },
+  about: { gap: spacing.xs, marginBottom: spacing.xl },
+  aboutText: { color: colors.foreground, fontSize: fontSize.md },
+  update: { color: colors.brand, fontSize: fontSize.md },
 });

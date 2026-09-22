@@ -29,9 +29,22 @@ import {
 } from "@/server/settings/profile";
 import { protectedProcedure, router } from "@/server/trpc/init";
 
+/**
+ * A settings field without its `.default()`. Zod 4 fills defaults in even
+ * under `.optional()`, so a patch built from the defaulted schema would reset
+ * every field the caller left out.
+ */
+function withoutDefault<T extends z.ZodType>(
+  schema: T,
+): T extends z.ZodDefault<infer Inner> ? Inner : T {
+  return (
+    schema instanceof z.ZodDefault ? schema.unwrap() : schema
+  ) as T extends z.ZodDefault<infer Inner> ? Inner : T;
+}
+
 const settingsPatchSchema = z.object({
-  theme: appSettingsSchema.shape.theme.optional(),
-  visualTheme: appSettingsSchema.shape.visualTheme.optional(),
+  theme: withoutDefault(appSettingsSchema.shape.theme).optional(),
+  visualTheme: withoutDefault(appSettingsSchema.shape.visualTheme).optional(),
   invidiousBaseUrl: z.string().max(512).optional(),
   invidiousBaseUrls: z.array(z.string().max(512)).max(8).optional(),
   preferredInvidiousBaseUrl: z.string().max(512).optional(),
@@ -49,12 +62,16 @@ const settingsPatchSchema = z.object({
   sponsorBlockEnabled: z.boolean().optional(),
   sponsorBlockAutoSkip: z.boolean().optional(),
   sponsorBlockCategories: z.array(sponsorBlockCategorySchema).optional(),
-  enableSwipeGestures: appSettingsSchema.shape.enableSwipeGestures.optional(),
-  swipeGestures: appSettingsSchema.shape.swipeGestures.optional(),
-  quickActions: appSettingsSchema.shape.quickActions.optional(),
-  homeBlocks: appSettingsSchema.shape.homeBlocks.optional(),
-  bottomNav: appSettingsSchema.shape.bottomNav.optional(),
-  sectionPrefs: appSettingsSchema.shape.sectionPrefs.optional(),
+  enableSwipeGestures: withoutDefault(
+    appSettingsSchema.shape.enableSwipeGestures,
+  ).optional(),
+  swipeGestures: withoutDefault(
+    appSettingsSchema.shape.swipeGestures,
+  ).optional(),
+  quickActions: withoutDefault(appSettingsSchema.shape.quickActions).optional(),
+  homeBlocks: withoutDefault(appSettingsSchema.shape.homeBlocks).optional(),
+  bottomNav: withoutDefault(appSettingsSchema.shape.bottomNav).optional(),
+  sectionPrefs: withoutDefault(appSettingsSchema.shape.sectionPrefs).optional(),
 });
 
 const exportPayloadSchema = z.object({

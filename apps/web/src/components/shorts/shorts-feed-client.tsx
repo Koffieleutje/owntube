@@ -117,7 +117,9 @@ export function ShortsFeedClient({
   }, [router]);
 
   const utils = trpc.useUtils();
-  const settingsQuery = trpc.settings.get.useQuery();
+  const settingsQuery = trpc.settings.get.useQuery(undefined, {
+    enabled: signedIn,
+  });
   const preloadNext = settingsQuery.data?.shortsPreloadNext ?? true;
   const seenIdsQuery = trpc.shorts.seenVideoIds.useQuery(undefined, {
     enabled: signedIn,

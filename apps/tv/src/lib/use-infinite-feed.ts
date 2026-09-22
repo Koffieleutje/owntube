@@ -1,7 +1,8 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import { useMemo } from "react";
-import { errorMessage } from "@/lib/use-query";
+import { errorMessage } from "@/lib/error-message";
+import { useScreenActive } from "@/lib/screen-active";
 
 /** One fetched page: the videos plus the cursor for the next page (or none). */
 export type FeedPage<C> = { items: UnifiedVideo[]; next: C | undefined };
@@ -13,6 +14,9 @@ export type InfiniteFeed = {
   loadingMore: boolean;
   hasMore: boolean;
   loadMore: () => void;
+  /** Refetches after an error (the error screen's Retry). */
+  retry: () => void;
+  retrying: boolean;
 };
 
 /**
@@ -34,6 +38,7 @@ export function useInfiniteFeed<C>(
   /** Cache key; without one the feed is never shared or persisted. */
   cacheKey?: string,
 ): InfiniteFeed {
+  const active = useScreenActive();
   const query = useInfiniteQuery({
     // deps identify the variant (channel id, selected tag, search term). The
     // key is stable across remounts, so revisiting a screen hits the cache.
@@ -43,6 +48,9 @@ export function useInfiniteFeed<C>(
     getNextPageParam: (lastPage: FeedPage<C>) => lastPage.next,
     // Un-keyed feeds are per-caller: don't retain them for someone else.
     gcTime: cacheKey ? undefined : 0,
+    // A screen kept mounted in the background stops listening, and on
+    // showing again refetches if stale — the same as the remount it replaces.
+    subscribed: active,
   });
 
   const videos = useMemo(() => {
@@ -78,5 +86,9 @@ export function useInfiniteFeed<C>(
         void query.fetchNextPage();
       }
     },
+    retry: () => {
+      if (!query.isFetching) void query.refetch();
+    },
+    retrying: query.isError && query.isFetching,
   };
 }

@@ -2,7 +2,9 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamAgeRestrictedError } from "@/server/errors/upstream-age-restricted";
+import { UpstreamLiveUpcomingError } from "@/server/errors/upstream-live-upcoming";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
+import { UpstreamVideoUnavailableError } from "@/server/errors/upstream-video-unavailable";
 import {
   fetchRelatedVideos,
   fetchVideoComments,
@@ -12,6 +14,10 @@ import {
   videoCommentsInputSchema,
   videoDetailInputSchema,
 } from "@/server/services/proxy.types";
+import {
+  getUserSettings,
+  withoutBlockedChannels,
+} from "@/server/settings/profile";
 import { publicProcedure, router } from "@/server/trpc/init";
 
 const videoCommentsQuerySchema = videoCommentsInputSchema.extend({
@@ -32,6 +38,16 @@ export const videoRouter = router({
             message: e.message,
           });
         }
+        if (e instanceof UpstreamLiveUpcomingError) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: e.message,
+            cause: e,
+          });
+        }
+        if (e instanceof UpstreamVideoUnavailableError) {
+          throw new TRPCError({ code: "NOT_FOUND", message: e.message });
+        }
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });
         }
@@ -47,7 +63,15 @@ export const videoRouter = router({
   related: publicProcedure
     .input(videoDetailInputSchema)
     .query(async ({ ctx, input }) => {
-      return fetchRelatedVideos(ctx.db, input, 20);
+      const result = await fetchRelatedVideos(ctx.db, input, 20);
+      if (!ctx.userId) return result;
+      return {
+        ...result,
+        videos: withoutBlockedChannels(
+          result.videos,
+          getUserSettings(ctx.db, ctx.userId),
+        ),
+      };
     }),
   comments: publicProcedure
     .input(videoCommentsQuerySchema)
@@ -64,6 +88,16 @@ export const videoRouter = router({
           { cacheOnly: ctx.prefetchCacheOnly },
         );
       } catch (e) {
+        if (e instanceof UpstreamLiveUpcomingError) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: e.message,
+            cause: e,
+          });
+        }
+        if (e instanceof UpstreamVideoUnavailableError) {
+          throw new TRPCError({ code: "NOT_FOUND", message: e.message });
+        }
         if (e instanceof UpstreamUnavailableError) {
           throw new TRPCError({ code: "BAD_GATEWAY", message: e.message });
         }
