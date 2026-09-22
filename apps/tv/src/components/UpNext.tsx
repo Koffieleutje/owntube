@@ -31,6 +31,7 @@ export function UpNext({
   onCancel,
 }: Props) {
   const [remaining, setRemaining] = useState(UP_NEXT_COUNTDOWN_SECONDS);
+  const thumbnail = videoThumbnailUrl(video);
 
   useEffect(() => {
     if (!autoplay) return;
@@ -50,11 +51,15 @@ export function UpNext({
           {autoplay ? ` · playing in ${remaining}` : ""}
         </Text>
         <View style={styles.body}>
-          <Image
-            source={{ uri: videoThumbnailUrl(video) }}
-            style={styles.thumb}
-            resizeMethod="resize"
-          />
+          {thumbnail ? (
+            <Image
+              source={{ uri: thumbnail }}
+              style={styles.thumb}
+              resizeMethod="resize"
+            />
+          ) : (
+            <View style={styles.thumb} />
+          )}
           <View style={styles.copy}>
             <Text style={styles.title} numberOfLines={3}>
               {video.title}

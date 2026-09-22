@@ -1,12 +1,13 @@
 import { Feather } from "@expo/vector-icons";
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
-import { memo, useRef, useState } from "react";
+import { memo, useState } from "react";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   channelInitial,
   formatPublishedLabel,
   formatThumbnailBadge,
   formatViews,
+  videoThumbnailUrl,
 } from "@/lib/format";
 import { useWatchProgress } from "@/lib/watch-progress";
 import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
@@ -16,19 +17,6 @@ import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
 const CARD_WIDTH = 280;
 const THUMBNAIL_WIDTH = 264;
 const THUMBNAIL_HEIGHT = 148;
-
-/**
- * Feeds hand out `maxres` (1280x720), which every card then draws at 264x148 dp
- * — a 3.5 MB decoded bitmap for 39k pixels. Rows keep their cards mounted
- * (`removeClippedSubviews={false}`, needed for D-pad focus), so those bitmaps
- * pile up and the decode-and-upload per card is what makes scrolling stutter on
- * a low-power TV box. `mqdefault` is 320x180: same 16:9 framing, a size that
- * actually matches the card, ~16x less memory. (`hqdefault` is 4:3 and would
- * letterbox.) Anything that is not an Invidious thumbnail path is left alone.
- */
-function cardThumbnailUrl(url: string): string {
-  return url.replace(/\/vi\/([\w-]+)\/[a-z0-9]+\.jpg/i, "/vi/$1/mqdefault.jpg");
-}
 
 type Props = {
   video: UnifiedVideo;
@@ -56,16 +44,6 @@ export const VideoCard = memo(function VideoCard({
   onFocusChange,
 }: Props) {
   const [focused, setFocused] = useState(false);
-  /**
-   * `hasTVPreferredFocus` calls the native `requestFocus()` the moment the prop
-   * is applied, which is before layout — and a view without a size cannot take
-   * focus, so the request is dropped. On a screen that opens while its feed is
-   * still loading there is nothing else focusable in the content, so focus ends
-   * up on the sidebar and the user has to press back into the page they just
-   * opened. Ask again once, on first layout, when the card actually has a size.
-   */
-  const cardRef = useRef<View>(null);
-  const claimedFocus = useRef(false);
   const badge = formatThumbnailBadge(video);
   const views = formatViews(video.viewCount);
   const published = formatPublishedLabel(
@@ -74,16 +52,11 @@ export const VideoCard = memo(function VideoCard({
   );
   const metadata = [views, published].filter(Boolean).join(" - ");
   const watched = useWatchProgress(video.videoId);
+  const thumbnail = videoThumbnailUrl(video);
 
   return (
     <Pressable
-      ref={cardRef}
       hasTVPreferredFocus={hasTVPreferredFocus}
-      onLayout={() => {
-        if (!hasTVPreferredFocus || claimedFocus.current) return;
-        claimedFocus.current = true;
-        cardRef.current?.requestTVFocus?.();
-      }}
       onFocus={() => {
         setFocused(true);
         onFocusChange?.(true, index);
@@ -97,9 +70,9 @@ export const VideoCard = memo(function VideoCard({
       style={[styles.card, focused && styles.cardFocused]}
     >
       <View style={styles.thumbWrap}>
-        {video.thumbnailUrl ? (
+        {thumbnail ? (
           <Image
-            source={{ uri: cardThumbnailUrl(video.thumbnailUrl) }}
+            source={{ uri: thumbnail }}
             // Finished videos recede, like the web's watched cards; focus
             // brings one back to full strength.
             style={[
@@ -112,9 +85,6 @@ export const VideoCard = memo(function VideoCard({
             resizeMethod="resize"
           />
         ) : (
-          // No upstream thumbnail: a placeholder, never a constructed
-          // i.ytimg.com URL — that would fetch from Google straight from the
-          // TV box instead of going through the instance's image proxy.
           <View style={[styles.thumb, styles.thumbPlaceholder]} />
         )}
         {focused ? (
@@ -238,8 +208,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.muted,
   },
   thumb: { width: "100%", height: "100%" },
-  thumbWatched: { opacity: 0.45 },
   thumbPlaceholder: { backgroundColor: colors.surface },
+  thumbWatched: { opacity: 0.45 },
   // Sits on the thumbnail's bottom edge, like the web app's watched bar.
   progressTrack: {
     position: "absolute",
