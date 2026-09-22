@@ -2,7 +2,6 @@ import { useRef } from "react";
 import { StyleSheet, Text } from "react-native";
 import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
 import { CarouselFeed } from "@/components/CarouselFeed";
-import { baseUrl } from "@/lib/config";
 import type { Nav } from "@/lib/navigation";
 import { queryClient } from "@/lib/query-client";
 import { trpcClient } from "@/lib/trpc";
@@ -33,9 +32,7 @@ export function HistoryScreen({ nav }: { nav: Nav }) {
             items: rows.map((row) => ({
               videoId: row.videoId,
               title: row.videoTitle,
-              thumbnailUrl:
-                row.thumbnailUrl ??
-                `${baseUrl()}/invidious/vi/${row.videoId}/mqdefault.jpg`,
+              thumbnailUrl: row.thumbnailUrl,
               channelName: row.channelName,
             })),
             next: rows.length === PAGE_SIZE ? (page ?? 1) + 1 : undefined,
