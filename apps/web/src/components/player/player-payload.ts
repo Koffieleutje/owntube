@@ -20,6 +20,11 @@ export type ProxiedVariant =
 export type VideoPlayerPayload =
   | {
       mode: "hls";
+      /**
+       * A streaming manifest: an HLS playlist, or — for a live broadcast with
+       * no HLS — OwnTube's live DASH manifest (`/dash/<id>/live.mpd`). The
+       * player picks the engine from the URL (`isLiveDashManifestUrl`).
+       */
       src: string;
       /**
        * Post-Live-DVR (an ended livestream YouTube hasn't converted to VOD).

@@ -4,10 +4,11 @@ import {
   isRecognitionAvailable,
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
-import { useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { useEffect, useState } from "react";
+import { StyleSheet, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { FocusButton } from "@/components/FocusButton";
+import { FocusableTextInput } from "@/components/focusable-text-input";
 import type { Nav } from "@/lib/navigation";
 import { trpcClient } from "@/lib/trpc";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
@@ -20,29 +21,17 @@ import { colors, focus, fontSize, radius, spacing } from "@/theme";
 export function SearchScreen({
   nav,
   initialQuery,
-  onQueryChange,
 }: {
   nav: Nav;
   /** Set when the system hands us a voice search (see plugins/with-tv-search). */
   initialQuery?: string;
-  /**
-   * Lifts the submitted query to the shell. Opening a video unmounts this
-   * screen, so without this the query is gone on the way back and has to be
-   * retyped on an on-screen keyboard.
-   */
-  onQueryChange?: (query: string) => void;
 }) {
   const [text, setText] = useState(initialQuery ?? "");
   const [query, setQuery] = useState(initialQuery ?? "");
   const [inputFocused, setInputFocused] = useState(false);
-  const [fieldFocused, setFieldFocused] = useState(false);
   const [listening, setListening] = useState(false);
-  const inputRef = useRef<TextInput>(null);
-  // The D-pad target that stands in for the text field — see the field Pressable
-  // below for why the TextInput cannot be one itself.
-  const fieldRef = useRef<View>(null);
-  // Not every TV ships a recogniser, so the in-app mic hides rather than
-  // offering a control that can only fail.
+  // Not every TV ships a recogniser — this box has none — so the in-app mic
+  // hides rather than offering a control that can only fail.
   const [micAvailable] = useState(() => {
     try {
       return isRecognitionAvailable();
@@ -57,7 +46,7 @@ export function SearchScreen({
     const transcript = event.results[0]?.transcript ?? "";
     if (!transcript) return;
     setText(transcript);
-    if (event.isFinal) runQuery(transcript.trim());
+    if (event.isFinal) setQuery(transcript.trim());
   });
   useSpeechRecognitionEvent("end", () => setListening(false));
   useSpeechRecognitionEvent("error", (event) => {
@@ -109,61 +98,33 @@ export function SearchScreen({
     setQuery(initialQuery);
   }, [initialQuery]);
 
-  /** Every user-initiated search goes through here so the shell keeps it. */
-  const runQuery = (next: string) => {
-    setQuery(next);
-    onQueryChange?.(next);
-  };
-
-  const submit = () => runQuery(text.trim());
+  const submit = () => setQuery(text.trim());
 
   return (
     <View style={styles.container}>
       <View
         style={[
           styles.searchSurface,
-          (fieldFocused || inputFocused) && styles.searchSurfaceFocused,
+          inputFocused && styles.searchSurfaceFocused,
         ]}
       >
-        {/* A TextInput can never be a D-pad target: ReactEditText.requestFocus()
-            is a deliberate no-op (focus is JS-controlled, driven by taps), so
-            Android's focus search asks it to take focus, is told no, and skips
-            it. On a TV there are no taps, so the field was simply unreachable.
-            This Pressable is the focusable stand-in; pressing OK hands focus to
-            the field through the one path that does work, ref.focus() —
-            requestFocusFromJS — which also opens the keyboard. */}
-        <Pressable
-          ref={fieldRef}
-          style={styles.field}
+        <Feather name="search" size={28} color={colors.mutedForeground} />
+        {/* A bare TextInput can't take D-pad focus on Android (ReactEditText
+            refuses focus it didn't request), so moving right from the sidebar
+            went nowhere. The wrapper gives it a focusable surface. */}
+        <FocusableTextInput
+          containerStyle={styles.inputSurface}
+          inputStyle={styles.input}
+          placeholder="Search"
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={text}
+          onChangeText={setText}
+          onFocusChange={setInputFocused}
+          onSubmitEditing={submit}
+          returnKeyType="search"
           hasTVPreferredFocus
-          onPress={() => inputRef.current?.focus()}
-          onFocus={() => setFieldFocused(true)}
-          onBlur={() => setFieldFocused(false)}
-          accessibilityRole="search"
-          accessibilityLabel="Search"
-        >
-          <Feather name="search" size={28} color={colors.mutedForeground} />
-          <TextInput
-            ref={inputRef}
-            style={styles.input}
-            placeholder="Search"
-            placeholderTextColor={colors.mutedForeground}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={text}
-            onChangeText={setText}
-            onFocus={() => setInputFocused(true)}
-            // Leaving the keyboard (submit, or Back) would otherwise strand
-            // focus on the window, where the D-pad does nothing at all. Hand it
-            // back to the stand-in the user was on.
-            onBlur={() => {
-              setInputFocused(false);
-              fieldRef.current?.requestTVFocus?.();
-            }}
-            onSubmitEditing={submit}
-            returnKeyType="search"
-          />
-        </Pressable>
+        />
         {micAvailable ? (
           <FocusButton
             label={listening ? "Listening..." : "Speak"}
@@ -215,14 +176,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 10,
   },
-  field: {
+  // The bar draws the focus ring, so the wrapper's own surface stays invisible.
+  inputSurface: {
     flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
+    minHeight: 0,
+    paddingHorizontal: 0,
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    shadowOpacity: 0,
+    elevation: 0,
   },
   input: {
-    flex: 1,
     color: colors.foreground,
     fontSize: fontSize.lg,
     paddingVertical: spacing.md,

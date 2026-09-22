@@ -93,10 +93,10 @@ async function main() {
 
   const uniqueRaw = pickNewestVideoPerChannel(
     [...byId.values()].filter(
-        (v) =>
-          !watchedEver.has(v.videoId) &&
-          !(v.channelId && blocked.has(v.channelId)),
-      ),
+      (v) =>
+        !watchedEver.has(v.videoId) &&
+        !(v.channelId && blocked.has(v.channelId)),
+    ),
     { nowSec, maxPerChannel: 1 },
   );
 

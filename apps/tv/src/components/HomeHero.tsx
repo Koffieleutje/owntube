@@ -39,6 +39,7 @@ export function HomeHero({ video, label, onPress }: HomeHeroProps) {
           source={{ uri: video.thumbnailUrl }}
           style={styles.image}
           resizeMode="cover"
+          resizeMethod="resize"
         />
       ) : (
         <View style={[styles.image, styles.placeholder]} />
@@ -86,7 +87,13 @@ function ChannelAvatar({
   channelName?: string;
 }) {
   if (imageUrl) {
-    return <Image source={{ uri: imageUrl }} style={styles.avatar} />;
+    return (
+      <Image
+        source={{ uri: imageUrl }}
+        style={styles.avatar}
+        resizeMethod="resize"
+      />
+    );
   }
   return (
     <View style={[styles.avatar, styles.avatarFallback]}>

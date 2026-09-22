@@ -1,5 +1,5 @@
-import { createServerSideHelpers } from "@trpc/react-query/server";
 import { HydrationBoundary } from "@tanstack/react-query";
+import { createServerSideHelpers } from "@trpc/react-query/server";
 import { redirect } from "next/navigation";
 import superjson from "superjson";
 import { HomeBlocksClient } from "@/components/home/home-blocks-client";

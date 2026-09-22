@@ -1,6 +1,12 @@
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
-import { useRef } from "react";
-import { FlatList, StyleSheet, Text, View } from "react-native";
+import { memo, useCallback, useRef } from "react";
+import {
+  FlatList,
+  type ListRenderItem,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { VIDEO_CARD_WIDTH, VideoCard } from "@/components/VideoCard";
 import { colors, fontSize, spacing } from "@/theme";
 
@@ -18,8 +24,12 @@ type Props = {
  * A D-pad horizontally-scrollable row of video cards (optionally titled).
  * FlatList keeps long upstream feeds virtualized, and TV focus naturally scrolls
  * the row as the user moves right past the viewport edge.
+ *
+ * Memoized, with callbacks routed through refs so every card receives the same
+ * function identities across renders — otherwise each parent render would
+ * re-render every card in every row.
  */
-export function VideoRow({
+export const VideoRow = memo(function VideoRow({
   title,
   videos,
   onSelect,
@@ -27,19 +37,44 @@ export function VideoRow({
   onCardFocusChange,
 }: Props) {
   const listRef = useRef<FlatList<UnifiedVideo>>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const onCardFocusChangeRef = useRef(onCardFocusChange);
+  onCardFocusChangeRef.current = onCardFocusChange;
+
+  const handlePress = useCallback(
+    (videoId: string) => onSelectRef.current(videoId),
+    [],
+  );
 
   /**
    * TV focus can move to a card outside the viewport without the list
    * scrolling, so the card lands off screen. Drive the scroll from focus and
    * centre the focused card.
    */
-  const revealIndex = (index: number) => {
-    listRef.current?.scrollToIndex({
-      index,
-      animated: true,
-      viewPosition: 0.5,
-    });
-  };
+  const handleFocusChange = useCallback((focused: boolean, index: number) => {
+    if (focused) {
+      listRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.5,
+      });
+    }
+    onCardFocusChangeRef.current?.(focused);
+  }, []);
+
+  const renderItem = useCallback<ListRenderItem<UnifiedVideo>>(
+    ({ item, index }) => (
+      <VideoCard
+        video={item}
+        index={index}
+        onPress={handlePress}
+        hasTVPreferredFocus={preferFirstFocus && index === 0}
+        onFocusChange={handleFocusChange}
+      />
+    ),
+    [handlePress, handleFocusChange, preferFirstFocus],
+  );
 
   return (
     <View style={styles.row}>
@@ -48,7 +83,7 @@ export function VideoRow({
         ref={listRef}
         horizontal
         data={videos}
-        keyExtractor={(video) => video.videoId}
+        keyExtractor={keyExtractor}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         // TV focus can only land on an attached view. With clipping on, the
@@ -58,30 +93,28 @@ export function VideoRow({
         initialNumToRender={8}
         windowSize={9}
         ItemSeparatorComponent={Separator}
-        renderItem={({ item, index }) => (
-          <VideoCard
-            video={item}
-            onPress={onSelect}
-            hasTVPreferredFocus={preferFirstFocus && index === 0}
-            onFocusChange={(focused) => {
-              if (focused) revealIndex(index);
-              onCardFocusChange?.(focused);
-            }}
-          />
-        )}
-        onScrollToIndexFailed={() => {}}
-        getItemLayout={(_, index) => ({
-          length: VIDEO_CARD_WIDTH + spacing.md,
-          offset: (VIDEO_CARD_WIDTH + spacing.md) * index,
-          index,
-        })}
+        renderItem={renderItem}
+        onScrollToIndexFailed={ignore}
+        getItemLayout={getItemLayout}
       />
     </View>
   );
+});
+
+const ITEM_LENGTH = VIDEO_CARD_WIDTH + spacing.md;
+
+function keyExtractor(video: UnifiedVideo) {
+  return video.videoId;
 }
 
+function getItemLayout(_: unknown, index: number) {
+  return { length: ITEM_LENGTH, offset: ITEM_LENGTH * index, index };
+}
+
+function ignore() {}
+
 function Separator() {
-  return <View style={{ width: spacing.md }} />;
+  return <View style={styles.separator} />;
 }
 
 const styles = StyleSheet.create({
@@ -90,6 +123,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 3,
   },
+  separator: { width: spacing.md },
   heading: {
     color: colors.foreground,
     fontSize: fontSize.lg,

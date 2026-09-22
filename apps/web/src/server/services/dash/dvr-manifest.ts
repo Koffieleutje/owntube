@@ -54,7 +54,11 @@ async function fetchFreshCompanionManifest(
       });
       if (r.ok) {
         const mpd = await r.text();
-        if (mpd.includes("<MPD")) return mpd;
+        // For a live broadcast the companion answers 200 with an empty
+        // `<Period/>` — a manifest in name only, which must not be served.
+        if (mpd.includes("<MPD") && mpd.includes("<Representation")) {
+          return mpd;
+        }
       } else {
         await r.body?.cancel?.();
       }

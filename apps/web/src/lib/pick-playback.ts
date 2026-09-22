@@ -348,12 +348,19 @@ function buildAllSplitVariants(
 }
 
 /**
- * Vidstack 0.6 supports HLS (hls.js) and progressive video, but has no
- * DASH/MPD provider. We must not feed Invidious `dashUrl` to the player.
- * Split (video + audio) uses native <video> + <audio> sync for adaptive-only.
+ * Invidious's own `dashUrl` is never fed to the player: its segments are
+ * IP-locked googlevideo URLs. DASH playback goes through OwnTube's `/dash`
+ * route instead — derived from the `/hls` path for VOD (`hls-vod-block.tsx`),
+ * or `dash-live` for a live broadcast. Split (video + audio) uses native
+ * <video> + <audio> sync for adaptive-only.
  */
 export type WatchPlayback =
   | { kind: "hls"; url: string; onlyDashOrUnsupported: false }
+  /**
+   * A live broadcast with no HLS: YouTube's own dynamic DASH manifest, via
+   * invidious-companion (`/dash/<id>/live.mpd`, see `live-manifest.ts`).
+   */
+  | { kind: "dash-live"; url: string; onlyDashOrUnsupported: false }
   | {
       kind: "progressive";
       variants: PlayableVariant[];
@@ -532,6 +539,22 @@ function canSynthesizeManifest(detail: VideoDetail): boolean {
   return hasIndexedVideo && hasIndexedAudio;
 }
 
+/** OwnTube's live DASH manifest for a broadcast (see `/dash` route). */
+export function liveDashManifestPath(videoId: string): string {
+  return `/dash/${encodeURIComponent(videoId)}/live.mpd`;
+}
+
+/** True for a URL (relative or absolute) produced by `liveDashManifestPath`. */
+export function isLiveDashManifestUrl(url: string): boolean {
+  try {
+    return /^\/dash\/[^/]+\/live\.mpd$/.test(
+      new URL(url, "http://local.invalid").pathname,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function firstHlsUrlFromDetail(detail: VideoDetail): string | undefined {
   if (detail.hlsUrl) return detail.hlsUrl;
   for (const s of detail.videoSources) {
@@ -554,14 +577,15 @@ export function buildWatchPlayback(
   },
 ): WatchPlayback {
   if (detail.isLive) {
-    const hls = firstHlsUrlFromDetail(detail);
-    if (hls) {
-      return { kind: "hls", url: hls, onlyDashOrUnsupported: false };
-    }
-    if (detail.dashUrl) {
-      return { kind: "none", onlyDashOrUnsupported: true };
-    }
-    return { kind: "none", onlyDashOrUnsupported: false };
+    // Always the companion's live DASH, even when Invidious offers an
+    // `hlsUrl`: whether it does depends on which YouTube client the companion
+    // fell back to, and those HLS segments 403 when fetched from the server.
+    // The live manifest doesn't depend on anything in `detail`.
+    return {
+      kind: "dash-live",
+      url: liveDashManifestPath(detail.videoId),
+      onlyDashOrUnsupported: false,
+    };
   }
 
   const buildMerged = (keep: (s: VideoStreamSource) => boolean) => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { HomeHero } from "@/components/HomeHero";
@@ -74,7 +74,9 @@ export function HomeScreen({ nav }: { nav: Nav }) {
     feed.loadMore,
   ]);
 
-  const [heroVideo, ...railVideos] = feed.videos;
+  const heroVideo = feed.videos[0];
+  // Memoized so the carousel sees the same array until the feed changes.
+  const railVideos = useMemo(() => feed.videos.slice(1), [feed.videos]);
   const header = heroVideo ? (
     <View style={styles.header}>
       <HomeHero

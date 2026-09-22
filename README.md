@@ -131,6 +131,7 @@ src/
   trpc/                Client-side tRPC + React Query setup
 docs/
   SELF-HOSTING.md      Self-hosted Invidious / Piped guide + backup cron
+  LIVE-AND-DVR-PLAYBACK.md  How live and post-live DVR streams play (via invidious-companion)
 e2e/                   Playwright tests
 scripts/               Setup + migration scripts
 ```

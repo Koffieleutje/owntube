@@ -226,7 +226,7 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
     rawPlayback.onlyDashOrUnsupported;
   const videoPayload =
     detail && rawPlayback
-      ? rawPlayback.kind === "hls"
+      ? rawPlayback.kind === "hls" || rawPlayback.kind === "dash-live"
         ? {
             mode: "hls" as const,
             src: toProxiedOrDirectPlayback(

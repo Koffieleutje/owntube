@@ -5,9 +5,7 @@
     "version": "0.1.0",
     "orientation": "landscape",
     "userInterfaceStyle": "dark",
-    "platforms": [
-      "android"
-    ],
+    "platforms": ["android"],
     "android": {
       "package": "com.mdbraber.owntube.tv",
       "icon": "./assets/icon.png"

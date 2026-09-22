@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { BottomNavEditor } from "@/components/settings/bottom-nav-editor";
 import { PageHeader } from "@/components/layout/page-header";
+import { BottomNavEditor } from "@/components/settings/bottom-nav-editor";
 import { SettingsPanel } from "@/components/settings/settings-panel";
 import { TakeoutImportPanel } from "@/components/settings/takeout-import-panel";
 import { Button } from "@/components/ui/button";

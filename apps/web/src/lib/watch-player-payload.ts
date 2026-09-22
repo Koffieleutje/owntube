@@ -30,7 +30,7 @@ export function buildVideoPlayerPayloadFromDetail(
   });
   const onlyDashOrUnsupported =
     rawPlayback.kind === "none" && rawPlayback.onlyDashOrUnsupported;
-  if (rawPlayback.kind === "hls") {
+  if (rawPlayback.kind === "hls" || rawPlayback.kind === "dash-live") {
     return {
       payload: {
         mode: "hls",

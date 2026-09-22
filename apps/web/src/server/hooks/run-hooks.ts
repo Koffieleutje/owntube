@@ -119,6 +119,10 @@ function runOne(script: string, event: HookEvent): Promise<void> {
       }
       resolve();
     });
+    // A hook may exit without reading stdin; the write then fails with EPIPE,
+    // and an unhandled stream error would take down the server. The event is
+    // in the environment too, so there's nothing to report.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(JSON.stringify(event));
   });
 }

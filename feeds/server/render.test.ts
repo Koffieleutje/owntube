@@ -136,4 +136,3 @@ test("no self URL means no invented artwork", () => {
   const xml = renderRss(noImage, "video", {});
   assert.ok(!xml.includes("/icon.png"));
 });
-

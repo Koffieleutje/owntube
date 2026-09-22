@@ -49,7 +49,7 @@ export function middleware(req: NextRequest): NextResponse {
   //   /@handle[/tab]   -> /channel/@handle
   //   /c/Name[/tab]    -> /channel/Name
   //   /user/Name[/tab] -> /channel/Name
-  if (first && first.startsWith("@") && first.length > 1) {
+  if (first?.startsWith("@") && first.length > 1) {
     const to = url.clone();
     to.pathname = `/channel/${first}`;
     to.search = "";

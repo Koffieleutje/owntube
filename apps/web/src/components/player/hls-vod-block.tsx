@@ -10,9 +10,10 @@ import {
   useShortsNativeAutoplay,
 } from "@/components/player/player-media-hooks";
 import type { CaptionTrack } from "@/components/player/player-payload";
-import type {
-  AudioModel,
-  QualityModel,
+import {
+  type AudioModel,
+  dashQualityModel,
+  type QualityModel,
 } from "@/components/player/player-quality";
 import type { SponsorBlockChromeProps } from "@/components/player/player-types";
 import { useBackgroundPlayback } from "@/hooks/use-background-playback";
@@ -199,6 +200,7 @@ export function HlsVodBlock({
   useEffect(() => {
     setShortsWantsPlay(true);
   }, [reactKey]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the <video> is keyed by reactKey, so a new stream is a new element to re-attach to.
   useEffect(() => {
     if (!shortsMode) return;
     const el = videoRef.current;
@@ -234,37 +236,12 @@ export function HlsVodBlock({
     defaultQualityHeightCap,
     fullscreenAutoBestQuality,
   );
-  // "Auto" (capped default) is a synthetic item at index 0, followed by
-  // dash.js's own representation list. QualityModel is index-based (menu
-  // position), but useDashPlayback works in representation ids (stable
-  // regardless of dash.js's live, bitrate-filtered array reordering) — this
-  // is the translation layer between the two. No selector at all for the
-  // HLS-only case (AVC caps at 1080p — nothing to select among) or before
-  // the manifest has parsed (empty items).
-  const dashQualityModel: QualityModel = useMemo(() => {
-    if (!dashSrc || dashQuality.items.length === 0) return { kind: "none" };
-    const activeItemIndex = dashQuality.items.findIndex(
-      (it) => it.id === dashQuality.activeId,
-    );
-    return {
-      kind: "progressive",
-      items: [{ label: "Auto" }, ...dashQuality.items],
-      index:
-        dashQuality.mode === "auto"
-          ? 0
-          : activeItemIndex >= 0
-            ? activeItemIndex + 1
-            : 0,
-      setIndex: (i: number) => {
-        if (i === 0) {
-          dashQuality.setQuality(null);
-          return;
-        }
-        const picked = dashQuality.items[i - 1];
-        if (picked) dashQuality.setQuality(picked.id);
-      },
-    };
-  }, [dashSrc, dashQuality]);
+  // No selector for the HLS-only case (AVC caps at 1080p — nothing to select
+  // among); see dashQualityModel for the DASH menu itself.
+  const qualityModel: QualityModel = useMemo(
+    () => (dashSrc ? dashQualityModel(dashQuality) : { kind: "none" }),
+    [dashSrc, dashQuality],
+  );
 
   // Language picker rows come from whichever engine is active: dash.js's
   // manifest tracks on the DASH upgrade path, hls.js/native renditions
@@ -364,7 +341,6 @@ export function HlsVodBlock({
             : "aspect-video w-full bg-black",
       )}
     >
-      {/* biome-ignore lint/a11y/useMediaCaption: subtitle <track>s are provided dynamically from the `captions` prop (mapped children the rule can't statically see). */}
       <video
         key={reactKey}
         ref={videoRef}
@@ -400,7 +376,7 @@ export function HlsVodBlock({
         videoId={videoId}
         sponsorSegments={sponsorSegments}
         sponsorBlockPrefs={sponsorBlockPrefs}
-        quality={dashQualityModel}
+        quality={qualityModel}
         audio={audioModel}
         captions={captionModel}
         settingsOpen={settingsOpen}

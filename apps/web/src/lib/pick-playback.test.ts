@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildWatchPlayback,
+  isLiveDashManifestUrl,
   pickPlaybackForVidstack,
 } from "@/lib/pick-playback";
 import type { VideoDetail } from "@/server/services/proxy.types";
@@ -34,7 +35,9 @@ function noIndexBase(over: Partial<VideoDetail>): VideoDetail {
 }
 
 describe("buildWatchPlayback", () => {
-  it("forces HLS for live streams even when progressive exists", () => {
+  it("plays live from the live DASH manifest even when HLS and progressive exist", () => {
+    // Invidious's live hlsUrl depends on the companion's fallback client, and
+    // its segments 403 from the server.
     const w = buildWatchPlayback(
       base({
         isLive: true,
@@ -43,8 +46,28 @@ describe("buildWatchPlayback", () => {
       }),
     );
     expect(w).toEqual({
-      kind: "hls",
-      url: "https://h.example/live.m3u8",
+      kind: "dash-live",
+      url: "/dash/x/live.mpd",
+      onlyDashOrUnsupported: false,
+    });
+  });
+
+  it("plays a live stream with no HLS from the live DASH manifest", () => {
+    // What invidious-companion returns for a broadcast: a dashUrl, no hlsUrl,
+    // and adaptive rows with no byte ranges.
+    const w = buildWatchPlayback(
+      base({
+        videoId: "Ao58WyRJdg8",
+        isLive: true,
+        dashUrl: "https://inv.example/api/manifest/dash/id/Ao58WyRJdg8",
+        videoSources: [
+          { url: "https://g.example/vp", quality: "720p", videoOnly: true },
+        ],
+      }),
+    );
+    expect(w).toEqual({
+      kind: "dash-live",
+      url: "/dash/Ao58WyRJdg8/live.mpd",
       onlyDashOrUnsupported: false,
     });
   });
@@ -865,5 +888,22 @@ describe("pickPlaybackForVidstack (compat)", () => {
       }),
     );
     expect(r.src).toBe("https://g.example/1080.mp4");
+  });
+});
+
+describe("isLiveDashManifestUrl", () => {
+  it("matches the live manifest, relative or on the media origin", () => {
+    expect(isLiveDashManifestUrl("/dash/Ao58WyRJdg8/live.mpd")).toBe(true);
+    expect(
+      isLiveDashManifestUrl("https://media.example/dash/Ao58WyRJdg8/live.mpd"),
+    ).toBe(true);
+  });
+
+  it("does not match VOD manifests or HLS", () => {
+    expect(
+      isLiveDashManifestUrl("/dash/Ao58WyRJdg8/manifest.mpd?video=vp9"),
+    ).toBe(false);
+    expect(isLiveDashManifestUrl("/hls/Ao58WyRJdg8/master.m3u8")).toBe(false);
+    expect(isLiveDashManifestUrl("https://h.example/live.m3u8")).toBe(false);
   });
 });

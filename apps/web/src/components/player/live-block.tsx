@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNativeAdapter } from "@/components/player/player-adapters";
 import { usePlayerCaptions } from "@/components/player/player-captions";
 import { PlayerChrome } from "@/components/player/player-chrome";
 import { useReportVideoIntrinsics } from "@/components/player/player-media-hooks";
+import { dashQualityModel } from "@/components/player/player-quality";
 import type { HlsBlockProps } from "@/components/player/player-types";
-import { useLiveHlsPlayback } from "@/hooks/use-live-hls-playback";
+import { useDashPlayback } from "@/hooks/use-dash-playback";
 import {
   readPlayerMediaPrefs,
   writePlayerVolumeOnly,
@@ -14,10 +15,10 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Live streams on Firefox may use native `<video>` HLS when Vidstack's MSE check
- * fails, which skips our segment proxy. Force hls.js with same-origin loaders.
+ * A live broadcast: OwnTube's live DASH manifest (`/dash/<id>/live.mpd`, see
+ * `live-manifest.ts`) on dash.js, with the same quality menu as VOD DASH.
  */
-export function LiveHlsDirectBlock({
+export function LiveBlock({
   src,
   poster,
   title,
@@ -41,7 +42,11 @@ export function LiveHlsDirectBlock({
   onPlayNext,
   restoredVolume,
   onVideoIntrinsics,
-}: HlsBlockProps) {
+  defaultQualityHeightCap,
+}: HlsBlockProps & {
+  /** DASH ABR ceiling — null means uncapped. */
+  defaultQualityHeightCap?: number | null;
+}) {
   const shellRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -52,7 +57,18 @@ export function LiveHlsDirectBlock({
     window.setTimeout(() => onPlaybackError(), 0);
   }, [onPlaybackError]);
 
-  useLiveHlsPlayback(videoRef, src, reactKey, emitPlaybackError);
+  // Autoplay is the effect below; no start time, so dash.js joins at the live
+  // edge.
+  const dash = useDashPlayback(
+    videoRef,
+    src,
+    reactKey,
+    undefined,
+    false,
+    emitPlaybackError,
+    defaultQualityHeightCap,
+  );
+  const quality = useMemo(() => dashQualityModel(dash), [dash]);
 
   const adapter = useNativeAdapter({
     videoRef,
@@ -138,7 +154,7 @@ export function LiveHlsDirectBlock({
         videoId={videoId}
         sponsorSegments={sponsorSegments}
         sponsorBlockPrefs={sponsorBlockPrefs}
-        quality={{ kind: "none" }}
+        quality={quality}
         audio={{ kind: "none" }}
         captions={captionModel}
         settingsOpen={settingsOpen}

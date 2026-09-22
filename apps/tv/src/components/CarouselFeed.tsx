@@ -1,9 +1,10 @@
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  type ListRenderItem,
   StyleSheet,
   Text,
   View,
@@ -38,7 +39,35 @@ export function CarouselFeed({
   preferFirstRowFocus = true,
 }: Props) {
   const listVideos = videos ?? feed.videos;
-  const rows = useMemo(() => chunk(listVideos, ROW_SIZE), [listVideos]);
+  const previousRows = useRef<UnifiedVideo[][]>([]);
+  const rows = useMemo(() => {
+    // Reuse unchanged shelves so appending a page only renders the new ones.
+    const next = chunk(listVideos, ROW_SIZE).map((row, i) => {
+      const prev = previousRows.current[i];
+      return prev && sameVideos(prev, row) ? prev : row;
+    });
+    previousRows.current = next;
+    return next;
+  }, [listVideos]);
+
+  // Screens pass inline handlers; a stable one keeps the memoized shelves
+  // from re-rendering on every screen render.
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const handleSelect = useCallback(
+    (videoId: string) => onSelectRef.current(videoId),
+    [],
+  );
+  const renderItem = useCallback<ListRenderItem<UnifiedVideo[]>>(
+    ({ item, index }) => (
+      <VideoRow
+        videos={item}
+        onSelect={handleSelect}
+        preferFirstFocus={preferFirstRowFocus && index === 0}
+      />
+    ),
+    [handleSelect, preferFirstRowFocus],
+  );
 
   if (feed.status === "loading") {
     // Header keeps its place; the spinner centres in the space left over,
@@ -78,17 +107,11 @@ export function CarouselFeed({
   return (
     <FlatList
       data={rows}
-      keyExtractor={(_, index) => `shelf-${index}`}
+      keyExtractor={shelfKey}
       ListHeaderComponent={
         header ? <View style={styles.header}>{header}</View> : null
       }
-      renderItem={({ item, index }) => (
-        <VideoRow
-          videos={item}
-          onSelect={onSelect}
-          preferFirstFocus={preferFirstRowFocus && index === 0}
-        />
-      )}
+      renderItem={renderItem}
       ItemSeparatorComponent={Gap}
       contentContainerStyle={styles.list}
       showsVerticalScrollIndicator={false}
@@ -113,7 +136,19 @@ export function CarouselFeed({
 }
 
 function Gap() {
-  return <View style={{ height: spacing.xl }} />;
+  return <View style={styles.gap} />;
+}
+
+function shelfKey(_: UnifiedVideo[], index: number) {
+  return `shelf-${index}`;
+}
+
+function sameVideos(a: UnifiedVideo[], b: UnifiedVideo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function chunk(videos: UnifiedVideo[], size: number): UnifiedVideo[][] {
@@ -126,6 +161,7 @@ function chunk(videos: UnifiedVideo[], size: number): UnifiedVideo[][] {
 
 const styles = StyleSheet.create({
   list: { paddingBottom: spacing.screen },
+  gap: { height: spacing.xl },
   header: { marginBottom: spacing.lg },
   footer: { paddingVertical: spacing.lg },
   centered: {

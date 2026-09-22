@@ -250,6 +250,32 @@ export function WatchScreen({
       focusedButtonsRef.current + (focused ? 1 : -1),
     );
   };
+  // Stable (refs and state setters only) so the memoized related row and its
+  // cards don't re-render with every player tick.
+  const onRelatedCardFocusChange = useCallback((focused: boolean) => {
+    relatedFocusCount.current = Math.max(
+      0,
+      relatedFocusCount.current + (focused ? 1 : -1),
+    );
+    if (relatedFocusCount.current > 0) {
+      if (relatedCollapseTimerRef.current) {
+        clearTimeout(relatedCollapseTimerRef.current);
+        relatedCollapseTimerRef.current = null;
+      }
+      setRelatedFocused(true);
+    } else {
+      if (relatedCollapseTimerRef.current) {
+        clearTimeout(relatedCollapseTimerRef.current);
+      }
+      relatedCollapseTimerRef.current = setTimeout(() => {
+        setRelatedFocused(false);
+      }, RELATED_COLLAPSE_DELAY_MS);
+    }
+    focusedButtonsRef.current = Math.max(
+      0,
+      focusedButtonsRef.current + (focused ? 1 : -1),
+    );
+  }, []);
   // Read by the key handler, which must see the value for the current render.
   const scrubberFocusedRef = useRef(false);
   scrubberFocusedRef.current = scrubberFocused;
@@ -410,7 +436,7 @@ export function WatchScreen({
   }, [videoId]);
 
   const relatedQuery = trpc.video.related.useQuery({ videoId });
-  const related: UnifiedVideo[] = relatedQuery.data?.videos ?? [];
+  const related: UnifiedVideo[] = relatedQuery.data?.videos ?? NO_VIDEOS;
 
   // Load the stream and resume from the saved offset.
   useEffect(() => {
@@ -460,7 +486,10 @@ export function WatchScreen({
   useEffect(() => {
     const sub = player.addListener("timeUpdate", ({ currentTime }) => {
       currentTimeRef.current = currentTime;
-      setCurrentTime(currentTime);
+      // The clock only feeds the overlay. While it's hidden, skip the state
+      // update: each one re-renders this whole screen, once a second, for
+      // nothing on screen. Revealing the overlay resyncs it (see below).
+      if (controlsVisibleRef.current) setCurrentTime(currentTime);
       const hit = segmentsRef.current.find(
         (s) =>
           currentTime >= s.startSeconds && currentTime < s.endSeconds - 0.5,
@@ -608,6 +637,7 @@ export function WatchScreen({
 
   // Show the overlay, then auto-hide after a few seconds of inactivity.
   const revealControls = useCallback(() => {
+    setCurrentTime(currentTimeRef.current);
     setControlsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hideTimerRef.current = setTimeout(() => {
@@ -638,6 +668,7 @@ export function WatchScreen({
       revealControls();
     } else {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      setCurrentTime(currentTimeRef.current);
       setControlsVisible(true);
     }
   }, [isPlaying, revealControls]);
@@ -1129,27 +1160,7 @@ export function WatchScreen({
                 <VideoRow
                   videos={related}
                   onSelect={onOpenVideo}
-                  onCardFocusChange={(focused) => {
-                    relatedFocusCount.current = Math.max(
-                      0,
-                      relatedFocusCount.current + (focused ? 1 : -1),
-                    );
-                    if (relatedFocusCount.current > 0) {
-                      if (relatedCollapseTimerRef.current) {
-                        clearTimeout(relatedCollapseTimerRef.current);
-                        relatedCollapseTimerRef.current = null;
-                      }
-                      setRelatedFocused(true);
-                    } else {
-                      if (relatedCollapseTimerRef.current) {
-                        clearTimeout(relatedCollapseTimerRef.current);
-                      }
-                      relatedCollapseTimerRef.current = setTimeout(() => {
-                        setRelatedFocused(false);
-                      }, RELATED_COLLAPSE_DELAY_MS);
-                    }
-                    onButtonFocusChange(focused);
-                  }}
+                  onCardFocusChange={onRelatedCardFocusChange}
                 />
               </View>
             </Animated.View>
@@ -1160,6 +1171,7 @@ export function WatchScreen({
   );
 }
 
+const NO_VIDEOS: UnifiedVideo[] = [];
 const AVATAR = 44;
 /** Rendered size of a scrub preview; sprite cells are scaled to fit this. */
 const PREVIEW_WIDTH = 240;
@@ -1449,14 +1461,22 @@ function buildPlaybackOptions(detail: VideoDetail): PlaybackOption[] {
   };
 
   // Live streams have no fixed-duration adaptiveFormats to build a VOD DASH/HLS
-  // manifest from (no init/index byte ranges) — /dash and /hls 502. The only
-  // playable source is the raw upstream live HLS URL. Mirrors
-  // apps/web/src/lib/pick-playback.ts's `detail.isLive` branch.
+  // manifest from (no init/index byte ranges) — /dash/…/manifest.mpd and /hls
+  // 502. OwnTube serves YouTube's own live DASH, via invidious-companion, at
+  // /dash/<id>/live.mpd; the raw upstream live HLS URL's segments 403, so it
+  // is only a last resort. Mirrors apps/web/src/lib/pick-playback.ts's
+  // `dash-live` branch.
   if (detail.isLive) {
+    addOption({
+      id: "live-dash",
+      label: "Live",
+      videoUrl: `${OWNTUBE_BASE_URL}/dash/${encodeURIComponent(detail.videoId)}/live.mpd`,
+      kind: "auto",
+    });
     if (detail.hlsUrl) {
       addOption({
         id: "live-hls",
-        label: "Live",
+        label: "Live (HLS)",
         videoUrl: detail.hlsUrl,
         kind: "auto",
       });

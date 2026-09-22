@@ -770,7 +770,7 @@ export function PlayerChrome({
                     viewBox="0 0 24 24"
                     fill="currentColor"
                     className="h-5 w-5"
-                    aria-hidden
+                    aria-hidden="true"
                   >
                     <circle cx="12" cy="5" r="2" />
                     <circle cx="12" cy="12" r="2" />
@@ -906,99 +906,97 @@ function PlayerMobileMenu({
       panelClassName="border-white/10 bg-zinc-950/95 text-zinc-100 backdrop-blur-md"
       contentClassName="text-sm"
     >
-      <>
-        {nextUp || canPip ? (
-          <div className="px-1 py-1">
-            {nextUp ? (
-              <>
-                <button
-                  type="button"
-                  onClick={onToggleAutoplayNext}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 hover:bg-white/10"
-                  aria-pressed={autoplayNext}
+      {nextUp || canPip ? (
+        <div className="px-1 py-1">
+          {nextUp ? (
+            <>
+              <button
+                type="button"
+                onClick={onToggleAutoplayNext}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 hover:bg-white/10"
+                aria-pressed={autoplayNext}
+              >
+                <span>Autoplay next</span>
+                <span
+                  className={cn(
+                    "text-xs",
+                    autoplayNext
+                      ? "text-[hsl(var(--primary))]"
+                      : "text-zinc-400",
+                  )}
                 >
-                  <span>Autoplay next</span>
-                  <span
-                    className={cn(
-                      "text-xs",
-                      autoplayNext
-                        ? "text-[hsl(var(--primary))]"
-                        : "text-zinc-400",
-                    )}
-                  >
-                    {autoplayNext ? "On" : "Off"}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onPlayNext();
-                  }}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-white/10"
-                >
-                  <span className="shrink-0">Play next</span>
-                  <span className="line-clamp-1 text-right text-xs text-zinc-400">
-                    {nextUp.title}
-                  </span>
-                </button>
-              </>
-            ) : null}
-            {canPip ? (
+                  {autoplayNext ? "On" : "Off"}
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
                   onClose();
-                  onTogglePip();
+                  onPlayNext();
                 }}
-                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 hover:bg-white/10"
-                aria-pressed={pipActive}
+                className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-white/10"
               >
-                <span>Picture in picture</span>
-                <span
-                  className={cn(
-                    "text-xs",
-                    pipActive ? "text-[hsl(var(--primary))]" : "text-zinc-400",
-                  )}
-                >
-                  {pipActive ? "On" : "Off"}
+                <span className="shrink-0">Play next</span>
+                <span className="line-clamp-1 text-right text-xs text-zinc-400">
+                  {nextUp.title}
                 </span>
               </button>
-            ) : null}
-          </div>
-        ) : null}
-        <div className={nextUp || canPip ? "border-t border-white/10" : ""}>
-          <SettingsMenu
-            variant="embedded"
-            quality={quality}
-            audio={audio}
-            captions={captions}
-            rate={rate}
-            setRate={setRate}
-            onClose={onClose}
-          />
+            </>
+          ) : null}
+          {canPip ? (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onTogglePip();
+              }}
+              className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2.5 hover:bg-white/10"
+              aria-pressed={pipActive}
+            >
+              <span>Picture in picture</span>
+              <span
+                className={cn(
+                  "text-xs",
+                  pipActive ? "text-[hsl(var(--primary))]" : "text-zinc-400",
+                )}
+              >
+                {pipActive ? "On" : "Off"}
+              </span>
+            </button>
+          ) : null}
         </div>
-        {queue.length > 0 ? (
-          <div className="border-t border-white/10 px-3 py-2">
-            <p className="pb-1 text-[11px] uppercase tracking-wide text-zinc-400">
-              Up next
-            </p>
-            <ul className="max-h-48 overflow-auto">
-              {queue.map((item, idx) => (
-                <li key={`${item.href}-${idx}`}>
-                  <Link
-                    href={item.href}
-                    className="line-clamp-1 block rounded-md px-1 py-1.5 text-xs text-zinc-100 hover:bg-white/10"
-                    onClick={onClose}
-                  >
-                    {idx + 1}. {item.title}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </>
+      ) : null}
+      <div className={nextUp || canPip ? "border-t border-white/10" : ""}>
+        <SettingsMenu
+          variant="embedded"
+          quality={quality}
+          audio={audio}
+          captions={captions}
+          rate={rate}
+          setRate={setRate}
+          onClose={onClose}
+        />
+      </div>
+      {queue.length > 0 ? (
+        <div className="border-t border-white/10 px-3 py-2">
+          <p className="pb-1 text-[11px] uppercase tracking-wide text-zinc-400">
+            Up next
+          </p>
+          <ul className="max-h-48 overflow-auto">
+            {queue.map((item, idx) => (
+              <li key={`${item.href}-${idx}`}>
+                <Link
+                  href={item.href}
+                  className="line-clamp-1 block rounded-md px-1 py-1.5 text-xs text-zinc-100 hover:bg-white/10"
+                  onClick={onClose}
+                >
+                  {idx + 1}. {item.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </Sheet>
   );
 }

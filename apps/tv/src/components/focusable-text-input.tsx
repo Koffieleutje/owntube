@@ -1,4 +1,10 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import {
   Pressable,
   type StyleProp,
@@ -18,6 +24,11 @@ export type FocusableTextInputHandle = {
 type Props = Omit<TextInputProps, "style"> & {
   containerStyle?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
+  /**
+   * Fires when D-pad focus reaches or leaves the field, whether it rests on the
+   * surface or the editor — for a parent that draws the focus ring itself.
+   */
+  onFocusChange?: (focused: boolean) => void;
 };
 
 export const FocusableTextInput = forwardRef<FocusableTextInputHandle, Props>(
@@ -28,6 +39,7 @@ export const FocusableTextInput = forwardRef<FocusableTextInputHandle, Props>(
       inputStyle,
       onBlur,
       onFocus,
+      onFocusChange,
       placeholderTextColor = colors.mutedForeground,
       selectionColor = colors.brand,
       ...inputProps
@@ -38,6 +50,10 @@ export const FocusableTextInput = forwardRef<FocusableTextInputHandle, Props>(
     const [surfaceFocused, setSurfaceFocused] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
     const isFocused = surfaceFocused || inputFocused;
+
+    useEffect(() => {
+      onFocusChange?.(isFocused);
+    }, [isFocused, onFocusChange]);
 
     useImperativeHandle(ref, () => ({
       focus: () => inputRef.current?.focus(),

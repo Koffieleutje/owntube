@@ -1,27 +1,40 @@
 import type { TRPCLink } from "@trpc/client";
+import { httpBatchLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import type { AppRouter } from "@web/server/trpc/root";
-import { signalSessionExpired } from "@/lib/session";
+import superjson from "superjson";
+import { expireSession, getToken } from "@/lib/auth-token";
+import { TRPC_URL } from "@/lib/config";
 
-/**
- * Turns an UNAUTHORIZED from any procedure into a return to the login screen.
- *
- * A link rather than an HTTP-status check: `httpBatchLink` sends several
- * procedures in one request, and tRPC answers a mixed batch with 207, not 401
- * (`getBatchStatusCode` — one status only when every result agrees). A link
- * sees the typed error per operation, so a single expired-token failure among
- * successful calls still counts.
- */
-export const sessionExpiryLink: TRPCLink<AppRouter> =
+/** Sends the user back to sign-in when the server rejects the stored token. */
+const sessionExpiryLink: TRPCLink<AppRouter> =
   () =>
-  ({ op, next }) =>
+  ({ next, op }) =>
     observable((observer) =>
       next(op).subscribe({
         next: (value) => observer.next(value),
         error: (err) => {
-          if (err.data?.code === "UNAUTHORIZED") void signalSessionExpired();
+          if (err.data?.code === "UNAUTHORIZED") void expireSession();
           observer.error(err);
         },
         complete: () => observer.complete(),
       }),
     );
+
+/** Shared by the vanilla and React Query clients so both behave the same. */
+export function createLinks(): TRPCLink<AppRouter>[] {
+  return [
+    sessionExpiryLink,
+    httpBatchLink({
+      url: TRPC_URL,
+      transformer: superjson,
+      // Read on every request so a fresh login (or logout) takes effect without
+      // rebuilding the client. The server falls back to this Bearer token when
+      // there is no Auth.js cookie (createTRPCContext).
+      headers: async () => {
+        const token = await getToken();
+        return token ? { authorization: `Bearer ${token}` } : {};
+      },
+    }),
+  ];
+}

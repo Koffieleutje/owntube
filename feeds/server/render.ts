@@ -195,7 +195,8 @@ export function renderRss(
   // podcast platforms fetch artwork server-side, off the LAN and without the
   // feed's credentials, so anything private is unreachable to them and they
   // store the podcast with no image. That is why the OwnTube logo was missing.
-  const image = feed.image ?? (publicBase ? `${publicBase}/icon.png` : undefined);
+  const image =
+    feed.image ?? (publicBase ? `${publicBase}/icon.png` : undefined);
   if (image) {
     head.push(`    <itunes:image href="${xmlEscape(image)}"/>`);
     head.push("    <image>");

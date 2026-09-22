@@ -1,15 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { httpBatchLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import type { AppRouter } from "@web/server/trpc/root";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import superjson from "superjson";
-import { getToken } from "@/lib/auth-token";
-import { TRPC_URL } from "@/lib/config";
 import { CACHE_BUSTER, persister, queryClient } from "@/lib/query-client";
-import { sessionExpiryLink } from "@/lib/trpc-links";
+import { createLinks } from "@/lib/trpc-links";
 
 /**
  * Mirrors apps/web/src/trpc/react.tsx so both clients use the same hooks API —
@@ -18,23 +14,7 @@ import { sessionExpiryLink } from "@/lib/trpc-links";
 export const trpc = createTRPCReact<AppRouter>();
 
 export function TrpcProvider({ children }: { children: ReactNode }) {
-  const [client] = useState(() =>
-    trpc.createClient({
-      links: [
-        sessionExpiryLink,
-        httpBatchLink({
-          url: TRPC_URL,
-          transformer: superjson,
-          // Read per request so a fresh login or logout takes effect without
-          // rebuilding the client.
-          headers: async () => {
-            const token = await getToken();
-            return token ? { authorization: `Bearer ${token}` } : {};
-          },
-        }),
-      ],
-    }),
-  );
+  const [client] = useState(() => trpc.createClient({ links: createLinks() }));
 
   return (
     <trpc.Provider client={client} queryClient={queryClient}>

@@ -14,6 +14,7 @@ import {
 } from "@/lib/hls-same-origin";
 import { isIosLikeBrowser } from "@/lib/ios-playback";
 import { getMediaOrigin } from "@/lib/media-origin";
+import { isLiveDashManifestUrl } from "@/lib/pick-playback";
 
 type IsTypeSupported = { isTypeSupported?(type: string): boolean };
 
@@ -178,6 +179,10 @@ export function useDashPlayback(
     let onFullscreenChange: (() => void) | null = null;
     const mediaOrigin = getMediaOrigin(getClientAppOrigin());
     const releaseFetchGuard = installSameOriginMediaFetchGuard(mediaOrigin);
+    // The VOD seek/switch tricks below replace already-buffered media; on a
+    // live stream that knocks out the segment under the playhead at startup
+    // (dash.js moves on without re-fetching it) and it never starts.
+    const live = isLiveDashManifestUrl(src);
 
     // Fresh source: reset the UI-facing quality state; repopulated once the
     // new manifest parses (streamInitialized).
@@ -255,7 +260,7 @@ export function useDashPlayback(
             // on RAPID back-to-back seeks (scrub-heavy use), which is the
             // exact case 12s was originally chosen to protect.
             bufferTimeAtTopQuality: 20,
-            fastSwitchEnabled: true,
+            fastSwitchEnabled: !live,
           },
           capabilities: {
             // The MediaCapabilities API rejects YouTube's bare "vp9" codec
@@ -470,6 +475,8 @@ export function useDashPlayback(
         if (jumpTimer !== null) window.clearTimeout(jumpTimer);
         jumpTimer = null;
         if (seekActive) return;
+        // VOD only: see `live` above.
+        if (live) return;
         try {
           const reps = player?.getRepresentationsByType("video") ?? [];
           let low = -1;
@@ -550,13 +557,16 @@ export function useDashPlayback(
       // against the media origin (not window.location.href) so a
       // still-relative `src` resolves there, not the page's own origin.
       const manifestUrl = new URL(src, mediaOrigin).toString();
+      // NaN, not 0, when there's no resume point: dash.js reads NaN as
+      // "unset" (the start for VOD, the live edge for a dynamic manifest),
+      // whereas 0 would start a live stream at the oldest segment it lists.
       player.initialize(
         video,
         manifestUrl,
         autoPlayRef.current,
         typeof start === "number" && Number.isFinite(start) && start > 0
           ? start
-          : 0,
+          : Number.NaN,
       );
       playerRef.current = player;
     })();

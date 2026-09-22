@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cardPreviewPlaybackFromDetail } from "@/lib/card-preview-playback";
 import type { VideoDetail } from "@/server/services/proxy.types";
 
@@ -13,6 +13,22 @@ function base(over: Partial<VideoDetail>): VideoDetail {
     ...over,
   };
 }
+
+// Proxy URLs are built from these; a deployment's values (the dev container
+// sets all of them) would otherwise leak into the expected hosts below.
+beforeEach(() => {
+  for (const name of [
+    "NEXT_PUBLIC_MEDIA_BASE_URL",
+    "INVIDIOUS_BASE_URL",
+    "INVIDIOUS_PUBLIC_BASE_URL",
+    "NEXT_PUBLIC_INVIDIOUS_BASE_URL",
+  ]) {
+    vi.stubEnv(name, "");
+  }
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("cardPreviewPlaybackFromDetail", () => {
   it("prefers muxed 360p from raw sources even when watch drops it for split", () => {

@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { HlsVodBlock } from "@/components/player/hls-vod-block";
-import { LiveHlsDirectBlock } from "@/components/player/live-block";
+import { LiveBlock } from "@/components/player/live-block";
 import { NativeMuxedBlock } from "@/components/player/native-block";
 import type {
   CaptionTrack,
@@ -47,6 +47,7 @@ import {
   heightCapForDefaultQuality,
   readDefaultPlaybackQuality,
 } from "@/lib/default-playback-quality";
+import { isLiveDashManifestUrl } from "@/lib/pick-playback";
 import { nextPlaybackVariantIndex } from "@/lib/playback-variant-fallback";
 import {
   readPlayerMediaPrefs,
@@ -563,8 +564,10 @@ export function VideoPlayer({
         )}
       >
         {active.kind === "hls" ? (
-          isLive ? (
-            <LiveHlsDirectBlock
+          // The live DASH manifest only plays in the live block, whatever
+          // `isLive` a caller passed.
+          isLive || isLiveDashManifestUrl(active.src) ? (
+            <LiveBlock
               {...sponsorChromeProps}
               captions={captions}
               reactKey={active.src}
@@ -595,6 +598,7 @@ export function VideoPlayer({
               restoredVolume={restoredVolume}
               restoredMuted={restoredMuted}
               onVideoIntrinsics={onVideoIntrinsics}
+              defaultQualityHeightCap={dashQualityHeightCap}
               isLive={isLive}
             />
           ) : (

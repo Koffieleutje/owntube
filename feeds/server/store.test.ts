@@ -138,7 +138,9 @@ test("a legacy companion.db is adopted rather than left behind", () => {
   assert.equal(fs.existsSync(path.join(dir, "companion.db")), false);
   // The adopted file is the same one, not a fresh database beside it.
   const reopened = new Database(path.join(dir, "feeds.db"));
-  const rows = reopened.prepare("SELECT id FROM marker").all() as { id: number }[];
+  const rows = reopened.prepare("SELECT id FROM marker").all() as {
+    id: number;
+  }[];
   reopened.close();
   assert.deepEqual(rows, [{ id: 1 }]);
 });

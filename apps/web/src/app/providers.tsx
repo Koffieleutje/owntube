@@ -9,7 +9,6 @@ import {
 import { httpBatchLink, splitLink } from "@trpc/client";
 import { useEffect, useState } from "react";
 import superjson from "superjson";
-import { restoreQueryCache, startQueryCachePersist } from "@/lib/query-persist";
 import { PlayerProvider } from "@/components/player/player-context";
 import { QueueSync } from "@/components/queue/queue-sync";
 import { FaviconSync } from "@/components/settings/favicon-sync";
@@ -20,6 +19,7 @@ import { ActionToastProvider } from "@/components/videos/action-toast";
 import { IgnoredVideosProvider } from "@/components/videos/ignored-videos-context";
 import { InvidiousOriginProvider } from "@/components/videos/invidious-origin-context";
 import { VideoMembershipProvider } from "@/components/videos/video-membership-context";
+import { restoreQueryCache, startQueryCachePersist } from "@/lib/query-persist";
 import { isTransientNetworkError } from "@/lib/query-retry";
 import { trpc } from "@/trpc/react";
 

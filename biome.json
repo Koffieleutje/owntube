@@ -17,7 +17,9 @@
       "!owntube-charte-graphique",
       "!apps/tv/android",
       "!apps/tv/ios",
-      "!apps/tv/.expo"
+      "!apps/tv/.expo",
+      "!apps/ios/src-tauri/gen",
+      "!spikes"
     ]
   },
   "formatter": {

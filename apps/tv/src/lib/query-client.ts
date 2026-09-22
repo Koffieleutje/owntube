@@ -75,8 +75,40 @@ const fileStorage = {
 export const persister: Persister = createAsyncStoragePersister({
   storage: fileStorage,
   key: "owntube-query-cache",
-  // Rapid navigation shouldn't write on every resolve.
-  throttleTime: 2_000,
-  serialize: (client: PersistedClient) => JSON.stringify(client),
+  // Serializing runs on the JS thread, so writes are spaced out: a stringify
+  // mid-scroll shows up as a dropped D-pad frame on a TV box.
+  throttleTime: 5_000,
+  serialize: (client: PersistedClient) => JSON.stringify(trimFeeds(client)),
   deserialize: (cached: string) => JSON.parse(cached) as PersistedClient,
 });
+
+/**
+ * Persists only the first page of each infinite feed. A relaunch only needs
+ * the first screenful to paint instantly; every extra page scrolled through
+ * (and never pruned — gcTime is a day) made each write, and the restore on
+ * launch, slower.
+ */
+function trimFeeds(client: PersistedClient): PersistedClient {
+  return {
+    ...client,
+    clientState: {
+      ...client.clientState,
+      queries: client.clientState.queries.map((query) => {
+        const data = query.state.data as
+          | { pages?: unknown[]; pageParams?: unknown[] }
+          | undefined;
+        if (!Array.isArray(data?.pages) || data.pages.length <= 1) return query;
+        return {
+          ...query,
+          state: {
+            ...query.state,
+            data: {
+              pages: data.pages.slice(0, 1),
+              pageParams: (data.pageParams ?? []).slice(0, 1),
+            },
+          },
+        };
+      }),
+    },
+  };
+}

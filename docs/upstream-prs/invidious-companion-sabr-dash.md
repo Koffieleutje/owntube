@@ -1,8 +1,11 @@
 # Draft PR — invidious-companion: SABR→DASH connector (proof of concept)
 
-**Status:** draft / POC for review. Lives on branch `nedworks/sabr-poc` in the
-local companion tree (`/usr/local/src/invidious-companion-sabr`), based on our
-running `2026.07.29-dvrfix-captionfix` build.
+**Status:** draft / POC for review. Now on `master` of the local companion
+tree (`/usr/local/src/invidious-companion-sabr`), rebased onto upstream, and
+**in production since 2026-09-21**: its live path is how OwnTube plays live
+broadcasts (see `../LIVE-AND-DVR-PLAYBACK.md`, and `PATCHES.md` in that tree).
+The branch `nedworks/sabr-poc` it started on is kept only as the tag
+`deployed/2026.09.21-sabr-live-4090006`.
 **Not yet proposed to `iv-org/invidious-companion`** — this is a spike to decide
 whether the approach is worth productionising.
 

@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { watchHref } from "@/lib/yt-routes";
 import { redirect } from "next/navigation";
 import { ExcludeSubscribedToggle } from "@/components/dashboard/exclude-subscribed-toggle";
 import { PersonalizedFeedOnlyToggle } from "@/components/dashboard/personalized-feed-only-toggle";
 import { PageHeader } from "@/components/layout/page-header";
+import { watchHref } from "@/lib/yt-routes";
 import { auth } from "@/server/auth";
 import type { RecommendationReason } from "@/server/services/proxy.types";
 import { createCaller } from "@/server/trpc/caller";

@@ -30,7 +30,7 @@ export function buildClientWatchPlayback(
   const onlyDashOrUnsupported =
     rawPlayback.kind === "none" && rawPlayback.onlyDashOrUnsupported;
   const videoPayload =
-    rawPlayback.kind === "hls"
+    rawPlayback.kind === "hls" || rawPlayback.kind === "dash-live"
       ? {
           mode: "hls" as const,
           src: toProxiedOrDirectPlayback(

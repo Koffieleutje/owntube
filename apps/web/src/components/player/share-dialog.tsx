@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { watchHref } from "@/lib/yt-routes";
 import { createPortal } from "react-dom";
 import { useActionToast } from "@/components/videos/action-toast";
 import { formatDuration } from "@/lib/video-display";
+import { watchHref } from "@/lib/yt-routes";
 
 type ShareDialogProps = {
   videoId: string;

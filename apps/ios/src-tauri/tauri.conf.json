@@ -27,16 +27,12 @@
     "deep-link": {
       "mobile": [
         {
-          "scheme": [
-            "owntube"
-          ],
+          "scheme": ["owntube"],
           "appLink": false
         }
       ],
       "desktop": {
-        "schemes": [
-          "owntube"
-        ]
+        "schemes": ["owntube"]
       }
     }
   },

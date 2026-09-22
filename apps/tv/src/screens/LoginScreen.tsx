@@ -22,7 +22,6 @@ type PairingState =
       qrModules: QrModules;
       verificationUrl: string;
     }
-  | { status: "expired" }
   | { status: "error" };
 
 type QrModules = {
@@ -106,6 +105,14 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
     startPairing();
   }, [startPairing]);
 
+  // The server may be briefly unreachable (Wi-Fi waking up, a restart); keep
+  // trying rather than waiting for someone to find the Refresh button.
+  useEffect(() => {
+    if (pairingState.status !== "error") return;
+    const retry = setTimeout(startPairing, 10_000);
+    return () => clearTimeout(retry);
+  }, [pairingState.status, startPairing]);
+
   useEffect(() => {
     if (pairingState.status !== "ready") return;
 
@@ -122,15 +129,17 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
           if (active) onLoggedIn();
           return;
         }
+        // A code only lives ten minutes; nobody should have to find a button
+        // to get a new one on a TV, so swap in a fresh code straight away.
         if (
           result.status === "expired" ||
           Date.now() >= pairingState.expiresAt
         ) {
-          setPairingState({ status: "expired" });
+          void startPairing();
         }
       } catch {
         if (active && Date.now() >= pairingState.expiresAt) {
-          setPairingState({ status: "expired" });
+          void startPairing();
         }
       }
     };
@@ -141,7 +150,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
       active = false;
       clearInterval(interval);
     };
-  }, [onLoggedIn, pairingState]);
+  }, [onLoggedIn, pairingState, startPairing]);
 
   const submit = async () => {
     if (!canSubmit || submitting) return;
