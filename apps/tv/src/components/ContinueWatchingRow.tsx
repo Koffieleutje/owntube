@@ -1,10 +1,15 @@
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import { useMemo } from "react";
+import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
 import { VideoRow } from "@/components/VideoRow";
 import type { Nav } from "@/lib/navigation";
 import { useScreenActive } from "@/lib/screen-active";
+import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
-import { useInProgressIds } from "@/lib/watch-progress";
+import {
+  useInProgressIds,
+  useWatchProgressRefresh,
+} from "@/lib/watch-progress";
 
 /** Recent history scanned for half-watched videos; the row shows at most this many. */
 const HISTORY_SCAN = 60;
@@ -17,6 +22,8 @@ const ROW_LIMIT = 20;
  */
 export function ContinueWatchingRow({ nav }: { nav: Nav }) {
   const inProgress = useInProgressIds();
+  const { notify } = useCardMenu();
+  const refreshProgress = useWatchProgressRefresh();
   const history = trpc.history.list.useQuery(
     { page: 1, pageSize: HISTORY_SCAN, hideWatched: true },
     { retry: 1, subscribed: useScreenActive() },
@@ -43,11 +50,31 @@ export function ContinueWatchingRow({ nav }: { nav: Nav }) {
     return out;
   }, [history.data, inProgress]);
 
+  // Long press offers to drop a video from the row. The saved position is
+  // what puts it here, so clearing that is enough — the video stays in
+  // History, it just stops being offered to resume.
+  const menuExtras: CardMenuExtras = (video) => [
+    {
+      key: "forget",
+      label: "Remove from Continue watching",
+      onPress: () => {
+        trpcClient.history.clearProgress
+          .mutate({ videoId: video.videoId })
+          .then(() => {
+            notify("Removed from Continue watching");
+            refreshProgress();
+          })
+          .catch(() => notify("Couldn't remove it"));
+      },
+    },
+  ];
+
   if (videos.length === 0) return null;
   return (
     <VideoRow
       title="Continue watching"
       videos={videos}
+      menuExtras={menuExtras}
       onSelect={(videoId) =>
         nav.openVideo(videoId, { context: { source: "feed", videos } })
       }

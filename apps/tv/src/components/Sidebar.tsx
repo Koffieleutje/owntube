@@ -1,14 +1,14 @@
 import { Feather } from "@expo/vector-icons";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Animated,
-  Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { LOGO, LOGO_WORDMARK } from "@/assets";
+import { channelInitial } from "@/lib/format";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
 export type Section =
@@ -23,6 +23,12 @@ export type Section =
   | "queue"
   | "history"
   | "settings";
+
+/** Row box and the pitch between two rows, shared with the scroll maths. */
+const ROW_HEIGHT = 50;
+/** Matches the nav icons, so the profile row sits on the same vertical line. */
+const AVATAR_SIZE = 30;
+const ROW_PITCH = ROW_HEIGHT + spacing.xs;
 
 export const RAIL_WIDTH = 68;
 export const EXPANDED_WIDTH = 228;
@@ -46,6 +52,10 @@ export const SECTIONS: { key: Section; label: string; icon: FeatherName }[] = [
 type Props = {
   active: Section;
   onSelect: (section: Section) => void;
+  /** The signed-in account, shown where the logo used to sit. */
+  profileLabel?: string;
+  /** Opens "Who's watching" — the row above the sections is the way in. */
+  onSwitchProfile?: () => void;
   /** Lets the shell make room instead of letting the rail cover content. */
   onExpandedChange?: (expanded: boolean) => void;
   /**
@@ -61,6 +71,8 @@ type Props = {
 export function Sidebar({
   active,
   onSelect,
+  profileLabel,
+  onSwitchProfile,
   sections,
   onExpandedChange,
   width,
@@ -72,6 +84,20 @@ export function Sidebar({
     : SECTIONS;
   const [expanded, setExpanded] = useState(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scrollRef = useRef<ScrollView>(null);
+  const [navHeight, setNavHeight] = useState(0);
+  const activeIndex = visible.findIndex((s) => s.key === active);
+
+  // Collapsing hands the rail back to the page, so put the active section back
+  // in view: left where the user scrolled it, a rail parked on Settings shows
+  // neither the current section nor the first few. Scrolls the least it can —
+  // to the top whenever the active row already fits on the first screenful.
+  useEffect(() => {
+    if (expanded || navHeight === 0 || activeIndex < 0) return;
+    const y = Math.max(0, activeIndex * ROW_PITCH + ROW_HEIGHT - navHeight);
+    scrollRef.current?.scrollTo({ y, animated: false });
+  }, [expanded, navHeight, activeIndex]);
 
   // focus-within: expand while any row is focused, collapse shortly after the
   // last one blurs (the timer absorbs the blur→focus gap between rows).
@@ -99,15 +125,25 @@ export function Sidebar({
         { width: width ?? (expanded ? EXPANDED_WIDTH : RAIL_WIDTH) },
       ]}
     >
-      <View style={styles.brandRow}>
-        <Image
-          source={expanded ? LOGO_WORDMARK : LOGO}
-          style={expanded ? styles.wordmark : styles.mark}
-          resizeMode="contain"
-        />
-      </View>
+      <ProfileRow
+        label={profileLabel}
+        expanded={expanded}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onPress={() => onSwitchProfile?.()}
+      />
 
-      <View style={styles.nav}>
+      {/* Scrolls: at 50dp a row, only seven fit a 540dp panel, and every
+          section past that used to take focus while staying off screen —
+          invisible rows you could land on but never see. Android scrolls the
+          newly focused child into view for us. */}
+      <ScrollView
+        ref={scrollRef}
+        style={styles.nav}
+        contentContainerStyle={styles.navContent}
+        onLayout={(e) => setNavHeight(e.nativeEvent.layout.height)}
+        showsVerticalScrollIndicator={false}
+      >
         {visible.map((section) => (
           <NavRow
             key={section.key}
@@ -120,8 +156,65 @@ export function Sidebar({
             onPress={() => onSelect(section.key)}
           />
         ))}
-      </View>
+      </ScrollView>
     </Animated.View>
+  );
+}
+
+/**
+ * Who is watching, and the way to change it. It takes the logo's place: the
+ * mark says nothing a TV owner needs mid-session, while the account behind the
+ * history and subscriptions on screen is worth showing — and worth being one
+ * press from switching. No avatar is stored for an account, so the initial of
+ * its address stands in, the same fallback a channel without a picture gets.
+ */
+function ProfileRow({
+  label,
+  expanded,
+  onFocus,
+  onBlur,
+  onPress,
+}: {
+  label?: string;
+  expanded: boolean;
+  onFocus: () => void;
+  onBlur: () => void;
+  onPress: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const tint = focused ? colors.brand : colors.foreground;
+
+  return (
+    <Pressable
+      onFocus={() => {
+        setFocused(true);
+        onFocus();
+      }}
+      onBlur={() => {
+        setFocused(false);
+        onBlur();
+      }}
+      onPress={onPress}
+      style={[
+        styles.row,
+        !expanded && styles.rowCollapsed,
+        focused && styles.rowFocused,
+      ]}
+    >
+      <View style={styles.avatar}>
+        <Text style={styles.avatarInitial}>{channelInitial(label)}</Text>
+      </View>
+      {expanded ? (
+        <View style={styles.labelWrap}>
+          <Text style={[styles.label, { color: tint }]} numberOfLines={1}>
+            {label ?? "Signed in"}
+          </Text>
+          <Text style={styles.switchHint} numberOfLines={1}>
+            Switch profile
+          </Text>
+        </View>
+      ) : null}
+    </Pressable>
   );
 }
 
@@ -190,19 +283,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     gap: spacing.lg,
   },
-  brandRow: {
-    height: 44,
+  avatar: {
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: AVATAR_SIZE / 2,
+    alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 6,
+    backgroundColor: colors.brand,
   },
-  mark: { width: 36, height: 36 },
-  wordmark: { width: 152, height: 32 },
-  nav: { flex: 1, gap: spacing.xs },
+  avatarInitial: {
+    color: colors.primaryForeground,
+    fontWeight: "700",
+    fontSize: fontSize.md,
+  },
+  switchHint: { color: colors.mutedForeground, fontSize: fontSize.sm },
+  nav: { flex: 1 },
+  navContent: { gap: spacing.xs },
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-    height: 50,
+    height: ROW_HEIGHT,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.shell,
     borderWidth: focus.borderWidth,

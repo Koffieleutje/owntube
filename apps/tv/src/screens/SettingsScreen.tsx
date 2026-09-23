@@ -273,7 +273,11 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginBottom: spacing.xl,
   },
-  active: { backgroundColor: colors.brandSoft, borderRadius: radius.shell },
+  // Opaque: it sits under the focus glow. See colors.surfaceStrongSolid.
+  active: {
+    backgroundColor: colors.brandSoftSolid,
+    borderRadius: radius.shell,
+  },
   sidebarRow: {
     flexDirection: "row",
     alignItems: "center",

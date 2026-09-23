@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   },
   surfaceFocused: {
     borderColor: colors.ring,
-    backgroundColor: colors.surfaceStrong,
+    backgroundColor: colors.surfaceStrongSolid,
     shadowColor: colors.brand,
     shadowOpacity: 0.22,
     shadowRadius: 14,

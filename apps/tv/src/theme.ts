@@ -17,6 +17,8 @@ export const colors = {
   primary: "hsl(350, 90%, 58%)",
   primaryForeground: "hsl(0, 0%, 100%)",
   brandSoft: "hsla(350, 90%, 58%, 0.12)",
+  /** brandSoft flattened onto `background` — see `surfaceStrongSolid`. */
+  brandSoftSolid: "hsl(347, 43%, 10%)",
   brandSofter: "hsla(350, 90%, 58%, 0.06)",
   secondary: "hsl(240, 4%, 12%)",
   destructive: "hsl(0, 91%, 71%)",
@@ -26,6 +28,14 @@ export const colors = {
   sidebar: "hsl(240, 5%, 5%)",
   surface: "hsla(0, 0%, 100%, 0.06)",
   surfaceStrong: "hsla(0, 0%, 100%, 0.1)",
+  /**
+   * surfaceStrong flattened onto `background`. A focused surface also casts the
+   * red focus glow, and Android renders that glow *through* a translucent fill,
+   * as a ragged frame inside the focus ring. So any fill that can end up under
+   * the glow — a focused input, or a tint a caller passes to FocusButton, whose
+   * `style` lands after the focused fill — has to be opaque.
+   */
+  surfaceStrongSolid: "hsl(240, 2%, 14%)",
   surfaceBorder: "hsla(0, 0%, 100%, 0.12)",
   shadow: "hsla(0, 0%, 0%, 0.45)",
   overlay: "hsla(0, 0%, 0%, 0.56)",

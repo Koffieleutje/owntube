@@ -279,6 +279,28 @@ export const historyRouter = router({
       );
       return enriched;
     }),
+  /**
+   * Forget where a video was left off, keeping the entry itself. The TV's
+   * Continue watching row is driven by the saved position, so this is what
+   * "remove from Continue watching" does — the video stays in History, it
+   * just stops being offered to resume.
+   */
+  clearProgress: protectedProcedure
+    .input(z.object({ videoId: z.string().min(5).max(64) }))
+    .mutation(({ ctx, input }) => {
+      ctx.db
+        .update(watchHistory)
+        .set({ positionSeconds: 0 })
+        .where(
+          and(
+            eq(watchHistory.videoId, input.videoId),
+            eq(watchHistory.userId, ctx.userId),
+          ),
+        )
+        .run();
+      return { ok: true };
+    }),
+
   softDelete: protectedProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(({ ctx, input }) => {

@@ -31,6 +31,7 @@ import type { Nav, OpenVideoOptions, PlayContext } from "@/lib/navigation";
 import { ScreenActiveProvider } from "@/lib/screen-active";
 import { loadSidebarPrefs } from "@/lib/sidebar-prefs";
 import { trpcClient } from "@/lib/trpc";
+import { trpc } from "@/lib/trpc-react";
 import { useTvRemoteReceiver } from "@/lib/tv-remote";
 import { useResumeLookup, useWatchProgressRefresh } from "@/lib/watch-progress";
 import { ChannelScreen } from "@/screens/ChannelScreen";
@@ -98,6 +99,9 @@ export function Shell({
   onSwitchProfile: () => void;
 }) {
   useLongSelectDispatcher();
+  // Names the sidebar's profile row. Cached like every other read, so switching
+  // back to a section doesn't refetch it.
+  const me = trpc.auth.me.useQuery(undefined, { retry: 1 });
   const [section, setSection] = useState<Section>("home");
   /** Kept sections visited so far, in first-visit order. */
   const [visited, setVisited] = useState<Section[]>(["home"]);
@@ -413,6 +417,8 @@ export function Shell({
             <Sidebar
               active={section}
               onSelect={selectSection}
+              profileLabel={me.data?.email}
+              onSwitchProfile={onSwitchProfile}
               sections={sections}
               onExpandedChange={onSidebarExpanded}
               width={contentInset}

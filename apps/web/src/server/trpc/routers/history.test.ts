@@ -5,6 +5,43 @@ import { appRouter } from "@/server/trpc/root";
 import { createTestDb } from "@/test/db";
 
 describe("historyRouter", () => {
+  it("clearProgress forgets the position but keeps the entry", async () => {
+    const { db, sqlite } = createTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    const user = db
+      .insert(users)
+      .values({
+        email: "history-clear@example.com",
+        passwordHash: "x",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: users.id })
+      .get();
+
+    const caller = appRouter.createCaller({ db, userId: user.id });
+    await caller.history.upsertEvent({
+      videoId: "dQw4w9WgXcQ",
+      channelId: "UC1",
+      durationWatched: 120,
+      positionSeconds: 120,
+      videoDurationSeconds: 600,
+      completed: false,
+    });
+    expect((await caller.history.progressAll())[0]?.positionSeconds).toBe(120);
+
+    await caller.history.clearProgress({ videoId: "dQw4w9WgXcQ" });
+
+    // Still in history, but no longer offers to resume.
+    const progress = await caller.history.progressAll();
+    expect(progress).toHaveLength(1);
+    expect(progress[0]?.positionSeconds).toBe(0);
+    expect(await caller.history.list({ page: 1, pageSize: 20 })).toHaveLength(
+      1,
+    );
+    sqlite.close();
+  });
+
   it("writes and lists history entries", async () => {
     const { db, sqlite } = createTestDb();
     const now = Math.floor(Date.now() / 1000);

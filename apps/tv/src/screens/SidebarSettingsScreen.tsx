@@ -81,6 +81,11 @@ export function SidebarSettingsScreen({
   useTVEventHandler((event) => {
     const key = grabbedRef.current;
     if (!key) return;
+    // Held keys arrive as long* instead of up/down/left/right, and each fires
+    // twice — once on the press, once on the release (ACTION_UP is 1). Acting
+    // on the press alone keeps it at one move per press, tap or hold; without
+    // the long* cases at all, a press held even briefly did nothing.
+    const isKeyUp = Number(event.eventKeyAction) === 1;
     switch (event.eventType) {
       case "up":
         move(key, -1);
@@ -88,9 +93,19 @@ export function SidebarSettingsScreen({
       case "down":
         move(key, 1);
         break;
+      case "longUp":
+        if (!isKeyUp) move(key, -1);
+        break;
+      case "longDown":
+        if (!isKeyUp) move(key, 1);
+        break;
       case "left":
       case "right":
         toggleVisible(key);
+        break;
+      case "longLeft":
+      case "longRight":
+        if (!isKeyUp) toggleVisible(key);
         break;
       default:
         break;
@@ -156,6 +171,15 @@ function SidebarRow({
   const rowRef = useRef<View>(null);
   const [handle, setHandle] = useState<number | null>(null);
   const tint = hidden ? colors.mutedForeground : colors.foreground;
+
+  // nextFocus* below pins focus here while the row is held, but a reorder
+  // re-parents the view and the pin can be lost — leaving the highlight on one
+  // row and the held row elsewhere, after which a single press visibly moved
+  // two rows: the held one reordered while the highlight walked on. Take focus
+  // back whenever it drifts off a held row.
+  useEffect(() => {
+    if (grabbed && !focused) rowRef.current?.requestTVFocus();
+  }, [grabbed, focused]);
 
   return (
     <Pressable

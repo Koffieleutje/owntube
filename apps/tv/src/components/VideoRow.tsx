@@ -54,6 +54,8 @@ export const VideoRow = memo(function VideoRow({
     cardMenu.open(video, menuExtras?.(video));
   }, []);
   const listRef = useRef<FlatList<UnifiedVideo>>(null);
+  /** 0 until the row has been laid out; the centring maths needs a real one. */
+  const listWidthRef = useRef(0);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const onCardFocusChangeRef = useRef(onCardFocusChange);
@@ -81,7 +83,12 @@ export const VideoRow = memo(function VideoRow({
         setLongPressTarget(null, longPressRef.current);
         longPressRef.current = null;
       }
-      if (focused) {
+      // Centring needs the row's measured width: before the first layout
+      // FlatList works it out against a zero-width viewport and lands half an
+      // item in, which pushed the first card half off the left edge the moment
+      // a section opened. Android scrolls a focused child into view by itself,
+      // so skipping the centring until the row is measured strands nothing.
+      if (focused && listWidthRef.current > 0) {
         listRef.current?.scrollToIndex({
           index,
           animated: true,
@@ -118,6 +125,9 @@ export const VideoRow = memo(function VideoRow({
       {title ? <Text style={styles.heading}>{title}</Text> : null}
       <FlatList
         ref={listRef}
+        onLayout={(e) => {
+          listWidthRef.current = e.nativeEvent.layout.width;
+        }}
         horizontal
         data={videos}
         keyExtractor={keyExtractor}

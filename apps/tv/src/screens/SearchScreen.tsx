@@ -302,7 +302,7 @@ const styles = StyleSheet.create({
   },
   searchSurfaceFocused: {
     borderColor: colors.ring,
-    backgroundColor: colors.surfaceStrong,
+    backgroundColor: colors.surfaceStrongSolid,
     shadowColor: colors.brand,
     shadowOpacity: 0.22,
     shadowRadius: 14,
@@ -324,7 +324,9 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     paddingVertical: spacing.md,
   },
-  listening: { backgroundColor: colors.brandSoft },
+  // Opaque: the mic button is focused while it listens, so this fill sits
+  // under the focus glow. See colors.surfaceStrongSolid.
+  listening: { backgroundColor: colors.brandSoftSolid },
   searchButton: { width: 156 },
   results: { flex: 1 },
 });

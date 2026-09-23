@@ -69,6 +69,7 @@
       ],
       "expo-speech-recognition",
       "./plugins/with-tv-search",
+      "./plugins/with-media-keys",
       "./plugins/with-release-signing"
     ],
     "extra": {

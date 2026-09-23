@@ -1,6 +1,7 @@
+import { Feather } from "@expo/vector-icons";
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import { useEffect, useMemo, useState } from "react";
-import { FlatList, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { FocusButton } from "@/components/FocusButton";
@@ -13,11 +14,13 @@ import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
 import { useProgressLookup } from "@/lib/watch-progress";
-import { colors, fontSize, spacing } from "@/theme";
+import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
 const PANE_WIDTH = 220;
+/** Matches the Subscriptions pane's avatar, so both lists share a row pitch. */
+const ROW_ICON_SIZE = 28;
 
-type Playlist = { id: number; name: string };
+type Playlist = { id: number; name: string; itemCount: number };
 
 /**
  * Playlists beside their contents, mirroring the Subscriptions layout so the
@@ -33,7 +36,12 @@ export function PlaylistsScreen({ nav }: { nav: Nav }) {
   // immediately instead of refetching.
   const list = trpc.playlists.list.useQuery();
   const playlists: Playlist[] = useMemo(
-    () => (list.data ?? []).map((r) => ({ id: r.id, name: r.name })),
+    () =>
+      (list.data ?? []).map((r) => ({
+        id: r.id,
+        name: r.name,
+        itemCount: r.itemCount,
+      })),
     [list.data],
   );
   const error = list.error ? errorMessage(list.error) : null;
@@ -116,16 +124,12 @@ export function PlaylistsScreen({ nav }: { nav: Nav }) {
             showsVerticalScrollIndicator={false}
             removeClippedSubviews={false}
             renderItem={({ item }) => (
-              <FocusButton
+              <PlaylistRow
                 label={item.name}
+                count={item.itemCount}
+                active={selected === item.id}
+                onFocus={() => setSelected(item.id)}
                 onPress={() => setSelected(item.id)}
-                onFocusChange={(focused) => {
-                  if (focused) setSelected(item.id);
-                }}
-                style={[
-                  styles.row,
-                  selected === item.id ? styles.rowActive : undefined,
-                ]}
               />
             )}
             ListEmptyComponent={
@@ -161,6 +165,52 @@ export function PlaylistsScreen({ nav }: { nav: Nav }) {
   );
 }
 
+/**
+ * A pane row shaped like the Subscriptions one: borderless until focused, icon
+ * then left-aligned label, brand tint once selected. Kept local rather than
+ * shared — that pane's rows also carry avatars, fresh dots and submenu
+ * chevrons, none of which a playlist has.
+ */
+function PlaylistRow({
+  label,
+  count,
+  active,
+  onFocus,
+  onPress,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onFocus: () => void;
+  onPress: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const tint = active || focused ? colors.brand : colors.foreground;
+  return (
+    <Pressable
+      onFocus={() => {
+        setFocused(true);
+        onFocus();
+      }}
+      onBlur={() => setFocused(false)}
+      onPress={onPress}
+      style={[
+        styles.row,
+        active && styles.rowActive,
+        focused && styles.rowFocused,
+      ]}
+    >
+      <View style={styles.rowIcon}>
+        <Feather name="folder" size={16} color={tint} />
+      </View>
+      <Text style={[styles.rowLabel, { color: tint }]} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={styles.rowCount}>{count}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   title: {
@@ -183,7 +233,32 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     fontWeight: "600",
   },
-  row: { marginBottom: spacing.xs },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    marginBottom: 5,
+    borderRadius: radius.shell,
+    borderWidth: focus.borderWidth,
+    borderColor: "transparent",
+  },
+  // Focused lands after active, so the opaque fill is the one under the focus
+  // ring — a translucent one would show the glow through it.
   rowActive: { backgroundColor: colors.brandSoft },
+  rowFocused: { backgroundColor: colors.accent, borderColor: colors.ring },
+  rowIcon: {
+    width: ROW_ICON_SIZE,
+    height: ROW_ICON_SIZE,
+    borderRadius: ROW_ICON_SIZE / 2,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent,
+  },
+  rowLabel: { flex: 1, fontSize: fontSize.md, fontWeight: "600" },
+  // Sits where the Subscriptions row keeps its fresh dot and chevron. Muted
+  // rather than tinted, so it reads as metadata and not a second label.
+  rowCount: { color: colors.mutedForeground, fontSize: fontSize.sm },
   muted: { color: colors.mutedForeground, fontSize: fontSize.sm },
 });

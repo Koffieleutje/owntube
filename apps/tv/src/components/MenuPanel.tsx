@@ -10,6 +10,7 @@ import {
   TVFocusGuideView,
   View,
 } from "react-native";
+import { isSuppressedPress } from "@/lib/long-press";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
 export type MenuItem = {
@@ -100,6 +101,10 @@ export function MenuPanel({ buildPage, onClose }: Props) {
   }, [onClose]);
 
   const choose = (item: MenuItem) => {
+    // A menu opened by a long press must not act on the click that ends that
+    // same hold: the card menu opens mid-hold and focuses its first row, so
+    // the release could land on it and play the video the menu is about.
+    if (isSuppressedPress()) return;
     if (item.submenu || (item.confirm && key !== CONFIRM_PAGE)) {
       const submenu = item.submenu ?? CONFIRM_PAGE;
       if (item.confirm) setConfirming(item);
