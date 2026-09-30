@@ -1,5 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
+import { apiTokenAllows } from "@/server/api-token";
 import { UpstreamLiveUpcomingError } from "@/server/errors/upstream-live-upcoming";
 import type { TRPCContext } from "@/server/trpc/context";
 
@@ -23,11 +24,17 @@ const t = initTRPC.context<TRPCContext>().create({
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = t.procedure.use(({ ctx, path, next }) => {
   if (!ctx.userId) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Authentication required.",
+    });
+  }
+  if (ctx.apiToken && !apiTokenAllows(ctx.apiToken.scopes, path)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This API token's scopes don't allow ${path}.`,
     });
   }
   return next({ ctx: { ...ctx, userId: ctx.userId } });

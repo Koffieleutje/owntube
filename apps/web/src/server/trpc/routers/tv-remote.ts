@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "@/server/trpc/init";
-import { listTvs, pollTv, sendToTv } from "@/server/tv-remote";
+import {
+  listTvs,
+  looksLikeEmulator,
+  pollTv,
+  sendToTv,
+} from "@/server/tv-remote";
 
 const deviceIdSchema = z.string().min(8).max(64);
 
@@ -9,10 +14,21 @@ export const tvRemoteRouter = router({
   /** Called by the TV every few seconds while it is in the foreground. */
   poll: protectedProcedure
     .input(
-      z.object({ deviceId: deviceIdSchema, name: z.string().min(1).max(60) }),
+      z.object({
+        deviceId: deviceIdSchema,
+        name: z.string().min(1).max(60),
+        /** Sent by newer TV builds; older ones are judged by their name. */
+        emulator: z.boolean().optional(),
+      }),
     )
     .query(({ ctx, input }) => ({
-      command: pollTv(ctx.userId, input.deviceId, input.name),
+      command: pollTv(
+        ctx.userId,
+        input.deviceId,
+        input.name,
+        Date.now(),
+        input.emulator ?? looksLikeEmulator(input.name),
+      ),
     })),
 
   /** The user's TVs that are on right now. */

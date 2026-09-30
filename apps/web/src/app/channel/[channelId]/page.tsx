@@ -1,5 +1,6 @@
 import { unstable_noStore as noStore } from "next/cache";
 import { ChannelBlockedBadge } from "@/components/channel/channel-blocked-badge";
+import { ChannelRssButton } from "@/components/channel/channel-rss-button";
 import { ChannelSubscribeButton } from "@/components/channel/channel-subscribe-button";
 import { ChannelTags } from "@/components/channel/channel-tags";
 import { ChannelVideosSection } from "@/components/channel/channel-videos-section";
@@ -88,7 +89,11 @@ export default async function ChannelPage({ params }: ChannelPageProps) {
                   <ChannelTags channelId={page.channelId} isAuthed={isAuthed} />
                 </div>
               </div>
-              <div className="shrink-0">
+              <div className="flex shrink-0 gap-2">
+                <ChannelRssButton
+                  channelId={page.channelId}
+                  isAuthed={isAuthed}
+                />
                 <ChannelSubscribeButton
                   channelId={page.channelId}
                   isAuthed={isAuthed}

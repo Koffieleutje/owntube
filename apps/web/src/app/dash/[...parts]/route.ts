@@ -8,6 +8,7 @@ import {
   DASH_VIDEO_FAMILIES,
   type DashVideoFamily,
   generateMpd,
+  vodCaptionAdaptationSets,
 } from "@/server/services/dash/generate";
 import {
   buildLiveManifest,
@@ -17,6 +18,12 @@ import {
   LIVE_INIT_PATH,
   newestLiveSegmentPath,
 } from "@/server/services/dash/live-manifest";
+import {
+  companionSabrVodSegmentUrl,
+  fetchCompanionSabrVodManifest,
+  rewriteSabrVodManifest,
+  sabrVodMode,
+} from "@/server/services/dash/sabr-vod";
 import { fetchVideoDetail } from "@/server/services/proxy";
 import { createCaller } from "@/server/trpc/caller";
 
@@ -52,8 +59,8 @@ async function recordPlay(request: Request, videoId: string): Promise<void> {
     await caller.history.upsertEvent({
       videoId,
       channelId: detail.channelId,
-      channelName: detail.channelName,
       videoTitle: detail.title,
+      channelName: detail.channelName,
       videoDurationSeconds: detail.durationSeconds,
     });
   } catch {
@@ -69,6 +76,25 @@ const LIVE_REP_RE = /^\d{1,3}$/;
 const LIVE_SEGMENT_PATH_RE = /^[\w-]+(\/[\w.-]+)*$/;
 /** One 5s 1080p60 segment is ~4MB from the companion on the same host. */
 const LIVE_SEGMENT_TIMEOUT_MS = 30_000;
+/** The connector's track names: `v<height>`, `a-<trackId>`. */
+const SABR_TRACK_RE = /^[\w.-]{1,64}$/;
+const SABR_FILE_RE = /^(init\.mp4|seg-\d{1,7}\.m4s)$/;
+/**
+ * The companion itself waits up to its `SABR_SEGMENT_WAIT_MS` (30 s) for a
+ * reader to reach the segment before answering 503.
+ */
+const SABR_SEGMENT_TIMEOUT_MS = 40_000;
+/** Caption AdaptationSet ids on the SABR manifest; its own sets carry none. */
+const SABR_CAPTION_FIRST_ID = 100;
+
+function mpdResponse(body: string): Response {
+  return new Response(body, {
+    headers: {
+      "content-type": MPD_CONTENT_TYPE,
+      "cache-control": "no-store",
+    },
+  });
+}
 
 /**
  * A live broadcast's manifest: `/dash/<videoId>/live.mpd`. YouTube's own
@@ -222,6 +248,111 @@ async function serveLiveSegment(
 }
 
 /**
+ * The companion's SABR→DASH manifest for a VOD (`sabr-vod.ts`), with its
+ * segments pointed at `/dash/<id>/sabr/...` below and our own caption sets.
+ * Null when the companion has nothing usable, so the caller can try the next
+ * source.
+ */
+async function sabrVodManifest(
+  videoId: string,
+  audioLang: string | null,
+  maxHeight: number | null,
+): Promise<string | null> {
+  const mpd = await fetchCompanionSabrVodManifest(videoId, audioLang);
+  if (!mpd) return null;
+  const captionsXml = await vodCaptionAdaptationSets(
+    videoId,
+    SABR_CAPTION_FIRST_ID,
+  );
+  return rewriteSabrVodManifest(mpd, videoId, { maxHeight, captionsXml });
+}
+
+/**
+ * One of the connector's VOD segments: `/dash/<id>/sabr/<track>/init.mp4` or
+ * `.../seg-<n>.m4s`, proxied from the companion with a fresh `check=`. The
+ * companion keeps prepared sessions in memory only, so after a restart it
+ * answers 404 "not prepared" until someone asks for the manifest again —
+ * which is done here, once, before retrying.
+ */
+async function serveSabrVodSegment(
+  request: Request,
+  videoId: string,
+  track: string | undefined,
+  file: string | undefined,
+  rest: string[],
+): Promise<Response> {
+  if (
+    rest.length > 0 ||
+    !track ||
+    !SABR_TRACK_RE.test(track) ||
+    !file ||
+    !SABR_FILE_RE.test(file)
+  ) {
+    return new Response("not found", { status: 404 });
+  }
+  const fetchSegment = () => {
+    const url = companionSabrVodSegmentUrl(videoId, track, file);
+    if (!url) return null;
+    return fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.any([
+        request.signal,
+        AbortSignal.timeout(SABR_SEGMENT_TIMEOUT_MS),
+      ]),
+    });
+  };
+
+  let upstream: Response | null;
+  try {
+    upstream = await fetchSegment();
+    if (upstream?.status === 404) {
+      await upstream.body?.cancel?.();
+      if (await fetchCompanionSabrVodManifest(videoId)) {
+        upstream = await fetchSegment();
+      }
+    }
+  } catch {
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    return new Response("sabr segment fetch failed", { status: 502 });
+  }
+  if (!upstream) {
+    return new Response("companion not configured", { status: 503 });
+  }
+  if (upstream.status === 503) {
+    // "Segment not ready; retry": the reader hasn't reached it yet. dash.js
+    // retries failed segment requests on its own schedule.
+    await upstream.body?.cancel?.();
+    return new Response("sabr segment not ready", {
+      status: 503,
+      headers: { "retry-after": "1" },
+    });
+  }
+  if (!upstream.ok) {
+    await upstream.body?.cancel?.();
+    return new Response(`sabr segment upstream ${upstream.status}`, {
+      status: 502,
+    });
+  }
+
+  let body: ArrayBuffer;
+  try {
+    body = await upstream.arrayBuffer();
+  } catch {
+    return new Response("sabr segment read failed", { status: 502 });
+  }
+  return new Response(body, {
+    headers: {
+      "content-type":
+        upstream.headers.get("content-type") ?? "application/octet-stream",
+      "content-length": String(body.byteLength),
+      // A segment of a static manifest never changes; the companion says the
+      // same.
+      "cache-control": upstream.headers.get("cache-control") ?? "no-store",
+    },
+  });
+}
+
+/**
  * Serves a synthesized VOD DASH manifest (see `dash/generate.ts`):
  *   /dash/<videoId>/manifest.mpd?video=vp9|av01|avc
  * The video codec family is picked client-side via MSE `isTypeSupported`
@@ -229,7 +360,9 @@ async function serveLiveSegment(
  * Representations resolve to the same-origin `/invidious/videoplayback` proxy.
  *
  * Live broadcasts use `/dash/<videoId>/live.mpd` and its `/live/...` segments
- * instead (see `serveLiveManifest`).
+ * instead (see `serveLiveManifest`). With `INVIDIOUS_COMPANION_SABR_VOD` set,
+ * the manifest can come from the companion's SABR connector instead, with
+ * segments under `/dash/<videoId>/sabr/...` (see `sabr-vod.ts`).
  */
 export async function GET(
   request: Request,
@@ -258,6 +391,10 @@ async function handleGET(
     const [rep, ...tail] = rest;
     return serveLiveSegment(request, videoId, rep, tail);
   }
+  if (file === "sabr") {
+    const [track, segment, ...tail] = rest;
+    return serveSabrVodSegment(request, videoId, track, segment, tail);
+  }
   if (file !== "manifest.mpd" || rest.length > 0) {
     return new Response("not found", { status: 404 });
   }
@@ -282,30 +419,30 @@ async function handleGET(
   // Fire and forget: the manifest response shouldn't wait on history.
   void recordPlay(request, videoId);
 
+  const sabr = sabrVodMode();
+  if (sabr === "always") {
+    const body = await sabrVodManifest(videoId, audioLang, maxHeight);
+    if (body) return mpdResponse(body);
+    // The companion had nothing: fall through to the byte-range formats, which
+    // is what a video the connector can't serve would have got anyway.
+  }
+
   try {
     const body = await generateMpd(videoId, family, audioLang, maxHeight);
-    return new Response(body, {
-      headers: {
-        "content-type": MPD_CONTENT_TYPE,
-        "cache-control": "no-store",
-      },
-    });
+    return mpdResponse(body);
   } catch (e) {
+    if (sabr === "fallback") {
+      const body = await sabrVodManifest(videoId, audioLang, maxHeight);
+      if (body) return mpdResponse(body);
+    }
     // Post-Live-DVR (an ended livestream YouTube hasn't converted to VOD yet)
     // exposes no byte-range-indexed formats, so we can't synthesize an MPD.
     // invidious-companion can, though — it builds a SegmentTemplate manifest
     // via YouTube.js with deciphered, po_token'd segment URLs. Proxy that
-    // instead of failing. Its segments are companion URLs carrying
-    // `access-control-allow-origin: *`, so dash.js can fetch them directly.
+    // instead of failing. Its segments are rewritten to `/dvr/...` paths on
+    // this origin (see `dvr-manifest.ts`).
     const companion = await companionDashManifest(videoId);
-    if (companion) {
-      return new Response(companion, {
-        headers: {
-          "content-type": MPD_CONTENT_TYPE,
-          "cache-control": "no-store",
-        },
-      });
-    }
+    if (companion) return mpdResponse(companion);
     return new Response(`dash generation failed: ${(e as Error).message}`, {
       status: 502,
     });

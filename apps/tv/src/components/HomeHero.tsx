@@ -8,6 +8,7 @@ import {
   formatThumbnailBadge,
   formatViews,
   heroThumbnailUrls,
+  sizedAvatarUrl,
 } from "@/lib/format";
 import { colors, focus, fontSize, radius, spacing } from "@/theme";
 
@@ -88,6 +89,8 @@ export function HomeHero({ video, label, onPress }: HomeHeroProps) {
   );
 }
 
+const CHANNEL_AVATAR_SIZE = 42;
+
 function ChannelAvatar({
   imageUrl,
   channelName,
@@ -98,7 +101,7 @@ function ChannelAvatar({
   if (imageUrl) {
     return (
       <Image
-        source={{ uri: imageUrl }}
+        source={{ uri: sizedAvatarUrl(imageUrl, CHANNEL_AVATAR_SIZE) }}
         style={styles.avatar}
         resizeMethod="resize"
       />
@@ -184,9 +187,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: CHANNEL_AVATAR_SIZE,
+    height: CHANNEL_AVATAR_SIZE,
+    borderRadius: CHANNEL_AVATAR_SIZE / 2,
     backgroundColor: colors.avatarFallback,
   },
   avatarFallback: {

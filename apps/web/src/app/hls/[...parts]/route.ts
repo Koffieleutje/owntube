@@ -2,6 +2,7 @@ import { mediaCorsPreflight, withMediaCors } from "@/lib/media-cors";
 import {
   generateMasterPlaylist,
   generateMediaPlaylist,
+  generateSubtitlePlaylist,
 } from "@/server/services/hls/generate";
 
 const M3U8_CONTENT_TYPE = "application/vnd.apple.mpegurl";
@@ -11,6 +12,7 @@ const VIDEO_ID_RE = /^[\w-]{6,20}$/;
  * Serves a synthesized VOD HLS manifest (see `generate.ts`):
  *   /hls/<videoId>/master.m3u8       -> variants + audio group
  *   /hls/<videoId>/media.m3u8?itag=… -> one stream's byte-range fragments
+ *   /hls/<videoId>/subtitles.m3u8?lang=… (or ?label=…) -> one caption track
  * Segments resolve to the `/invidious/videoplayback` proxy, same-origin with
  * this route's media origin (see media-origin.ts).
  */
@@ -58,6 +60,27 @@ async function handleGET(
         return new Response("invalid xtags", { status: 400 });
       }
       const body = await generateMediaPlaylist(videoId, itag, xtags);
+      return new Response(body, {
+        headers: {
+          "content-type": M3U8_CONTENT_TYPE,
+          "cache-control": "no-store",
+        },
+      });
+    }
+    if (file === "subtitles.m3u8") {
+      const params = new URL(request.url).searchParams;
+      const lang = params.get("lang") ?? undefined;
+      const label = params.get("label") ?? undefined;
+      if (lang && !/^[\w-]{1,35}$/.test(lang)) {
+        return new Response("invalid lang", { status: 400 });
+      }
+      if (label && label.length > 200) {
+        return new Response("invalid label", { status: 400 });
+      }
+      if (!lang && !label) {
+        return new Response("missing lang or label", { status: 400 });
+      }
+      const body = await generateSubtitlePlaylist(videoId, { lang, label });
       return new Response(body, {
         headers: {
           "content-type": M3U8_CONTENT_TYPE,

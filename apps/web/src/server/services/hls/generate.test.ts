@@ -3,6 +3,7 @@ import {
   type AdaptiveFormat,
   audioXtagsOf,
   buildMasterPlaylist,
+  buildSubtitlePlaylist,
   pickAudioTracks,
 } from "@/server/services/hls/generate";
 
@@ -97,9 +98,57 @@ describe("buildMasterPlaylist", () => {
       `NAME="Dutch (Original)",LANGUAGE="nl-NL",DEFAULT=YES,AUTOSELECT=YES,URI="media.m3u8?itag=140&xtags=${xt("acont=original:lang=nl-NL")}"`,
     );
     expect(m3u8).toContain(
-      `NAME="English",LANGUAGE="en-US",DEFAULT=NO,AUTOSELECT=YES,URI="media.m3u8?itag=140&xtags=${xt("acont=dubbed-auto:lang=en-US")}"`,
+      `NAME="English",LANGUAGE="en-US",DEFAULT=NO,AUTOSELECT=NO,URI="media.m3u8?itag=140&xtags=${xt("acont=dubbed-auto:lang=en-US")}"`,
     );
     // Variant rows still reference the shared audio group.
     expect(m3u8).toContain('AUDIO="aud"');
+  });
+});
+
+describe("subtitles in the master playlist", () => {
+  it("adds one SUBTITLES rendition per caption and links the variants to it", () => {
+    const m3u8 = buildMasterPlaylist([avc720], pickAudioTracks([aacPlain]), [
+      { label: "Dutch (auto-generated)", language_code: "nl" },
+      { label: "Commentary" },
+    ]);
+    expect(m3u8).toContain(
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Dutch (auto-generated)",LANGUAGE="nl",DEFAULT=NO,AUTOSELECT=YES,URI="subtitles.m3u8?lang=nl"',
+    );
+    expect(m3u8).toContain(
+      '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Commentary",DEFAULT=NO,AUTOSELECT=YES,URI="subtitles.m3u8?label=Commentary"',
+    );
+    expect(m3u8).toContain('AUDIO="aud",SUBTITLES="subs"');
+  });
+
+  it("leaves the variants alone when there are no captions", () => {
+    const m3u8 = buildMasterPlaylist([avc720], pickAudioTracks([aacPlain]), [
+      {},
+    ]);
+    expect(m3u8).not.toContain("SUBTITLES");
+  });
+
+  it("keeps quotes out of the rendition name", () => {
+    const m3u8 = buildMasterPlaylist([avc720], pickAudioTracks([aacPlain]), [
+      { label: 'The "director" cut', languageCode: "en" },
+    ]);
+    expect(m3u8).toContain('NAME="The director cut"');
+  });
+});
+
+describe("buildSubtitlePlaylist", () => {
+  it("serves the whole caption file as one segment spanning the video", () => {
+    expect(buildSubtitlePlaylist("abc_DEF-123", "lang=nl", 562.433)).toBe(
+      [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        "#EXT-X-TARGETDURATION:563",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        "#EXTINF:562.433,",
+        "/captions/abc_DEF-123?lang=nl",
+        "#EXT-X-ENDLIST",
+        "",
+      ].join("\n"),
+    );
   });
 });

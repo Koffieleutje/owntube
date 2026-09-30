@@ -122,6 +122,8 @@ export type ChannelMetaLite = {
   description: string | null;
   latestVideoAt: number | null;
   subscriberCount: number | null;
+  /** When name/avatar were last fetched (see isFreshChannelMeta). */
+  updatedAt: number;
 };
 
 export function readChannelMetaByIds(
@@ -137,6 +139,7 @@ export function readChannelMetaByIds(
     description: string | null;
     latestVideoAt: number | null;
     subscriberCount: number | null;
+    updatedAt: number;
   }[] = [];
   try {
     rows = db
@@ -147,6 +150,7 @@ export function readChannelMetaByIds(
         description: channelMeta.description,
         latestVideoAt: channelMeta.latestVideoAt,
         subscriberCount: channelMeta.subscriberCount,
+        updatedAt: channelMeta.updatedAt,
       })
       .from(channelMeta)
       .where(inArray(channelMeta.channelId, channelIds))
@@ -164,6 +168,7 @@ export function readChannelMetaByIds(
       description: r.description ?? null,
       latestVideoAt: r.latestVideoAt ?? null,
       subscriberCount: r.subscriberCount ?? null,
+      updatedAt: r.updatedAt,
     });
   }
   return out;

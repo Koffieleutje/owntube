@@ -5,6 +5,7 @@ import {
   type ListRenderItem,
   StyleSheet,
   Text,
+  TVFocusGuideView,
   View,
 } from "react-native";
 import { type CardMenuExtras, useCardMenu } from "@/components/CardMenu";
@@ -18,8 +19,11 @@ type Props = {
   onSelect: (videoId: string) => void;
   /** Focus the first card of this row when the content area first gains focus. */
   preferFirstFocus?: boolean;
-  /** Bubbles card focus so a parent can bring the row fully into view. */
-  onCardFocusChange?: (focused: boolean) => void;
+  /**
+   * Bubbles card focus (with the card's video) so a parent can bring the row
+   * into view, or show the video's details.
+   */
+  onCardFocusChange?: (focused: boolean, video?: UnifiedVideo) => void;
   /** Screen-specific context-menu actions for a card. */
   menuExtras?: CardMenuExtras;
   /** Cards that aren't videos (playlists) have no video context menu. */
@@ -73,12 +77,13 @@ export const VideoRow = memo(function VideoRow({
    */
   const handleFocusChange = useCallback(
     (focused: boolean, index: number) => {
-      const { videos, disableMenu } = menuRef.current;
+      const { videos, disableMenu, cardMenu } = menuRef.current;
       const video = videos[index];
       if (focused && video && !disableMenu) {
         const action = () => handleLongPress(video);
         longPressRef.current = action;
         setLongPressTarget(action);
+        cardMenu.hintLongPress();
       } else if (!focused && longPressRef.current) {
         setLongPressTarget(null, longPressRef.current);
         longPressRef.current = null;
@@ -95,7 +100,7 @@ export const VideoRow = memo(function VideoRow({
           viewPosition: 0.5,
         });
       }
-      onCardFocusChangeRef.current?.(focused);
+      onCardFocusChangeRef.current?.(focused, video);
     },
     [handleLongPress],
   );
@@ -123,27 +128,40 @@ export const VideoRow = memo(function VideoRow({
   return (
     <View style={styles.row}>
       {title ? <Text style={styles.heading}>{title}</Text> : null}
-      <FlatList
-        ref={listRef}
-        onLayout={(e) => {
-          listWidthRef.current = e.nativeEvent.layout.width;
-        }}
-        horizontal
-        data={videos}
-        keyExtractor={keyExtractor}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
-        // TV focus can only land on an attached view. With clipping on, the
-        // card just off the viewport edge isn't focusable yet, so the first
-        // D-pad press only scrolls it in and a second is needed to select.
-        removeClippedSubviews={false}
-        initialNumToRender={8}
-        windowSize={9}
-        ItemSeparatorComponent={Separator}
-        renderItem={renderItem}
-        onScrollToIndexFailed={ignore}
-        getItemLayout={getItemLayout}
-      />
+      {/* Entering the row (from the hero above, or another row) lands on
+          the card last focused here, else the first: without it Android
+          picks the card nearest the previous focus, so Down from the
+          full-width hero landed on the second card. Right at the row's last
+          card stays put; Android otherwise hands focus to the nearest card
+          in some other row. */}
+      <TVFocusGuideView autoFocus trapFocusRight>
+        <FlatList
+          ref={listRef}
+          onLayout={(e) => {
+            listWidthRef.current = e.nativeEvent.layout.width;
+          }}
+          horizontal
+          data={videos}
+          keyExtractor={keyExtractor}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.listContent}
+          // TV focus can only land on an attached view. With clipping on, the
+          // card just off the viewport edge isn't focusable yet, so the first
+          // D-pad press only scrolls it in and a second is needed to select.
+          removeClippedSubviews={false}
+          // Every mounted card holds its decoded thumbnail (~0.7 MB), and rows
+          // on hidden screens stay mounted. Nine viewports' worth per row ran
+          // Fresco's bitmap pool into its hard cap, after which new thumbnails
+          // failed to load and stayed blank. One viewport either side is still
+          // ahead of the D-pad.
+          initialNumToRender={5}
+          windowSize={3}
+          ItemSeparatorComponent={Separator}
+          renderItem={renderItem}
+          onScrollToIndexFailed={ignore}
+          getItemLayout={getItemLayout}
+        />
+      </TVFocusGuideView>
     </View>
   );
 });

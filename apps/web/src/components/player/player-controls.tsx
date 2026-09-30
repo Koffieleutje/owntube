@@ -367,6 +367,7 @@ export function ProgressBar({
   sponsorSegments = [],
   scrubPreview,
   completed = false,
+  interactive = true,
   onScrub,
   onScrubEnd,
 }: {
@@ -378,6 +379,11 @@ export function ProgressBar({
   scrubPreview?: ScrubPreviewConfig | null;
   /** Watched video: paint the played fill green, matching the card's bar. */
   completed?: boolean;
+  /**
+   * False while the chrome is faded out: the bar then lets taps through to the
+   * player surface (which reveals the controls) instead of seeking.
+   */
+  interactive?: boolean;
   onScrub: (t: number) => void;
   onScrubEnd: (t: number) => void;
 }) {
@@ -396,6 +402,9 @@ export function ProgressBar({
   } | null>(null);
   const [dragging, setDragging] = useState(false);
   const draggingRef = useRef(false);
+  // Last position the pointer actually reached. `pointercancel` reports
+  // clientX 0, so committing its coordinates jumped touch drags to 0:00.
+  const lastScrubRef = useRef(0);
   // Portal target must follow the fullscreen element: in fullscreen the player
   // shell becomes its own stacking context, so anything left on `document.body`
   // renders *behind* it (z-index is inert across stacking contexts).
@@ -442,6 +451,7 @@ export function ProgressBar({
     draggingRef.current = true;
     setDragging(true);
     const t = tFromPointer(e.clientX);
+    lastScrubRef.current = t;
     setHover(t);
     syncHoverAnchor(e.clientX);
     onScrub(t);
@@ -451,14 +461,20 @@ export function ProgressBar({
     const t = tFromPointer(e.clientX);
     setHover(t);
     syncHoverAnchor(e.clientX);
-    if (draggingRef.current) onScrub(t);
+    if (draggingRef.current) {
+      lastScrubRef.current = t;
+      onScrub(t);
+    }
   };
   const onPointerUp = (e: ReactPointerEvent) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
     setDragging(false);
-    const t = tFromPointer(e.clientX);
-    onScrubEnd(t);
+    onScrubEnd(
+      e.type === "pointercancel"
+        ? lastScrubRef.current
+        : tFromPointer(e.clientX),
+    );
   };
 
   useEffect(() => {
@@ -467,14 +483,20 @@ export function ProgressBar({
       const t = tFromPointer(e.clientX);
       setHover(t);
       syncHoverAnchor(e.clientX);
-      if (draggingRef.current) onScrub(t);
+      if (draggingRef.current) {
+        lastScrubRef.current = t;
+        onScrub(t);
+      }
     };
     const finish = (e: PointerEvent) => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
       setDragging(false);
-      const t = tFromPointer(e.clientX);
-      onScrubEnd(t);
+      onScrubEnd(
+        e.type === "pointercancel"
+          ? lastScrubRef.current
+          : tFromPointer(e.clientX),
+      );
     };
     window.addEventListener("pointermove", onWinPointerMove);
     window.addEventListener("pointerup", finish);
@@ -507,7 +529,10 @@ export function ProgressBar({
   return (
     <div
       ref={trackRef}
-      className="group/scrub relative flex min-h-10 cursor-pointer select-none items-center overflow-visible py-1.5 pointer-events-auto"
+      className={cn(
+        "group/scrub relative flex min-h-10 cursor-pointer touch-none select-none items-center overflow-visible py-1.5",
+        interactive ? "pointer-events-auto" : "pointer-events-none",
+      )}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -669,18 +694,23 @@ export function ShortsProgressBar({
   current,
   duration,
   buffered,
+  interactive = true,
   onScrub,
   onScrubEnd,
 }: {
   current: number;
   duration: number;
   buffered: number;
+  /** See ProgressBar: false while the chrome is hidden. */
+  interactive?: boolean;
   onScrub: (t: number) => void;
   onScrubEnd: (t: number) => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
+  // See ProgressBar: never commit a `pointercancel`'s clientX (it's 0).
+  const lastScrubRef = useRef(0);
 
   const pct = (n: number) =>
     duration > 0 ? Math.min(100, Math.max(0, (n / duration) * 100)) : 0;
@@ -704,29 +734,41 @@ export function ShortsProgressBar({
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     draggingRef.current = true;
     setDragging(true);
-    onScrub(tFromPointer(e.clientX));
+    lastScrubRef.current = tFromPointer(e.clientX);
+    onScrub(lastScrubRef.current);
   };
   const onPointerMove = (e: ReactPointerEvent) => {
     if (!draggingRef.current) return;
-    onScrub(tFromPointer(e.clientX));
+    lastScrubRef.current = tFromPointer(e.clientX);
+    onScrub(lastScrubRef.current);
   };
   const onPointerUp = (e: ReactPointerEvent) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
     setDragging(false);
-    onScrubEnd(tFromPointer(e.clientX));
+    onScrubEnd(
+      e.type === "pointercancel"
+        ? lastScrubRef.current
+        : tFromPointer(e.clientX),
+    );
   };
 
   useEffect(() => {
     if (!dragging) return;
     const onWinPointerMove = (e: PointerEvent) => {
-      if (draggingRef.current) onScrub(tFromPointer(e.clientX));
+      if (!draggingRef.current) return;
+      lastScrubRef.current = tFromPointer(e.clientX);
+      onScrub(lastScrubRef.current);
     };
     const finish = (e: PointerEvent) => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
       setDragging(false);
-      onScrubEnd(tFromPointer(e.clientX));
+      onScrubEnd(
+        e.type === "pointercancel"
+          ? lastScrubRef.current
+          : tFromPointer(e.clientX),
+      );
     };
     window.addEventListener("pointermove", onWinPointerMove);
     window.addEventListener("pointerup", finish);
@@ -741,7 +783,10 @@ export function ShortsProgressBar({
   return (
     <div
       ref={trackRef}
-      className="relative flex h-4 w-full cursor-pointer select-none items-end pointer-events-auto"
+      className={cn(
+        "relative flex h-4 w-full cursor-pointer touch-none select-none items-end",
+        interactive ? "pointer-events-auto" : "pointer-events-none",
+      )}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

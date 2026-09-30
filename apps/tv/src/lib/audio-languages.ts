@@ -53,7 +53,8 @@ const LANGUAGE_NAMES: Record<string, string> = {
   zh: "Chinese",
 };
 
-function languageName(lang: string): string {
+/** "Dutch" for "nl-NL" (English names; the code itself when unknown). */
+export function languageName(lang: string): string {
   const primary = lang.split("-")[0]?.toLowerCase() ?? lang;
   const mapped = LANGUAGE_NAMES[primary];
   if (mapped) return mapped;

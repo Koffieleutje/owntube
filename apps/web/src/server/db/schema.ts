@@ -18,6 +18,31 @@ export const users = sqliteTable("users", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+/**
+ * Revocable Bearer tokens for services (e.g. the n8n playback mesh), managed in
+ * Settings. Only a SHA-256 of the token is stored; the token itself is shown
+ * once at creation. `scopes` is a JSON array of API_TOKEN_SCOPES keys.
+ */
+export const apiTokens = sqliteTable(
+  "api_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    scopes: text("scopes").notNull(),
+    createdAt: integer("created_at").notNull(),
+    lastUsedAt: integer("last_used_at"),
+    revokedAt: integer("revoked_at"),
+  },
+  (t) => [
+    uniqueIndex("api_tokens_hash_uidx").on(t.tokenHash),
+    index("api_tokens_user_idx").on(t.userId),
+  ],
+);
+
 export const userProfile = sqliteTable("user_profile", {
   userId: integer("user_id")
     .primaryKey()
@@ -224,6 +249,47 @@ export const shortsSeen = sqliteTable(
     uniqueIndex("shorts_seen_user_video_uidx").on(t.userId, t.videoId),
     index("shorts_seen_user_seen_idx").on(t.userId, t.seenAt),
   ],
+);
+
+/**
+ * Seen shorts for signed-out viewers, keyed by the random `owntube_anon` cookie
+ * (see `server/anon-viewer.ts`). Mirrors `shorts_seen` so `/shorts` excludes
+ * already-seen shorts server-side for everyone; rows expire after
+ * ANON_SHORTS_SEEN_TTL_SEC.
+ */
+export const anonShortsSeen = sqliteTable(
+  "anon_shorts_seen",
+  {
+    anonId: text("anon_id").notNull(),
+    videoId: text("video_id").notNull(),
+    seenAt: integer("seen_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("anon_shorts_seen_anon_video_uidx").on(t.anonId, t.videoId),
+    index("anon_shorts_seen_seen_idx").on(t.seenAt),
+  ],
+);
+
+/**
+ * Uploads pushed by WebSub (via the public feeds server) and not yet visible
+ * in the channel's RSS — youtube.com's feed lags the push, often by many
+ * minutes. `refreshChannelRss` merges these into every refresh until the live
+ * feed catches up; `deleted` rows are tombstones that filter a video out.
+ */
+export const websubPushed = sqliteTable(
+  "websub_pushed",
+  {
+    videoId: text("video_id").primaryKey(),
+    channelId: text("channel_id").notNull(),
+    deleted: integer("deleted").notNull(),
+    title: text("title"),
+    channelName: text("channel_name"),
+    publishedAt: integer("published_at"),
+    receivedAt: integer("received_at").notNull(),
+    /** Last time this channel's RSS was re-fetched on this push's behalf. */
+    checkedAt: integer("checked_at").notNull(),
+  },
+  (t) => [index("websub_pushed_channel_idx").on(t.channelId)],
 );
 
 export const videoCache = sqliteTable(

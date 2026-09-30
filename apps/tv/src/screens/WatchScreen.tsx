@@ -1,3 +1,7 @@
+import {
+  ORIGINAL_CAPTION_LANGUAGE,
+  pickDefaultCaptionIndex,
+} from "@web/lib/caption-default";
 import type {
   SponsorBlockCategory,
   SponsorBlockSegment,
@@ -21,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   BackHandler,
   findNodeHandle,
   Image,
@@ -42,12 +47,18 @@ import { UpNext } from "@/components/UpNext";
 import { VideoRow } from "@/components/VideoRow";
 import {
   audioLanguageOptions,
+  languageName,
   urlLooksLikeOriginalAudio,
 } from "@/lib/audio-languages";
 import { getToken } from "@/lib/auth-token";
 import { baseUrl } from "@/lib/config";
 import { errorMessage } from "@/lib/error-message";
-import { channelInitial, formatTime, formatViews } from "@/lib/format";
+import {
+  channelInitial,
+  formatTime,
+  formatViews,
+  sizedAvatarUrl,
+} from "@/lib/format";
 import {
   contextNeighbours,
   type OpenVideoOptions,
@@ -70,6 +81,7 @@ import {
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
+import { raiseSubtitles } from "../../modules/player-subtitles";
 import { removeWatchNext, upsertWatchNext } from "../../modules/watch-next";
 
 // Used only when settings fail to load; mirrors the web's
@@ -237,6 +249,7 @@ export function WatchScreen({
   onReplaceVideo,
   onOpenChannel,
   onBack,
+  onHome,
   active = true,
 }: {
   videoId: string;
@@ -247,6 +260,8 @@ export function WatchScreen({
   onReplaceVideo: (videoId: string, options?: OpenVideoOptions) => void;
   onOpenChannel: (channelId: string) => void;
   onBack: () => void;
+  /** Leaves the player for the Home section. */
+  onHome: () => void;
   /**
    * False while a channel page sits on top: the shell keeps the player
    * mounted (so Back returns to the same spot without reloading) but it must
@@ -298,6 +313,8 @@ export function WatchScreen({
   }, []);
   /** The settings panel (gear button). */
   const [menuOpen, setMenuOpen] = useState(false);
+  /** Which page the settings panel opens on (the CC button opens captions). */
+  const [menuStart, setMenuStart] = useState("root");
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menuOpen;
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -321,6 +338,10 @@ export function WatchScreen({
   const swallowPressRef = useRef(false);
   /** Playback reached the end (and wasn't dismissed since). */
   const [ended, setEnded] = useState(false);
+  /** Marked watched from the menu: kept out of Continue watching on leave. */
+  const markedWatchedRef = useRef(false);
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
   /** Bumped by Retry on the error screen to load the video again. */
   const [reloadKey, setReloadKey] = useState(0);
   /** Description and comments beside the picture. */
@@ -378,12 +399,15 @@ export function WatchScreen({
     sponsorBlockAutoSkip: boolean;
     sponsorBlockCategories: SponsorBlockCategory[];
     autoplayNext: boolean;
+    /** Account setting: "original" or a language tag. */
+    captionLanguage: string;
   }>({
     maxHeight: DEFAULT_HEIGHT,
     sponsorBlockEnabled: true,
     sponsorBlockAutoSkip: true,
     sponsorBlockCategories: DEFAULT_SKIP_CATEGORIES,
     autoplayNext: true,
+    captionLanguage: ORIGINAL_CAPTION_LANGUAGE,
   });
   const scrubRef = useRef<number | null>(null);
   const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -438,6 +462,12 @@ export function WatchScreen({
   // Latest values the timeUpdate listener and unmount cleanup read without
   // re-subscribing on every change.
   const currentTimeRef = useRef(0);
+  /**
+   * Time this source has actually spent playing: settled time, plus the run in
+   * progress since `playingSinceRef` (null while not playing).
+   */
+  const playedMsRef = useRef(0);
+  const playingSinceRef = useRef<number | null>(null);
   const segmentsRef = useRef<SponsorBlockSegment[]>([]);
   const detailRef = useRef<VideoDetail | null>(null);
   const pendingSeekRef = useRef<number | null>(null);
@@ -469,6 +499,8 @@ export function WatchScreen({
     setAudioLangIndex(0);
     detailRef.current = null;
     currentTimeRef.current = 0;
+    playedMsRef.current = 0;
+    playingSinceRef.current = null;
     segmentsRef.current = [];
     pendingSeekRef.current = null;
     shouldPlayAfterReplaceRef.current = true;
@@ -486,6 +518,7 @@ export function WatchScreen({
           sponsorBlockAutoSkip: st.sponsorBlockAutoSkip,
           sponsorBlockCategories: st.sponsorBlockCategories,
           autoplayNext: st.autoplayNext,
+          captionLanguage: st.captionLanguage ?? ORIGINAL_CAPTION_LANGUAGE,
         };
       })
       // Defaults already sit in the ref; a settings failure shouldn't block play.
@@ -750,12 +783,32 @@ export function WatchScreen({
     setSubtitleTracks(tracks);
     if (captionsAppliedRef.current || tracks.length === 0) return;
     captionsAppliedRef.current = true;
-    const preferred = playerPrefs().captionLanguage;
-    const match = preferred ? findTrack(tracks, preferred) : undefined;
-    if (match) {
-      player.subtitleTrack = match;
-      setSubtitleTrack(match);
+    if (!playerPrefs().captionsEnabled) return;
+    const track = defaultCaptionTrack(tracks);
+    if (track) {
+      player.subtitleTrack = track;
+      setSubtitleTrack(track);
     }
+  };
+
+  /** The account's caption language for this video (see caption-default). */
+  const defaultCaptionTrack = (
+    tracks: SubtitleTrack[],
+  ): SubtitleTrack | undefined => {
+    const original = audioLanguageOptions(
+      detailRef.current?.audioSources ?? [],
+    ).find((lang) => lang.isOriginal)?.lang;
+    const index = pickDefaultCaptionIndex(
+      tracks.map((t) => ({
+        label: t.label ?? "",
+        languageCode: t.language ?? "",
+      })),
+      {
+        preferred: settingsRef.current.captionLanguage,
+        originalAudioLanguage: original,
+      },
+    );
+    return tracks[index];
   };
   const applySubtitleTracksRef = useRef(applySubtitleTracks);
   applySubtitleTracksRef.current = applySubtitleTracks;
@@ -833,8 +886,9 @@ export function WatchScreen({
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       // In the background (under a channel page): Back belongs to the shell.
       if (!activeRef.current) return false;
+      // Declining what's next leaves the finished video too.
       if (showUpNextRef.current) {
-        setEnded(false);
+        onBackRef.current();
         return true;
       }
       if (!controlsVisibleRef.current) return false;
@@ -852,6 +906,10 @@ export function WatchScreen({
     () => () => {
       const detail = detailRef.current;
       if (!detail || detail.isLive) return;
+      if (markedWatchedRef.current) {
+        removeWatchNext(detail.videoId);
+        return;
+      }
       const duration = detail.durationSeconds ?? 0;
       const position = currentTimeRef.current;
       if (duration <= 0) return;
@@ -890,28 +948,20 @@ export function WatchScreen({
       // the source reports its duration can land past it, and the player then
       // announces the end of a video that has barely started — resuming from
       // Continue watching put the up-next card over one that had just begun.
+      // Position alone isn't proof (the duration may be unknown yet, or the
+      // position already reads the end), so also require that this source has
+      // actually played: a video sent from the phone got the card before a
+      // single frame had run. Resume never starts within the last
+      // RESUME_END_GUARD_SECONDS, so a real end always clears this.
       const total = detailRef.current?.durationSeconds || player.duration || 0;
       if (total > 0 && currentTimeRef.current < total - END_TOLERANCE_SECONDS) {
         return;
       }
-      const detail = detailRef.current;
-      if (detail?.channelId) {
-        trpcClient.history.upsertEvent
-          .mutate({
-            videoId: detail.videoId,
-            channelId: detail.channelId,
-            // The server keeps the larger of this and the recorded play time;
-            // what matters here is `completed`, which also dequeues it.
-            durationWatched: 0,
-            positionSeconds: Math.floor(currentTimeRef.current),
-            completed: true,
-            videoDurationSeconds: detail.durationSeconds,
-            videoTitle: detail.title,
-            channelName: detail.channelName,
-          })
-          .catch(() => {});
-      }
-      removeWatchNext(videoId);
+      const since = playingSinceRef.current;
+      const playedMs =
+        playedMsRef.current + (since === null ? 0 : Date.now() - since);
+      if (playedMs < END_TOLERANCE_SECONDS * 1000) return;
+      recordCompleted(videoId, detailRef.current, currentTimeRef.current);
       setEnded(true);
     });
     return () => sub.remove();
@@ -941,6 +991,7 @@ export function WatchScreen({
     const sub = player.addListener("statusChange", ({ status }) => {
       setIsBuffering(status === "loading");
       if (status === "readyToPlay") {
+        raiseSubtitles();
         setDuration(player.duration);
         applySubtitleTracksRef.current(player.availableSubtitleTracks);
         setSubtitleTrack(player.subtitleTrack);
@@ -972,6 +1023,7 @@ export function WatchScreen({
     const selected = player.addListener(
       "subtitleTrackChange",
       ({ subtitleTrack }) => {
+        if (subtitleTrack) raiseSubtitles();
         setSubtitleTrack(subtitleTrack);
       },
     );
@@ -1008,6 +1060,9 @@ export function WatchScreen({
     const sub = player.addListener(
       "playingChange",
       ({ isPlaying: playing }) => {
+        const since = playingSinceRef.current;
+        if (since !== null) playedMsRef.current += Date.now() - since;
+        playingSinceRef.current = playing ? Date.now() : null;
         // The MediaSession still owns the hardware Play/Pause key while the
         // player sits behind a channel page; don't let it resume there.
         if (playing && !activeRef.current) {
@@ -1021,6 +1076,24 @@ export function WatchScreen({
     );
     return () => sub.remove();
   }, [player, audioPlayer, revealControls]);
+
+  // Back from another app, or from standby: expo-video paused the player on
+  // the way out, and the activity came back with a new video surface. A
+  // hardware decoder (the KPN box's Amlogic) draws nothing onto it until the
+  // next frame is decoded, so a paused player left a black screen that looked
+  // like the box had switched off. Seeking to where it stands decodes that
+  // frame; the controls come up so it's clear what's on screen.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next !== "active" || !activeRef.current) return;
+      if (!player.playing) {
+        const at = player.currentTime;
+        player.currentTime = at;
+      }
+      revealControls();
+    });
+    return () => sub.remove();
+  }, [player, revealControls]);
 
   // Sent to the background (a channel page opened on top): pause, and close
   // any panel so its own Back handler can't claim presses meant for the page.
@@ -1062,6 +1135,15 @@ export function WatchScreen({
       audioPlayer.pause();
       setIsPlaying(false);
     } else {
+      // Play at the very end replays from the start. Playing on from there
+      // would only end again at once and bring the up-next card straight back.
+      const total = detailRef.current?.durationSeconds || player.duration || 0;
+      if (total > 0 && currentTimeRef.current >= total - 1) {
+        player.currentTime = 0;
+        if (selectedOptionRef.current?.kind === "split") {
+          audioPlayer.currentTime = 0;
+        }
+      }
       player.play();
       if (selectedOptionRef.current?.kind === "split") audioPlayer.play();
       setIsPlaying(true);
@@ -1127,9 +1209,18 @@ export function WatchScreen({
     setIsPlaying(true);
   };
 
+  // A rating only changes the icon, so say what it did: it is a taste signal
+  // for the recommender, the same as on the web player.
   const setRatingValue = (next: "like" | "dislike") => {
     const active = rating !== next;
     setRating(active ? next : null);
+    showToast({
+      text: !active
+        ? "Rating removed"
+        : next === "like"
+          ? "Liked — you'll see more like this"
+          : "Disliked — you'll see less like this",
+    });
     trpcClient.interactions.set
       .mutate({ videoId, type: next, active })
       .catch(() => {});
@@ -1270,25 +1361,14 @@ export function WatchScreen({
    * Subtitles come from the stream's own tracks, so the toggle is only useful
    * once ExoPlayer has surfaced at least one.
    */
-  /** Picks a caption track (null = off) and remembers its language. */
+  /**
+   * Picks a caption track (null = off) for this video, and remembers on/off
+   * for the next; the language comes from the account setting each time.
+   */
   const chooseSubtitles = (track: SubtitleTrack | null) => {
     player.subtitleTrack = track;
     setSubtitleTrack(track);
-    savePlayerPrefs({ captionLanguage: track?.language ?? null });
-  };
-
-  /** The CC button: off, or back on in the remembered (else first) language. */
-  const toggleSubtitles = () => {
-    if (subtitleTrack) {
-      chooseSubtitles(null);
-      return;
-    }
-    const preferred = playerPrefs().captionLanguage;
-    chooseSubtitles(
-      (preferred ? findTrack(subtitleTracks, preferred) : undefined) ??
-        subtitleTracks[0] ??
-        null,
-    );
+    savePlayerPrefs({ captionsEnabled: track !== null });
   };
 
   /**
@@ -1367,18 +1447,34 @@ export function WatchScreen({
   const actOnToastRef = useRef(actOnToast);
   actOnToastRef.current = actOnToast;
 
+  /**
+   * Marking the playing video watched finishes it, as reaching the end would:
+   * recorded as completed (which also dequeues it), then the up-next card, or
+   * Home when nothing follows.
+   */
   const markWatched = () => {
     const detail = detailRef.current;
     if (!detail) return;
-    trpcClient.subscriptions.markWatched
-      .mutate({ videoId, channelId: detail.channelId ?? undefined })
-      .then(() => {
-        showToast({ text: "Marked as watched" });
-        void queryClient.invalidateQueries({
-          queryKey: [["history", "progressAll"]],
-        });
-      })
-      .catch(() => showToast({ text: "Couldn't mark as watched" }));
+    markedWatchedRef.current = true;
+    player.pause();
+    audioPlayer.pause();
+    setIsPlaying(false);
+    const done = recordCompleted(
+      videoId,
+      detail,
+      detail.durationSeconds || currentTimeRef.current,
+    );
+    void done.then(() =>
+      queryClient.invalidateQueries({
+        queryKey: [["history", "progressAll"]],
+      }),
+    );
+    if (nextVideo) {
+      setEnded(true);
+      showToast({ text: "Marked as watched" });
+    } else {
+      onHome();
+    }
   };
 
   useEffect(
@@ -1481,8 +1577,13 @@ export function WatchScreen({
         : "Auto"
       : `${qualityCap}p`;
   const heights = qualityHeights(detail);
-  const subtitleLabel = (track: SubtitleTrack) =>
-    track.label || track.language || "Unknown";
+  // Some streams label tracks with just their code ("nl-nl"): name those.
+  const subtitleLabel = (track: SubtitleTrack) => {
+    const label = track.label?.trim();
+    const code = track.language?.trim();
+    if (label && label.toLowerCase() !== code?.toLowerCase()) return label;
+    return code ? languageName(code) : label || "Unknown";
+  };
 
   /** The settings panel's pages, rebuilt from current state on each render. */
   const buildPage = (key: string): MenuPage => {
@@ -1527,7 +1628,11 @@ export function WatchScreen({
               selected: subtitleTrack === null,
               onPress: () => chooseSubtitles(null),
             },
-            ...subtitleTracks.map<MenuItem>((track) => ({
+            // The account's language first, then the rest as the stream lists them.
+            ...captionsInPickerOrder(
+              subtitleTracks,
+              defaultCaptionTrack(subtitleTracks),
+            ).map<MenuItem>((track) => ({
               key: track.id,
               label: subtitleLabel(track),
               selected: subtitleTrack?.id === track.id,
@@ -1582,18 +1687,7 @@ export function WatchScreen({
               detail: qualityLabelNow,
               submenu: "quality",
             },
-            ...(subtitleTracks.length > 0
-              ? [
-                  {
-                    key: "captions",
-                    label: "Captions",
-                    detail: subtitleTrack
-                      ? subtitleLabel(subtitleTrack)
-                      : "Off",
-                    submenu: "captions",
-                  },
-                ]
-              : []),
+            // Captions have their own button (CC), which opens their page.
             ...(canChooseAudioLanguage
               ? [
                   {
@@ -1619,11 +1713,14 @@ export function WatchScreen({
               submenu: "playlists",
             },
             {
-              key: "watched",
-              label: "Mark as watched",
+              key: "queue",
+              label: queued ? "Remove from queue" : "Add to queue",
               onPress: () => {
-                markWatched();
                 setMenuOpen(false);
+                toggleQueued();
+                showToast({
+                  text: queued ? "Removed from queue" : "Added to queue",
+                });
               },
             },
             {
@@ -1710,14 +1807,19 @@ export function WatchScreen({
 
       {showUpNext && nextVideo ? (
         <UpNext
+          key={nextVideo.videoId}
           video={nextVideo}
           contextLabel={context?.label}
           autoplay={settingsRef.current.autoplayNext}
           onPlay={playNext}
-          onCancel={() => setEnded(false)}
+          onCancel={onBack}
         />
       ) : menuOpen ? (
-        <MenuPanel buildPage={buildPage} onClose={closeMenu} />
+        <MenuPanel
+          buildPage={buildPage}
+          onClose={closeMenu}
+          startPage={menuStart}
+        />
       ) : detailsOpen ? (
         <DetailsPanel detail={detail} onClose={closeDetails} />
       ) : (
@@ -1863,7 +1965,9 @@ export function WatchScreen({
                   >
                     {detail.channelAvatarUrl ? (
                       <Image
-                        source={{ uri: detail.channelAvatarUrl }}
+                        source={{
+                          uri: sizedAvatarUrl(detail.channelAvatarUrl, AVATAR),
+                        }}
                         style={styles.avatar}
                       />
                     ) : (
@@ -1936,10 +2040,10 @@ export function WatchScreen({
                   onPress={() => setRatingValue("dislike")}
                   onFocusChange={onButtonFocusChange}
                 />
+                {/* Finishes the video: see markWatched. */}
                 <IconButton
-                  icon={queued ? "check" : "plus"}
-                  active={queued}
-                  onPress={toggleQueued}
+                  icon="check-circle"
+                  onPress={markWatched}
                   onFocusChange={onButtonFocusChange}
                 />
                 <IconButton
@@ -1954,7 +2058,10 @@ export function WatchScreen({
                     icon="type"
                     action="captions"
                     active={subtitleTrack !== null}
-                    onPress={toggleSubtitles}
+                    onPress={() => {
+                      setMenuStart("captions");
+                      setMenuOpen(true);
+                    }}
                     onFocusChange={onButtonFocusChange}
                   />
                 ) : null}
@@ -1965,8 +2072,11 @@ export function WatchScreen({
                 />
                 {/* Quality, captions, audio language, speed, chapters… */}
                 <IconButton
-                  icon="settings"
-                  onPress={() => setMenuOpen(true)}
+                  icon="more-vertical"
+                  onPress={() => {
+                    setMenuStart("root");
+                    setMenuOpen(true);
+                  }}
                   onFocusChange={onButtonFocusChange}
                 />
               </View>
@@ -2030,6 +2140,35 @@ const WATCH_NEXT_DONE_FRACTION = 0.95;
 const RESUME_END_GUARD_SECONDS = 15;
 /** How close playback must have got for an announced end to be a real one. */
 const END_TOLERANCE_SECONDS = 5;
+
+/**
+ * Records a video as watched to the end: completed in history (the server
+ * also drops it from the queue then) and out of the Android TV home screen's
+ * Continue watching row.
+ */
+function recordCompleted(
+  videoId: string,
+  detail: VideoDetail | null,
+  positionSeconds: number,
+): Promise<unknown> {
+  removeWatchNext(videoId);
+  if (!detail) return Promise.resolve();
+  const done = detail.channelId
+    ? trpcClient.history.upsertEvent.mutate({
+        videoId: detail.videoId,
+        channelId: detail.channelId,
+        // The server keeps the larger of this and the recorded play time;
+        // what matters here is `completed`.
+        durationWatched: 0,
+        positionSeconds: Math.floor(positionSeconds),
+        completed: true,
+        videoDurationSeconds: detail.durationSeconds,
+        videoTitle: detail.title,
+        channelName: detail.channelName,
+      })
+    : trpcClient.subscriptions.markWatched.mutate({ videoId });
+  return done.catch(() => {});
+}
 
 /** Past this, "previous" restarts the video instead of going back one. */
 const RESTART_THRESHOLD_SECONDS = 5;
@@ -2326,18 +2465,6 @@ const styles = StyleSheet.create({
   muted: { color: colors.mutedForeground, fontSize: fontSize.md },
 });
 
-/** A track in the wanted language, matching "en" to "en-US" and back. */
-function findTrack(
-  tracks: SubtitleTrack[],
-  language: string,
-): SubtitleTrack | undefined {
-  const base = language.split("-")[0];
-  return (
-    tracks.find((t) => t.language === language) ??
-    tracks.find((t) => t.language.split("-")[0] === base)
-  );
-}
-
 /**
  * The quality rungs the video offers, tallest first — what the panel lists as
  * ceilings for the DASH source. By YouTube's label ("1080p"), which the
@@ -2633,4 +2760,13 @@ function mimeVideoTypeWithoutAudioCodecs(mimeType: string | undefined) {
   );
   const hasAudio = /mp4a|opus|vorbis|flac|ac-3|ec-3/.test(codecs);
   return hasVideo && !hasAudio;
+}
+
+/** `tracks` with `first` (the account's default) moved to the front. */
+function captionsInPickerOrder(
+  tracks: SubtitleTrack[],
+  first: SubtitleTrack | undefined,
+): SubtitleTrack[] {
+  if (!first) return tracks;
+  return [first, ...tracks.filter((t) => t.id !== first.id)];
 }

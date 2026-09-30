@@ -368,3 +368,211 @@ describe("dislikeCorpusVideoIds", () => {
     expect(ids).toEqual(["dis1", "dis2", "skip1", "skip2"]);
   });
 });
+
+describe("collectUserSignals — skip-only channels and related seeds", () => {
+  it("drops a channel the user only bounced off from the relationship lists", () => {
+    const { db } = createTestDb();
+    const userId = seedUser(db);
+    const now = Math.floor(Date.now() / 1000);
+
+    db.insert(watchHistory)
+      .values([
+        // Watched twice, one finished: a channel the user actually watches.
+        {
+          userId,
+          videoId: "watchedVid01",
+          channelId: "UC-watched",
+          startedAt: now - 3 * 86_400,
+          durationWatched: 590,
+          completed: 1,
+          videoDurationSeconds: 600,
+          isShort: 0,
+          createdAt: now,
+        },
+        {
+          userId,
+          videoId: "watchedVid02",
+          channelId: "UC-watched",
+          startedAt: now - 2 * 86_400,
+          durationWatched: 300,
+          completed: 0,
+          videoDurationSeconds: 600,
+          isShort: 0,
+          createdAt: now,
+        },
+        // Opened yesterday for 15 seconds of a 26-minute video: not interest.
+        {
+          userId,
+          videoId: "bouncedVid02",
+          channelId: "UC-bounced",
+          startedAt: now - 100,
+          durationWatched: 15,
+          completed: 0,
+          videoDurationSeconds: 1555,
+          isShort: 0,
+          createdAt: now,
+        },
+      ])
+      .run();
+
+    const signals = collectUserSignals(db, userId, { excludeShorts: true });
+    expect(signals.historyChannelIds.has("UC-watched")).toBe(true);
+    expect(signals.historyChannelIds.has("UC-bounced")).toBe(false);
+    expect(signals.channelsOrderedByRecentWatch).toEqual(["UC-watched"]);
+    expect(signals.channelsOrderedByWeight).toEqual(["UC-watched"]);
+    // The near-zero weight stays so scoring semantics are unchanged.
+    expect(signals.channelWeights.has("UC-bounced")).toBe(true);
+    // Engaged watches seed related expansion, newest first; the bounce does not.
+    expect(signals.recentEngagedVideoIds).toEqual([
+      "watchedVid02",
+      "watchedVid01",
+    ]);
+  });
+
+  it("restores a skip-only channel once the user likes something on it", () => {
+    const { db } = createTestDb();
+    const userId = seedUser(db);
+    const now = Math.floor(Date.now() / 1000);
+
+    db.insert(watchHistory)
+      .values({
+        userId,
+        videoId: "bouncedVid03",
+        channelId: "UC-bounced",
+        startedAt: now - 100,
+        durationWatched: 10,
+        completed: 0,
+        videoDurationSeconds: 900,
+        isShort: 0,
+        createdAt: now,
+      })
+      .run();
+    db.insert(interactions)
+      .values({
+        userId,
+        videoId: "likedVid0001",
+        channelId: "UC-bounced",
+        type: "like",
+        createdAt: now - 50,
+      })
+      .run();
+
+    const signals = collectUserSignals(db, userId, { excludeShorts: true });
+    expect(signals.historyChannelIds.has("UC-bounced")).toBe(true);
+    expect(signals.channelsOrderedByWeight).toContain("UC-bounced");
+  });
+
+  it("orders channels by weight independently of last-watched order", () => {
+    const { db } = createTestDb();
+    const userId = seedUser(db);
+    const now = Math.floor(Date.now() / 1000);
+
+    const rows = [];
+    // Three full watches on UC-heavy last week …
+    for (let i = 0; i < 3; i += 1) {
+      rows.push({
+        userId,
+        videoId: `heavyVid000${i}`,
+        channelId: "UC-heavy",
+        startedAt: now - (5 + i) * 86_400,
+        durationWatched: 600,
+        completed: 1,
+        videoDurationSeconds: 600,
+        isShort: 0,
+        createdAt: now,
+      });
+    }
+    // … and one half-watched video on UC-light an hour ago.
+    rows.push({
+      userId,
+      videoId: "lightVid0001",
+      channelId: "UC-light",
+      startedAt: now - 3600,
+      durationWatched: 300,
+      completed: 0,
+      videoDurationSeconds: 600,
+      isShort: 0,
+      createdAt: now,
+    });
+    db.insert(watchHistory).values(rows).run();
+
+    const signals = collectUserSignals(db, userId, { excludeShorts: true });
+    expect(signals.channelsOrderedByRecentWatch).toEqual([
+      "UC-light",
+      "UC-heavy",
+    ]);
+    expect(signals.channelsOrderedByWeight).toEqual(["UC-heavy", "UC-light"]);
+  });
+});
+
+describe("collectUserSignals — zero-dwell opens", () => {
+  it("does not treat a channel only ever opened with zero dwell as one the user watches", () => {
+    const { db } = createTestDb();
+    const userId = seedUser(db);
+    const now = Math.floor(Date.now() / 1000);
+
+    db.insert(watchHistory)
+      .values([
+        // Home-shelf glance at a 24s clip: mounted, never played.
+        {
+          userId,
+          videoId: "glancedVid01",
+          channelId: "UC-glanced",
+          startedAt: now - 100,
+          durationWatched: 0,
+          completed: 0,
+          videoDurationSeconds: 24,
+          isShort: 0,
+          createdAt: now,
+        },
+        // Legacy row with no recorded length: still counts (cannot judge).
+        {
+          userId,
+          videoId: "legacyVid001",
+          channelId: "UC-legacy",
+          startedAt: now - 100,
+          durationWatched: 0,
+          completed: 0,
+          videoDurationSeconds: 0,
+          isShort: 0,
+          createdAt: now,
+        },
+        // A bare mount plus a real watch on the same channel: still a channel they watch.
+        {
+          userId,
+          videoId: "mountedVid01",
+          channelId: "UC-real",
+          startedAt: now - 200,
+          durationWatched: 0,
+          completed: 0,
+          videoDurationSeconds: 600,
+          isShort: 0,
+          createdAt: now,
+        },
+        {
+          userId,
+          videoId: "mountedVid02",
+          channelId: "UC-real",
+          startedAt: now - 100,
+          durationWatched: 500,
+          completed: 1,
+          videoDurationSeconds: 600,
+          isShort: 0,
+          createdAt: now,
+        },
+      ])
+      .run();
+
+    const signals = collectUserSignals(db, userId, { excludeShorts: true });
+    expect(signals.historyChannelIds.has("UC-glanced")).toBe(false);
+    expect(signals.channelsOrderedByWeight).not.toContain("UC-glanced");
+    expect(signals.historyChannelIds.has("UC-legacy")).toBe(true);
+    expect(signals.historyChannelIds.has("UC-real")).toBe(true);
+    // Engagement weighting is untouched: the glance stays "unknown" (×1.0).
+    expect(signals.channelWeights.get("UC-glanced")).toBeCloseTo(
+      signals.channelWeights.get("UC-legacy") ?? -1,
+      6,
+    );
+    expect(signals.quickSkipVideoIds.has("glancedVid01")).toBe(false);
+  });
+});

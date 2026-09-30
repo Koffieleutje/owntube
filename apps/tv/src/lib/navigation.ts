@@ -29,6 +29,8 @@ export type Nav = {
   openChannel: (channelId: string) => void;
   /** The Shorts player, starting at this short when given. */
   openShorts: (start?: UnifiedVideo) => void;
+  /** The Search section, from Home's pinned search bar. */
+  openSearch: () => void;
 };
 
 /** The neighbours of `videoId` within its context, if it has one. */

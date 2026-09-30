@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildHlsSameOriginConfig,
   proxyUrlForHlsFetch,
   resetHlsSameOriginManifestHostCache,
 } from "@/lib/hls-same-origin";
@@ -52,5 +53,16 @@ describe("proxyUrlForHlsFetch", () => {
     const out = proxyUrlForHlsFetch(url, ORIGIN);
     expect(out).toContain("/yt-hls?url=");
     expect(decodeURIComponent(out)).toContain("c.youtube.com");
+  });
+});
+
+describe("buildHlsSameOriginConfig", () => {
+  it("disables hls.js's TimelineController so it cannot wipe sidecar caption cues", () => {
+    const config = buildHlsSameOriginConfig(ORIGIN);
+    // Must be an explicit own key: hls.js spreads user config over its defaults,
+    // so only a present-but-undefined key removes the default controller.
+    expect(Object.hasOwn(config, "timelineController")).toBe(true);
+    expect(config.timelineController).toBeUndefined();
+    expect(config.renderTextTracksNatively).toBe(false);
   });
 });

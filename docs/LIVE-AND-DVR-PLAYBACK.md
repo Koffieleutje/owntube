@@ -10,7 +10,7 @@ Written 2026-09-21, when this started working end to end.
 |---|---|---|---|
 | **live** | `liveNow: true` | `/dash/<id>/live.mpd` + `/dash/<id>/live/<rep>/…` | companion `/sabr` (YouTube's own live manifest, ANDROID_VR session) |
 | **post-live DVR** (ended, not yet converted) | `isPostLiveDvr: true` | `/dash/<id>/manifest.mpd` (falls back) + `/dvr/<id>/<rep>/<sq>` | companion `/api/manifest/dash` (YouTube.js SegmentTemplate) |
-| VOD | — | `/hls`, `/dash/<id>/manifest.mpd` (synthesized) | companion `/videoplayback` |
+| VOD | — | `/hls`, `/dash/<id>/manifest.mpd` (synthesized) | companion `/videoplayback`; optionally companion `/sabr` (see [VOD via SABR](#vod-via-sabr)) |
 
 Both live paths depend on invidious-companion. OwnTube never calls YouTube's
 InnerTube API itself: that stays behind the companion (see
@@ -112,12 +112,76 @@ This needs our companion patches: `*.c.youtube.com` segment hosts, forwarding
 the `X-Head-*` headers YouTube.js reads for the segment count, and an uncached
 player response for live/DVR.
 
+## VOD via SABR
+
+Off by default. `INVIDIOUS_COMPANION_SABR_VOD` (OwnTube) picks where
+`/dash/<id>/manifest.mpd` comes from for an ordinary video:
+
+| value | behaviour |
+|---|---|
+| `off` (default) | synthesized from YouTube's byte-range `adaptiveFormats` (`dash/generate.ts`): VP9/AV1 to 4K, plus the AVC ladder |
+| `fallback` | as `off`; when that can't be built, the companion's `/sabr/<id>/manifest.mpd` is tried before the post-live DVR route |
+| `always` | the companion's SABR connector first, byte-range formats when it has nothing |
+
+The connector (`sabr-vod.ts`) pulls the video over YouTube's SABR protocol on
+the companion and cuts it into a `SegmentTemplate` manifest. Its ladder is
+what SABR hands an ANDROID_VR session: H.264 + AAC, capped at the companion's
+`SABR_MAX_HEIGHT` (1080). So `always` costs the >1080p rungs and shifts the
+per-viewer download onto the companion; it exists for the day YouTube stops
+publishing byte-range formats for VOD, and for testing the connector before
+then. `fallback` is the safe way to run it: nothing changes while the formats
+exist.
+
+OwnTube rewrites the connector's template to `/dash/<id>/sabr/<track>/init.mp4`
+and `/dash/<id>/sabr/<track>/seg-<n>.m4s` on the media origin, proxied to the
+companion with a fresh `check=` per request, and swaps the companion's caption
+sets (which point at its own `/api/v1/captions`) for ours on `/captions`. The
+`maxHeight` and `lang` query parameters work as on the synthesized manifest
+(`lang` becomes the connector's `audio=`, which needs the companion's
+`SABR_POT_URL` for dubbed tracks). A 404 from the companion (it holds prepared
+sessions in memory, so a restart forgets them) re-requests the manifest and
+retries once; its 503 "not ready" passes through for dash.js to retry.
+
+Only the DASH path is affected: iOS Safari and web Shorts stay on the
+synthesized HLS playlist, which needs byte-range formats either way.
+
+**State on 2026-09-23.** Random access through the connector depends entirely
+on the SABR session's client identity, measured against four videos:
+
+| session | start at 0 | start mid-video / seek |
+|---|---|---|
+| ANDROID_VR (connector's original choice) | works | refused beyond ~1 min: empty answers ×5, then a reload demand |
+| WEB + Camoufox or headless-Chromium PO token | ~48 s of media, then "attestation required" (except on one video where the server reported the token verified) | same |
+| **VISIONOS** (no token; what NewPipeExtractor and LibreTube stream from) | works, `STREAM_PROTECTION_STATUS` 1 on the first response | works, ~50 ms to the first segment, incl. 2300 s into a 39-min video, 720p and audio-only |
+
+Companion commits `6b7afad`..`8ea6aec` (image
+`nedworks/invidious-companion:2026.09.23-master-8ea6aec`) switched VOD
+sessions to VISIONOS (live keeps ANDROID_VR for its native manifest), made
+readers abort the underlying SabrStream (cancelling the reader alone left it
+retrying against a closed controller, the "cannot close or enqueue" noise in
+the log), handle a server reload request by re-fetching the player response
+in place, pick the original audio track rather than the first dub a native
+response lists, and stop a reader `SABR_AHEAD_SEGMENTS` (24) past the newest
+segment a player asked for (VISIONOS serves at line speed with no
+backpressure, so an unbounded reader held the rest of the video in memory).
+The client constants mirror NewPipeExtractor's `ClientsConstants.java`.
+
+Verified 2026-09-23 with that image side by side and owntube-dev on
+`INVIDIOUS_COMPANION_SABR_VOD=always`: Big Buck Bunny and a 39-minute talk
+with 21 dubs play from the start, seek to 120 s in about 4 s (dash.js's own
+buffering; the companion answers in ~50 ms), with every segment 200 and the
+companion at ~1 GB peak against a 640 MB idle baseline. The ladder is still
+H.264 to `SABR_MAX_HEIGHT`, so `always` still costs the VP9/AV1 rungs above
+1080p; `fallback` remains the setting that changes nothing while byte-range
+formats exist.
+
 ## Configuration
 
 | where | setting | why |
 |---|---|---|
 | OwnTube | `INVIDIOUS_COMPANION_SECRET_KEY` | signs `check=`; must equal the companion's `SERVER_SECRET_KEY` (16 chars). Without it every companion request 400s. |
 | OwnTube | `INVIDIOUS_COMPANION_INTERNAL_URL` | optional; server-side companion fetches skip the public hop. Falls back to `INVIDIOUS_PUBLIC_BASE_URL`. |
+| OwnTube | `INVIDIOUS_COMPANION_SABR_VOD` | `off` (default), `fallback` or `always`: VOD through the companion's SABR connector (see [VOD via SABR](#vod-via-sabr)). |
 | companion | `SERVER_VERIFY_REQUESTS=true` | guards `/sabr`, `/api/manifest/dash`, captions with `check=` |
 | companion | `SABR_LIVE_MANIFEST_TTL_MS=5000` | how often it re-fetches YouTube's live manifest. The 20 s default holds the live edge back: dash.js only plays segments the manifest lists. |
 
@@ -128,7 +192,8 @@ docker-compose.dev.yml up -d`), a `restart-dev` isn't enough.
 ## Testing
 
 Unit and route tests: `live-manifest.test.ts`, `app/dash/live-route.test.ts`,
-`dvr-manifest.test.ts`, `pick-playback.test.ts`.
+`dvr-manifest.test.ts`, `sabr-vod.test.ts`, `app/dash/sabr-vod-route.test.ts`,
+`pick-playback.test.ts`.
 
 **A live video**: anything with `liveNow: true` in
 `/api/v1/videos/<id>`. Check the chain:

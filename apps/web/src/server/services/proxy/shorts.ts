@@ -13,6 +13,7 @@ import type { AppDb } from "@/server/db/client";
 import {
   readFreshCacheRow,
   readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   shortsFeedCacheKey,
   writeCache,
@@ -77,8 +78,12 @@ function readFreshShortsFeedCache(
 function readStaleShortsFeedCache(
   db: AppDb,
   key: string,
+  opts?: { recentOnly?: boolean },
 ): ShortsFeedResult | null {
-  const row = readLatestCacheRow(db, key);
+  const row = (opts?.recentOnly ? readRecentCacheRow : readLatestCacheRow)(
+    db,
+    key,
+  );
   if (!row) return null;
   const raw = JSON.parse(row.payloadJson) as unknown;
   const parsed = cachedShortsFeedPayloadSchema.safeParse(raw);
@@ -175,12 +180,12 @@ export async function fetchShortsFeed(
     fresh !== null && input.purpose === "shelf" && fresh.videos.length < limit;
   if (fresh && !freshIsThinShelf) return fresh;
 
-  // Serve-stale-and-revalidate: whatever cached page we have answers now while
-  // the refetch runs. An empty stale shelf is no answer, so that one waits.
+  // Serve-stale-and-revalidate: a recent cached page answers now while the
+  // refetch runs. An empty stale shelf is no answer, so that one waits.
   const servableCached = (): ShortsFeedResult | null => {
     if (opts.revalidate === "wait") return null;
     if (fresh) return fresh;
-    const stale = readStaleShortsFeedCache(db, key);
+    const stale = readStaleShortsFeedCache(db, key, { recentOnly: true });
     if (!stale) return null;
     if (input.purpose === "shelf" && stale.videos.length === 0) return null;
     return { ...stale, warning: undefined };

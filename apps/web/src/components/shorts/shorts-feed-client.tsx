@@ -2,14 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ShortsEmptyHint } from "@/components/shorts/shorts-empty-hint";
 import { ShortsPreloader } from "@/components/shorts/shorts-preloader";
 import { ShortsSlide } from "@/components/shorts/shorts-slide";
-import {
-  readSeenShortIds,
-  recordSeenShortIds,
-} from "@/lib/shorts-seen-storage";
 import type { UpstreamAvailability } from "@/server/services/proxy";
 import type {
   ShortsFeedResult,
@@ -25,7 +21,6 @@ type ShortsFeedClientProps = {
   /** Server-resolved detail for the first short, seeded so it plays at once. */
   initialDetail?: VideoDetail | null;
   initialUpstream?: UpstreamAvailability;
-  initialWatchedVideoIds?: string[];
   signedIn?: boolean;
 };
 
@@ -43,14 +38,6 @@ const SHORTS_PRELOAD_AHEAD = 5;
  *  can't get a decoder to autoplay (you'd have to tap). Keep this tiny; the
  *  byte-warming above carries the caching. 1 = one slide ahead (2 total). */
 const SHORTS_PREMOUNT_AHEAD = 1;
-
-function filterExcludedVideos(
-  videos: UnifiedVideo[],
-  excluded: Set<string>,
-): UnifiedVideo[] {
-  if (excluded.size === 0) return videos;
-  return videos.filter((v) => !excluded.has(v.videoId));
-}
 
 function activeIndexFromScroll(
   scrollTop: number,
@@ -83,16 +70,11 @@ export function ShortsFeedClient({
   initialFeed,
   initialDetail,
   initialUpstream,
-  initialWatchedVideoIds = [],
   signedIn = false,
 }: ShortsFeedClientProps) {
-  const [excludedIds, setExcludedIds] = useState(
-    () => new Set(initialWatchedVideoIds),
+  const [items, setItems] = useState<UnifiedVideo[]>(
+    () => initialFeed?.videos ?? [],
   );
-  const [items, setItems] = useState<UnifiedVideo[]>(() => {
-    const raw = initialFeed?.videos?.length ? initialFeed.videos : [];
-    return filterExcludedVideos(raw, new Set(initialWatchedVideoIds));
-  });
   const [activeIndex, setActiveIndex] = useState(0);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [recycleMode, setRecycleMode] = useState(false);
@@ -105,9 +87,11 @@ export function ShortsFeedClient({
   const stallRetriesRef = useRef(0);
   const prevActiveVideoIdRef = useRef<string | null>(null);
   const activeVideoMetaRef = useRef(new Map<string, UnifiedVideo>());
-  const recordedShortIdsRef = useRef(new Set(initialWatchedVideoIds));
-  const excludedIdsRef = useRef(excludedIds);
-  excludedIdsRef.current = excludedIds;
+  // Shorts seen this session. The server excludes everything the viewer has
+  // seen (signed in: user id; signed out: anonymous cookie), so this only
+  // covers the gap before a `markSeen` lands: a page fetched meanwhile may
+  // still carry a short the viewer just scrolled past.
+  const seenThisSessionRef = useRef(new Set<string>());
 
   const router = useRouter();
   const exitShorts = useCallback(() => {
@@ -121,121 +105,24 @@ export function ShortsFeedClient({
     enabled: signedIn,
   });
   const preloadNext = settingsQuery.data?.shortsPreloadNext ?? true;
-  const seenIdsQuery = trpc.shorts.seenVideoIds.useQuery(undefined, {
-    enabled: signedIn,
-    staleTime: 0,
-    refetchOnMount: "always",
-  });
-  const watchedQuery = trpc.history.watchedVideoIds.useQuery(undefined, {
-    enabled: signedIn,
-    staleTime: 30_000,
-  });
-  const excludeVideoIds = useMemo(
-    () => [...excludedIds].slice(-200),
-    [excludedIds],
-  );
 
-  const markShortSeenPendingRef = useRef(new Set<string>());
-
-  const { mutate: markShortSeenMutation } = trpc.shorts.markSeen.useMutation({
-    onSuccess: (_data, variables) => {
-      recordedShortIdsRef.current.add(variables.videoId);
-      markShortSeenPendingRef.current.delete(variables.videoId);
-      void utils.shorts.seenVideoIds.invalidate();
-      void utils.shorts.feed.invalidate();
-    },
-    onError: (_err, variables) => {
-      markShortSeenPendingRef.current.delete(variables.videoId);
-    },
-  });
-
-  const addExcludedId = useCallback((videoId: string) => {
-    setExcludedIds((prev) => {
-      if (prev.has(videoId)) return prev;
-      const next = new Set(prev);
-      next.add(videoId);
-      return next;
-    });
-  }, []);
-
-  // Locally-persisted seen shorts: exclude them and drop them from the initial
-  // feed so a return visit does not re-scroll the same shorts.
-  useEffect(() => {
-    const localSeen = readSeenShortIds();
-    if (localSeen.length === 0) return;
-    const seenSet = new Set(localSeen);
-    for (const id of localSeen) recordedShortIdsRef.current.add(id);
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of localSeen) {
-        if (!next.has(id)) {
-          next.add(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-    setItems((prev) => {
-      const filtered = prev.filter((v) => !seenSet.has(v.videoId));
-      return filtered.length === prev.length ? prev : filtered;
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!seenIdsQuery.data?.length) return;
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of seenIdsQuery.data) {
-        if (!next.has(id)) {
-          next.add(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-    for (const id of seenIdsQuery.data) {
-      recordedShortIdsRef.current.add(id);
-    }
-  }, [seenIdsQuery.data]);
-
-  useEffect(() => {
-    if (!watchedQuery.data?.length) return;
-    setExcludedIds((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of watchedQuery.data) {
-        if (!next.has(id)) {
-          next.add(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [watchedQuery.data]);
+  const { mutate: markShortSeenMutation } = trpc.shorts.markSeen.useMutation();
 
   const markShortSeen = useCallback(
     (video: UnifiedVideo) => {
       const id = video.videoId;
-      if (recordedShortIdsRef.current.has(id)) return;
-      recordedShortIdsRef.current.add(id);
-      addExcludedId(id);
-      // Persist locally so returning to /shorts never re-proposes this short,
-      // even for anonymous viewers (the server only tracks signed-in users).
-      recordSeenShortIds([id]);
-      if (!signedIn || markShortSeenPendingRef.current.has(id)) return;
-      markShortSeenPendingRef.current.add(id);
+      if (seenThisSessionRef.current.has(id)) return;
+      seenThisSessionRef.current.add(id);
       markShortSeenMutation({
         videoId: id,
         channelId: video.channelId ?? "unknown",
       });
     },
-    [addExcludedId, markShortSeenMutation, signedIn],
+    [markShortSeenMutation],
   );
 
   const feed = trpc.shorts.feed.useInfiniteQuery(
-    { region, limit: 24, excludeVideoIds },
+    { region, limit: 24 },
     {
       staleTime: 0,
       refetchOnMount: signedIn ? "always" : false,
@@ -245,10 +132,7 @@ export function ShortsFeedClient({
           ? {
               pages: [
                 {
-                  videos: filterExcludedVideos(
-                    initialFeed.videos,
-                    new Set(initialWatchedVideoIds),
-                  ),
+                  videos: initialFeed.videos,
                   nextCursor: initialFeed.continuation ?? undefined,
                   sourceUsed: initialFeed.sourceUsed,
                   warning: initialFeed.warning,
@@ -271,17 +155,13 @@ export function ShortsFeedClient({
 
   // Append new upstream pages only — never drop slides already in the feed (watching
   // marks them excluded for pagination, but removing them breaks scroll snap).
-  // In recycleMode the seen/recorded filters are relaxed so the feed never
+  // In recycleMode the session-seen filter is relaxed so the feed never
   // dead-ends when the upstream pool is exhausted: the seen.has() guard still
   // prevents re-adding slides already visible in the current scroll list.
   useEffect(() => {
     if (!feed.isSuccess) return;
     const merged = mergeFeedPages(feed.data.pages);
-    const excluded = excludedIdsRef.current;
-    // recordedShortIdsRef holds locally-persisted seen ids synchronously (refs
-    // update before the excludedIds state re-render), so already-seen shorts are
-    // never re-added on mount.
-    const recorded = recordedShortIdsRef.current;
+    const seenThisSession = seenThisSessionRef.current;
     setItems((prev) => {
       const seen = new Set(prev.map((v) => v.videoId));
       const added: UnifiedVideo[] = [];
@@ -289,12 +169,7 @@ export function ShortsFeedClient({
         if (seen.has(v.videoId)) continue;
         // Outside recycle mode skip content the user has already seen; in
         // recycle mode accept it (the feed must never show nothing).
-        if (
-          !recycleMode &&
-          (excluded.has(v.videoId) || recorded.has(v.videoId))
-        ) {
-          continue;
-        }
+        if (!recycleMode && seenThisSession.has(v.videoId)) continue;
         seen.add(v.videoId);
         added.push(v);
       }
@@ -414,7 +289,6 @@ export function ShortsFeedClient({
   }, [activeVideoId, items, markShortSeen]);
 
   useEffect(() => {
-    if (!signedIn) return;
     const flushActiveShort = () => {
       const id = activeVideoId ?? prevActiveVideoIdRef.current;
       if (!id) return;
@@ -433,7 +307,7 @@ export function ShortsFeedClient({
       document.removeEventListener("visibilitychange", onVisibility);
       flushActiveShort();
     };
-  }, [activeVideoId, items, markShortSeen, signedIn]);
+  }, [activeVideoId, items, markShortSeen]);
 
   useEffect(() => {
     if (items.length === 0) return;
@@ -698,7 +572,7 @@ export function ShortsFeedClient({
                   ? initialDetail
                   : undefined
               }
-              onWatched={signedIn ? onShortWatched : undefined}
+              onWatched={onShortWatched}
               onEnded={advance}
             />
           </div>

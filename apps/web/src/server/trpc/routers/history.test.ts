@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { upsertChannelMetaRow } from "@/server/channel-meta/store";
 import { users, watchHistory } from "@/server/db/schema";
 import { appRouter } from "@/server/trpc/root";
 import { createTestDb } from "@/test/db";
@@ -66,6 +67,46 @@ describe("historyRouter", () => {
     const rows = await caller.history.list({ page: 1, pageSize: 20 });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.videoId).toBe("dQw4w9WgXcQ");
+    sqlite.close();
+  });
+
+  it("names the channel from the meta cache, never by its id", async () => {
+    const { db, sqlite } = createTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    const user = db
+      .insert(users)
+      .values({
+        email: "history-channel@example.com",
+        passwordHash: "x",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: users.id })
+      .get();
+    upsertChannelMetaRow(db, {
+      channelId: "UC1",
+      channelName: "Rick Astley",
+      avatarUrl: null,
+    });
+
+    const caller = appRouter.createCaller({ db, userId: user.id });
+    // A play the DASH route recorded before it sent a channel name, and one
+    // for a channel the cache has never seen.
+    await caller.history.upsertEvent({
+      videoId: "dQw4w9WgXcQ",
+      channelId: "UC1",
+      videoTitle: "Never Gonna Give You Up",
+    });
+    await caller.history.upsertEvent({
+      videoId: "aaaaaaaaaaa",
+      channelId: "UC2",
+      videoTitle: "Unknown channel",
+    });
+
+    const rows = await caller.history.list({ page: 1, pageSize: 20 });
+    const byVideo = new Map(rows.map((r) => [r.videoId, r]));
+    expect(byVideo.get("dQw4w9WgXcQ")?.channelName).toBe("Rick Astley");
+    expect(byVideo.get("aaaaaaaaaaa")?.channelName).toBeUndefined();
     sqlite.close();
   });
 

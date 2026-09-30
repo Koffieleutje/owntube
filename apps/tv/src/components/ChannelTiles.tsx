@@ -7,7 +7,11 @@ import {
   Text,
   View,
 } from "react-native";
-import { channelInitial, formatSubscribersLabel } from "@/lib/format";
+import {
+  channelInitial,
+  formatSubscribersLabel,
+  sizedAvatarUrl,
+} from "@/lib/format";
 import { colors, focus, fontSize, spacing } from "@/theme";
 
 export type ChannelTileData = {
@@ -80,7 +84,7 @@ function ChannelTile({
     >
       {channel.avatarUrl ? (
         <Image
-          source={{ uri: channel.avatarUrl }}
+          source={{ uri: sizedAvatarUrl(channel.avatarUrl, AVATAR) }}
           style={styles.avatar}
           resizeMethod="resize"
         />

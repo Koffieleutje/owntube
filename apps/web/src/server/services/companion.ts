@@ -101,3 +101,14 @@ export function withCompanionCheck(url: string, videoId: string): string {
   if (!check) return url;
   return `${url}${url.includes("?") ? "&" : "?"}check=${encodeURIComponent(check)}`;
 }
+
+/**
+ * A path under the companion's `/sabr/<videoId>/` connector (our patch; see
+ * `PATCHES.md` in the companion repo), on the internal base. Unsigned: callers
+ * add `check=` with `withCompanionCheck`. Null when no companion is configured.
+ */
+export function companionSabrUrl(videoId: string, path: string): string | null {
+  const base = companionInternalBase();
+  if (!base) return null;
+  return `${base}/companion/sabr/${encodeURIComponent(videoId)}/${path}`;
+}

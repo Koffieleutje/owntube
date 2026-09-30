@@ -49,6 +49,8 @@ type Props = {
    * checks and values always reflect the current state. */
   buildPage: (key: string) => MenuPage;
   onClose: () => void;
+  /** The page it opens on; Back from there closes it. Default "root". */
+  startPage?: string;
 };
 
 /**
@@ -57,8 +59,8 @@ type Props = {
  * page, then closes; it registers its own Back handler, which Android asks
  * before the player's.
  */
-export function MenuPanel({ buildPage, onClose }: Props) {
-  const [stack, setStack] = useState<string[]>(["root"]);
+export function MenuPanel({ buildPage, onClose, startPage = "root" }: Props) {
+  const [stack, setStack] = useState<string[]>([startPage]);
   const key = stack[stack.length - 1] ?? "root";
   /** The item awaiting confirmation, while its confirm page shows. */
   const [confirming, setConfirming] = useState<MenuItem | null>(null);
@@ -113,7 +115,11 @@ export function MenuPanel({ buildPage, onClose }: Props) {
       return;
     }
     const result = item.onPress?.();
-    if (result !== "stay" && stack.length > 1) pop();
+    if (result === "stay") return;
+    if (stack.length > 1) pop();
+    // Opened straight on this page (the CC button's captions): nothing to
+    // step back to, so a pick closes the panel.
+    else if (startPage !== "root") onClose();
   };
 
   // Focus lands on the row that opened the page just left, else the current

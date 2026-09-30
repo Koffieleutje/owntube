@@ -14,6 +14,7 @@ import {
   channelCacheKey,
   readFreshCacheRow,
   readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   writeCache,
 } from "@/server/services/proxy/cache";
@@ -79,8 +80,12 @@ function readFreshChannelCache(
 function readStaleChannelCache(
   db: AppDb,
   key: string,
+  opts?: { recentOnly?: boolean },
 ): ChannelPageResult | null {
-  const row = readLatestCacheRow(db, key);
+  const row = (opts?.recentOnly ? readRecentCacheRow : readLatestCacheRow)(
+    db,
+    key,
+  );
   if (!row) return null;
   const raw = JSON.parse(row.payloadJson) as unknown;
   const parsed = cachedChannelPayloadSchema.safeParse(raw);
@@ -828,10 +833,11 @@ export async function fetchChannelPage(
   registerInFlight(inFlightChannel, key, task);
 
   // Serve-stale-and-revalidate: an expired row answers instantly while the
-  // task above refreshes the cache in the background. Only a channel with no
-  // cached row at all (first visit ever) blocks on the live fetch.
+  // task above refreshes the cache in the background. A channel with no
+  // recent row (first visit, or last fetched hours ago — see
+  // INSTANT_STALE_MAX_AGE_SEC) blocks on the live fetch.
   if (!opts?.bypassChannelCache) {
-    const stale = readStaleChannelCache(db, key);
+    const stale = readStaleChannelCache(db, key, { recentOnly: true });
     if (stale) return { ...stale, warning: undefined };
   }
   return task;

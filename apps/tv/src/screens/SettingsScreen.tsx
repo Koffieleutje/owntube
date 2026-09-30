@@ -22,6 +22,7 @@ import { errorMessage } from "@/lib/error-message";
 import { queryClient } from "@/lib/query-client";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
+import { HomeRowsSettingsScreen } from "@/screens/HomeRowsSettingsScreen";
 import { SidebarSettingsScreen } from "@/screens/SidebarSettingsScreen";
 import { colors, fontSize, radius, spacing } from "@/theme";
 
@@ -69,7 +70,7 @@ export function SettingsScreen({
   useEffect(() => {
     checkForUpdate().then(setUpdate);
   }, []);
-  const [page, setPage] = useState<"root" | "sidebar">("root");
+  const [page, setPage] = useState<"root" | "sidebar" | "homeRows">("root");
   const [settings, setSettings] = useState<TvSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,6 +116,9 @@ export function SettingsScreen({
         onBack={() => setPage("root")}
       />
     );
+  }
+  if (page === "homeRows") {
+    return <HomeRowsSettingsScreen onBack={() => setPage("root")} />;
   }
 
   if (error && !settings) {
@@ -190,9 +194,13 @@ export function SettingsScreen({
         />
       </View>
 
-      <Text style={styles.section}>Sidebar</Text>
+      <Text style={styles.section}>Layout</Text>
       <View style={styles.row}>
         <FocusButton label="Edit sidebar" onPress={() => setPage("sidebar")} />
+        <FocusButton
+          label="Edit home rows"
+          onPress={() => setPage("homeRows")}
+        />
       </View>
 
       <Text style={styles.section}>Account</Text>

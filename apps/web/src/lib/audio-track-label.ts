@@ -143,8 +143,8 @@ function displayNameAddsInformation(
 /**
  * Whether a track's own label marks it as the original (undubbed) audio.
  *
- * Prefer upstream's explicit flag (`audioTrack.audioIsDefault`, surfaced as
- * `audioIsOriginal`) where it exists; this is the fallback for HLS/DASH
+ * Prefer the mapped `audioIsOriginal` (read from the stream's `xtags`) where
+ * it exists; this is the fallback for HLS/DASH
  * manifests, which only ever give a human label.
  */
 export function displayNameMarksOriginalAudio(

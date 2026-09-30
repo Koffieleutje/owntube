@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { UnifiedVideo } from "@web/server/services/proxy.types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   Image,
@@ -11,8 +12,9 @@ import {
 import { useCardMenu } from "@/components/CardMenu";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { MenuPanel } from "@/components/MenuPanel";
+import { TagShelves } from "@/components/TagShelves";
 import { errorMessage } from "@/lib/error-message";
-import { channelInitial } from "@/lib/format";
+import { channelInitial, sizedAvatarUrl } from "@/lib/format";
 import { setLongPressTarget, takeSuppressedPress } from "@/lib/long-press";
 import type { Nav } from "@/lib/navigation";
 import { queryClient } from "@/lib/query-client";
@@ -39,10 +41,12 @@ const FOCUS_SELECT_DELAY_MS = 350;
 
 /**
  * What the videos pane is showing. The channel pane is a two-level menu: the
- * root lists All / Tags / channels, and "Tags" drills into the tag list.
+ * root lists All / By tag / Tags / channels, and "Tags" drills into the tag
+ * list. "By tag" shows every tag at once, a shelf each.
  */
 type Selection =
   | { kind: "all" }
+  | { kind: "byTag" }
   | { kind: "channel"; channelId: string }
   | { kind: "tag"; tag: string };
 
@@ -141,6 +145,10 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
 
   const feed = useInfiniteFeed<string>(
     (cursor) => {
+      // Its shelves fetch for themselves (TagShelves).
+      if (selected.kind === "byTag") {
+        return Promise.resolve({ items: [], next: undefined });
+      }
       if (selected.kind === "channel") {
         // Focus moves through the channel rail fire one request per row
         // (debounced, but still one per row) — cacheOnly keeps that instant
@@ -168,13 +176,24 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
     "subscriptions.feed",
   );
 
+  // Stable, so the memoized shelves don't re-render on every screen render.
+  const openFromTag = useCallback(
+    (videoId: string, tag: string, videos: UnifiedVideo[]) =>
+      nav.openVideo(videoId, {
+        context: { source: "feed", label: tag, videos },
+      }),
+    [nav],
+  );
+
   const heading =
     selected.kind === "channel"
       ? (channels.find((c) => c.channelId === selected.channelId)
           ?.channelName ?? "Channel")
       : selected.kind === "tag"
         ? selected.tag
-        : "All subscriptions";
+        : selected.kind === "byTag"
+          ? "By tag"
+          : "All subscriptions";
 
   return (
     <View style={styles.screen}>
@@ -196,6 +215,15 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
                   />
                   {tags.length > 0 ? (
                     <ChannelRow
+                      label="By tag"
+                      icon="layers"
+                      active={selected.kind === "byTag"}
+                      onFocus={() => selectAfterDelay({ kind: "byTag" })}
+                      onPress={() => selectNow({ kind: "byTag" })}
+                    />
+                  ) : null}
+                  {tags.length > 0 ? (
+                    <ChannelRow
                       label="Tags"
                       icon="tag"
                       trailingIcon="chevron-right"
@@ -206,7 +234,7 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
                       onPress={() => setLevel("tags")}
                     />
                   ) : null}
-                  {/* Separates the two overview rows from the channels. */}
+                  {/* Separates the overview rows from the channels. */}
                   <View style={styles.groupGap} />
                 </>
               }
@@ -278,21 +306,29 @@ export function SubscriptionsScreen({ nav }: { nav: Nav }) {
         </View>
 
         <View style={styles.feed}>
-          <CarouselFeed
-            feed={feed}
-            onSelect={(videoId, videos) =>
-              nav.openVideo(videoId, { context: { source: "feed", videos } })
-            }
-            header={<Text style={styles.heading}>{heading}</Text>}
-            emptyText={
-              selected.kind === "all"
-                ? "You're not subscribed to any channels yet."
-                : "No videos here yet."
-            }
-            // The channel list owns focus here; grabbing it back on every
-            // selection change would fight the user's way down the list.
-            preferFirstRowFocus={false}
-          />
+          {selected.kind === "byTag" ? (
+            <TagShelves
+              tags={tags}
+              onSelect={openFromTag}
+              header={<Text style={styles.heading}>{heading}</Text>}
+            />
+          ) : (
+            <CarouselFeed
+              feed={feed}
+              onSelect={(videoId, videos) =>
+                nav.openVideo(videoId, { context: { source: "feed", videos } })
+              }
+              header={<Text style={styles.heading}>{heading}</Text>}
+              emptyText={
+                selected.kind === "all"
+                  ? "You're not subscribed to any channels yet."
+                  : "No videos here yet."
+              }
+              // The channel list owns focus here; grabbing it back on every
+              // selection change would fight the user's way down the list.
+              preferFirstRowFocus={false}
+            />
+          )}
         </View>
       </View>
       {channelMenu ? (
@@ -381,7 +417,10 @@ function ChannelRow({
           <Feather name={icon} size={16} color={tint} />
         </View>
       ) : avatarUrl ? (
-        <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        <Image
+          source={{ uri: sizedAvatarUrl(avatarUrl, AVATAR_SIZE) }}
+          style={styles.avatar}
+        />
       ) : (
         <View style={[styles.avatar, styles.avatarFallback]}>
           <Text style={styles.avatarInitial}>{channelInitial(label)}</Text>

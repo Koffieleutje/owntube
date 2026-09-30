@@ -17,7 +17,8 @@ export default async function SubscriptionsPage() {
   }
   const caller = await createCaller();
   const list = await caller.subscriptions.list();
-  const channels = await caller.subscriptions.listDetailed();
+  // The Channels tab's detailed list loads client-side (SubscriptionsTabs), so
+  // the page, and Everything with it, doesn't wait on it.
 
   // Prefetch the unfiltered first page so the feed paints from cache instead of
   // a skeleton. cache-only keeps SSR from ever blocking on the upstream feed;
@@ -60,7 +61,7 @@ export default async function SubscriptionsPage() {
         </p>
       ) : (
         <HydrationBoundary state={helpers.dehydrate()}>
-          <SubscriptionsTabs channels={channels} />
+          <SubscriptionsTabs />
         </HydrationBoundary>
       )}
     </main>

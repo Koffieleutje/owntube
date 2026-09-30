@@ -155,9 +155,38 @@ function readInvidiousAdaptiveAudioMeta(st: Record<string, unknown>): {
         ? t.id.replace(/^\./, "").split(".")[0]
         : undefined,
     displayName: typeof t.displayName === "string" ? t.displayName : undefined,
-    isOriginal:
-      typeof t.audioIsDefault === "boolean" ? t.audioIsDefault : undefined,
+    isOriginal: readAudioIsOriginal(st, t),
   };
+}
+
+/**
+ * Whether an adaptive audio stream is the video's original (undubbed) track.
+ * `audioTrack.audioIsDefault` is NOT that: YouTube sets it on the track that
+ * matches the *requester's* locale, so with Invidious asking as en-US an
+ * English auto-dub came back as default on a Dutch video. The stream URL's
+ * `xtags` (`acont=original`) is what the HLS/DASH manifests trust, then the
+ * display name ("Dutch (NL) original"); `audioIsDefault` is the last resort.
+ */
+function readAudioIsOriginal(
+  st: Record<string, unknown>,
+  t: Record<string, unknown>,
+): boolean | undefined {
+  if (typeof st.url === "string") {
+    try {
+      const xtags = new URL(st.url, "http://x").searchParams.get("xtags");
+      const acont = xtags
+        ?.split(":")
+        .find((kv) => kv.startsWith("acont="))
+        ?.slice("acont=".length);
+      if (acont) return acont === "original";
+    } catch {
+      // not a URL — fall through
+    }
+  }
+  if (typeof t.displayName === "string" && t.displayName.trim()) {
+    return /\boriginal\b/i.test(t.displayName);
+  }
+  return typeof t.audioIsDefault === "boolean" ? t.audioIsDefault : undefined;
 }
 
 type InvidiousStream = {

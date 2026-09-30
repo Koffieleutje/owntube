@@ -104,19 +104,11 @@ export function HomeShortsShelf({
       ),
     [columnCount, columnWidthPx, containerWidthPx],
   );
-  // The shelf only excludes home-feed video IDs (to avoid duplicates with
-  // long-form rows). Previously-seen shorts from /shorts are NOT excluded here:
-  // the shelf should always show available content rather than going empty.
+  // Home-feed video IDs are dropped client-side (duplicates with long-form rows
+  // are rare, and sending them would grow the request with the home feed); the
+  // server already handles seen/watched exclusion for the viewer.
   const excludeSet = useMemo(
     () => new Set([...excludeVideoIds]),
-    [excludeVideoIds],
-  );
-
-  const serverExcludeVideoIds = useMemo(
-    () =>
-      excludeVideoIds.length > 200
-        ? [...excludeVideoIds].slice(-200)
-        : excludeVideoIds,
     [excludeVideoIds],
   );
 
@@ -125,10 +117,6 @@ export function HomeShortsShelf({
       region,
       limit: HOME_SHORTS_SHELF_LIMIT,
       purpose: "shelf",
-      excludeVideoIds:
-        serverExcludeVideoIds.length > 0
-          ? (serverExcludeVideoIds as string[])
-          : undefined,
     },
     {
       enabled: true,

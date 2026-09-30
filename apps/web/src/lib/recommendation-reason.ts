@@ -18,7 +18,9 @@ export function formatRecommendationReason(
         ? `Matches topics you watch: ${reason.terms.join(", ")}`
         : "Matches topics you watch";
     case "related":
-      return "Related to videos you watched";
+      return reason.channelName
+        ? `Similar to ${reason.channelName}, which you're subscribed to`
+        : "Related to videos you watched";
     case "trending":
       return "Trending now";
   }

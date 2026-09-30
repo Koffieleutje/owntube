@@ -1,4 +1,5 @@
 import { router } from "@/server/trpc/init";
+import { apiTokensRouter } from "@/server/trpc/routers/api-tokens";
 import { authRouter } from "@/server/trpc/routers/auth";
 import { channelRouter } from "@/server/trpc/routers/channel";
 import { channelTagsRouter } from "@/server/trpc/routers/channel-tags";
@@ -21,6 +22,7 @@ import { tvRemoteRouter } from "@/server/trpc/routers/tv-remote";
 import { videoRouter } from "@/server/trpc/routers/video";
 
 export const appRouter = router({
+  apiTokens: apiTokensRouter,
   auth: authRouter,
   channel: channelRouter,
   channelTags: channelTagsRouter,

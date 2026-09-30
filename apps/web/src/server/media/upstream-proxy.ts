@@ -428,6 +428,50 @@ function passthroughMediaResponse(r: Response): Response {
   return new Response(r.body, { status: r.status, headers });
 }
 
+/**
+ * Widths a client may ask a thumbnail at with `?w=` (a fixed set, so the disk
+ * cache holds a few variants per video rather than one per pixel count).
+ */
+const CARD_THUMBNAIL_WIDTHS = [320, 480, 640] as const;
+
+export function cardThumbnailWidth(raw: string | null): number | null {
+  const w = Number(raw);
+  return (CARD_THUMBNAIL_WIDTHS as readonly number[]).includes(w) ? w : null;
+}
+
+/**
+ * A thumbnail sized for a card: cropped to 16:9 at `width`, as a JPEG. YouTube
+ * stills are 4:3 with black bars (hqdefault is 480x360), and a TV decodes the
+ * whole image into memory for every card on screen, bars included; the crop
+ * alone saves a quarter of that, a smaller width more. Built from the cached
+ * original, so the upstream is fetched once for every variant.
+ */
+async function cardThumbnail(
+  original: () => Promise<{ body: Buffer | Uint8Array } | null>,
+  width: number,
+): Promise<Response> {
+  const source = await original();
+  if (!source) return new Response(null, { status: 502 });
+  const { default: sharp } = await import("sharp");
+  let body: Buffer;
+  try {
+    body = await sharp(source.body)
+      .resize(width, Math.round((width * 9) / 16), {
+        fit: "cover",
+        position: "centre",
+      })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+  } catch {
+    // Not a decodable image (an upstream error page cached as one).
+    return new Response(null, { status: 502 });
+  }
+  return new Response(new Uint8Array(body), {
+    status: 200,
+    headers: { "content-type": "image/jpeg" },
+  });
+}
+
 /** Next.js `[[...path]]` splits on commas; live HLS URLs embed raw `,` in signed paths. */
 export function subpathFromProxyRequest(
   requestUrl: string,
@@ -467,6 +511,9 @@ export async function handleUpstreamMediaRequest(
   const subpath =
     subpathFromProxyRequest(request.url, opts.prefix) ?? subpathFromPath ?? "";
   const upstreamSearch = new URL(request.url).searchParams;
+  // Ours, not the upstream's: see `cardThumbnail`.
+  const cardWidth = cardThumbnailWidth(upstreamSearch.get("w"));
+  upstreamSearch.delete("w");
   // `local=true` makes Invidious emit broken `:port` URLs and 403 videoplayback hops.
   if (subpath.includes("manifest/hls") || subpath.includes(".m3u8")) {
     upstreamSearch.delete("local");
@@ -488,11 +535,17 @@ export async function handleUpstreamMediaRequest(
   // oversized, upstream error) falls through to plain pass-through proxying.
   const assetKind = assetKindForSubpath(subpath);
   if (assetKind && !range) {
-    const asset = await getCachedAsset(
-      `invidious:${subpath}${search}`,
-      assetKind,
-      () => fetchInvidiousUpstream(inv, subpath, search, forwardHeaders),
-    );
+    const key = `invidious:${subpath}${search}`;
+    const original = () =>
+      getCachedAsset(key, assetKind, () =>
+        fetchInvidiousUpstream(inv, subpath, search, forwardHeaders),
+      );
+    const asset =
+      assetKind === "thumbnail" && cardWidth
+        ? await getCachedAsset(`${key}|card${cardWidth}`, assetKind, () =>
+            cardThumbnail(original, cardWidth),
+          )
+        : await original();
     if (asset) {
       return new Response(new Uint8Array(asset.body), {
         status: 200,

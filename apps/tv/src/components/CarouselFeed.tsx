@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import type { CardMenuExtras } from "@/components/CardMenu";
 import { FocusButton } from "@/components/FocusButton";
+import { SkeletonRows } from "@/components/Skeleton";
 import { VideoRow } from "@/components/VideoRow";
 import type { InfiniteFeed } from "@/lib/use-infinite-feed";
 import { colors, fontSize, spacing } from "@/theme";
@@ -89,14 +90,12 @@ export function CarouselFeed({
   );
 
   if (feed.status === "loading") {
-    // Header keeps its place; the spinner centres in the space left over,
-    // rather than sitting against the left edge.
+    // Header keeps its place; placeholder shelves stand where the real ones
+    // will land, so the page doesn't jump when they do.
     return (
       <View style={styles.loadingWrap}>
-        {header}
-        <View style={styles.loadingCenter}>
-          <ActivityIndicator size="large" color={colors.brand} />
-        </View>
+        {header ? <View style={styles.header}>{header}</View> : null}
+        <SkeletonRows rows={2} heading={false} />
       </View>
     );
   }
@@ -196,11 +195,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   loadingWrap: { flex: 1 },
-  loadingCenter: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   emptyContainer: {
     flex: 1,
     alignItems: "flex-start",

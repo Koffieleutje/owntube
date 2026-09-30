@@ -5,11 +5,13 @@ import { Button } from "@/components/ui/button";
 import { trpc } from "@/trpc/react";
 
 /**
- * Per-account credentials for the companion's podcast feeds. The username is
- * the account's full email (URL-encoded in feed URLs); the password is
- * generated server-side and only its hash ever reaches the companion.
- * Regeneration takes effect at the next publish cycle, so old app
- * subscriptions keep working briefly.
+ * Secret addresses for the companion's podcast feeds: anyone with a feed's
+ * URL can read it, no password required, so treat them like the private
+ * links they are. Regenerating creates a whole new set of addresses (derived
+ * from a password rotated behind the scenes) and takes effect at the next
+ * publish cycle, so old subscriptions keep working briefly before they break
+ * for good — any podcast app still using the old addresses needs
+ * re-subscribing at the new ones afterwards.
  */
 export function RssFeedsSection() {
   const utils = trpc.useUtils();
@@ -25,18 +27,13 @@ export function RssFeedsSection() {
   });
 
   const creds = query.data;
-  const feedBase = creds?.companionUrl
-    ? creds.companionUrl.replace(
-        /^(https?:\/\/)/,
-        `$1${encodeURIComponent(creds.username)}:${creds.pass}@`,
-      )
-    : null;
-  const queueUrls = feedBase
+  const queueUrls = creds?.queueUrls
     ? ([
-        ["audio", `${feedBase}/rss/queue/queue.audio.xml`],
-        ["video", `${feedBase}/rss/queue/queue.video.xml`],
+        ["audio", creds.queueUrls.audio],
+        ["video", creds.queueUrls.video],
       ] as const)
     : null;
+  const hasAddresses = Boolean(queueUrls || creds?.feedsUrl);
 
   const copy = (label: string, value: string) => {
     void navigator.clipboard.writeText(value).then(() => {
@@ -49,34 +46,14 @@ export function RssFeedsSection() {
     <section className="space-y-3">
       <h2 className="text-lg font-semibold">Podcast feeds (RSS)</h2>
       <p className="text-sm text-[hsl(var(--muted-foreground))]">
-        Subscribe to your queue, playlists and channels in a podcast app. Feeds
-        are unlocked by your personal credentials below; media still only plays
-        on the home network.
+        Subscribe to your queue, playlists and channels in a podcast app.
+        {hasAddresses
+          ? " Each address below is a private link — anyone who has it can read that feed, so share it only with your own podcast app. Getting new addresses changes every one of them."
+          : null}{" "}
+        Media still only plays on the home network.
       </p>
       {creds ? (
         <div className="space-y-2 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[hsl(var(--muted-foreground))]">
-              Username
-            </span>
-            <code className="rounded bg-[hsl(var(--muted))] px-1.5 py-0.5">
-              {creds.username}
-            </code>
-            <span className="text-[hsl(var(--muted-foreground))]">
-              Password
-            </span>
-            <code className="rounded bg-[hsl(var(--muted))] px-1.5 py-0.5">
-              {creds.pass}
-            </code>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => copy("creds", `${creds.username}:${creds.pass}`)}
-            >
-              {copied === "creds" ? "Copied" : "Copy"}
-            </Button>
-          </div>
           {queueUrls
             ? queueUrls.map(([variant, url]) => (
                 <div
@@ -100,19 +77,28 @@ export function RssFeedsSection() {
                 </div>
               ))
             : null}
-          {creds.companionUrl ? (
-            <p className="text-[hsl(var(--muted-foreground))]">
-              All feeds (channels, playlists, saved):{" "}
+          {creds.feedsUrl ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[hsl(var(--muted-foreground))]">
+                All feeds (channels, playlists, saved)
+              </span>
               <a
-                className="underline"
-                href={creds.companionUrl}
+                className="max-w-full truncate underline"
+                href={creds.feedsUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                {creds.companionUrl}
-              </a>{" "}
-              — sign in with the credentials above.
-            </p>
+                {creds.feedsUrl}
+              </a>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => copy("feeds", creds.feedsUrl ?? "")}
+              >
+                {copied === "feeds" ? "Copied" : "Copy"}
+              </Button>
+            </div>
           ) : null}
           <div className="flex items-center gap-2">
             {confirmRegenerate ? (
@@ -144,13 +130,15 @@ export function RssFeedsSection() {
                 size="sm"
                 onClick={() => setConfirmRegenerate(true)}
               >
-                Regenerate password
+                Get new feed addresses
               </Button>
             )}
           </div>
           <p className="text-xs text-[hsl(var(--muted-foreground))]">
-            A new password reaches the feed server at the next publish (within
-            ~30 minutes); update your podcast apps afterwards.
+            This creates new addresses for every feed and breaks any podcast
+            subscription using the old ones. The new addresses reach the feed
+            server at the next publish (within ~30 minutes); update your podcast
+            apps afterwards.
           </p>
         </div>
       ) : (

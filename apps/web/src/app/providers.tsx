@@ -114,8 +114,12 @@ export function Providers({
             // page firing one query per row instead of one bulk query):
             // splits an oversized batch into multiple GET requests instead of
             // building a single URL long enough to hit server/proxy length
-            // limits (414/431).
-            maxURLLength: 2000,
+            // limits (414/431). Must stay above the largest *single* query URL,
+            // or tRPC rejects it outright ("Input is too big for a single
+            // dispatch"): shorts.feed with 200 `excludeVideoIds` plus a
+            // continuation is ~4.5KB. 6000 still sits under nginx's 8KB
+            // request-line buffer and Node's 16KB header limit.
+            maxURLLength: 6000,
           }),
         }),
       ],

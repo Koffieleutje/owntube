@@ -2,7 +2,7 @@ import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import { useEffect, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { FocusButton } from "@/components/FocusButton";
-import { videoThumbnailUrl } from "@/lib/format";
+import { useThumbnail } from "@/lib/use-thumbnail";
 import { colors, fontSize, radius, spacing } from "@/theme";
 
 /** Seconds the card counts down before playing the next video by itself. */
@@ -31,7 +31,7 @@ export function UpNext({
   onCancel,
 }: Props) {
   const [remaining, setRemaining] = useState(UP_NEXT_COUNTDOWN_SECONDS);
-  const thumbnail = videoThumbnailUrl(video);
+  const thumbnail = useThumbnail(video);
 
   useEffect(() => {
     if (!autoplay) return;
@@ -51,15 +51,12 @@ export function UpNext({
           {autoplay ? ` · playing in ${remaining}` : ""}
         </Text>
         <View style={styles.body}>
-          {thumbnail ? (
-            <Image
-              source={{ uri: thumbnail }}
-              style={styles.thumb}
-              resizeMethod="resize"
-            />
-          ) : (
-            <View style={styles.thumb} />
-          )}
+          <Image
+            source={thumbnail.uri ? { uri: thumbnail.uri } : undefined}
+            style={styles.thumb}
+            resizeMethod="resize"
+            onError={thumbnail.onError}
+          />
           <View style={styles.copy}>
             <Text style={styles.title} numberOfLines={3}>
               {video.title}
@@ -71,13 +68,9 @@ export function UpNext({
             ) : null}
           </View>
         </View>
+        {/* Both plain: a primary fill would stay red with focus on Cancel. */}
         <View style={styles.buttons}>
-          <FocusButton
-            label="Play now"
-            variant="primary"
-            onPress={onPlay}
-            hasTVPreferredFocus
-          />
+          <FocusButton label="Play now" onPress={onPlay} hasTVPreferredFocus />
           <FocusButton label="Cancel" onPress={onCancel} />
         </View>
       </View>
@@ -91,8 +84,8 @@ const styles = StyleSheet.create({
   scrim: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: colors.overlay,
-    justifyContent: "flex-end",
-    alignItems: "flex-end",
+    justifyContent: "center",
+    alignItems: "center",
     padding: spacing.screen,
   },
   card: {

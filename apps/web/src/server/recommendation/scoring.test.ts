@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isLikelyShortVideo,
+  isTooOldForRecommendations,
   isUnvettedKeywordSpam,
   keepCandidateForTrendingTail,
   keywordDiscoveryScorePenalty,
@@ -11,6 +12,7 @@ import {
 } from "@/server/recommendation/scoring";
 import type { UserSignals } from "@/server/recommendation/signals";
 import { buildTfidfModel } from "@/server/recommendation/tfidf";
+import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 function emptySignals(overrides: Partial<UserSignals> = {}): UserSignals {
   return {
@@ -22,6 +24,8 @@ function emptySignals(overrides: Partial<UserSignals> = {}): UserSignals {
     totalDistinctVideosWatched: 0,
     channelLastWatchedAt: new Map(),
     channelsOrderedByRecentWatch: [],
+    channelsOrderedByWeight: [],
+    recentEngagedVideoIds: [],
     historyChannelIds: new Set(),
     likedVideoIds: new Set(),
     dislikedVideoIds: new Set(),
@@ -483,5 +487,118 @@ describe("scoring", () => {
       expect(keywordDiscoveryScorePenalty(...args)).toBe(0);
       expect(isUnvettedKeywordSpam(...args)).toBe(false);
     });
+  });
+});
+
+describe("freshness beyond a year", () => {
+  it("keeps sinking past one and two years instead of sharing the 90-day floor", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const at = (days: number) =>
+      publicationFreshnessScore(undefined, nowSec - days * 24 * 3600);
+    expect(at(120)).toBeGreaterThan(at(400));
+    expect(at(400)).toBeGreaterThan(at(800));
+    expect(at(800)).toBeGreaterThan(0);
+  });
+
+  it("parses 'N years ago' text as old, not as unknown", () => {
+    expect(publicationFreshnessScore("2 years ago")).toBeLessThan(
+      publicationFreshnessScore("4 months ago"),
+    );
+    expect(publicationFreshnessScore("2 years ago")).toBeLessThan(
+      publicationFreshnessScore(undefined),
+    );
+  });
+});
+
+describe("isTooOldForRecommendations", () => {
+  const nowSec = 1_800_000_000;
+  const video = (extra: Partial<UnifiedVideo>): UnifiedVideo => ({
+    videoId: "vid",
+    title: "t",
+    ...extra,
+  });
+
+  it("drops uploads older than a year by timestamp or relative text", () => {
+    expect(
+      isTooOldForRecommendations(
+        video({ publishedAt: nowSec - 400 * 86_400 }),
+        nowSec,
+      ),
+    ).toBe(true);
+    expect(
+      isTooOldForRecommendations(
+        video({ publishedText: "2 years ago" }),
+        nowSec,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps recent uploads and rows with no usable date", () => {
+    expect(
+      isTooOldForRecommendations(
+        video({ publishedAt: nowSec - 200 * 86_400 }),
+        nowSec,
+      ),
+    ).toBe(false);
+    expect(
+      isTooOldForRecommendations(
+        video({ publishedText: "3 months ago" }),
+        nowSec,
+      ),
+    ).toBe(false);
+    expect(isTooOldForRecommendations(video({}), nowSec)).toBe(false);
+  });
+});
+
+describe("subscription lift", () => {
+  const video: UnifiedVideo = {
+    videoId: "v1",
+    title: "Some upload",
+    channelId: "UCsub",
+    durationSeconds: 600,
+    publishedAt: Math.floor(Date.now() / 1000) - 86_400,
+  };
+  const model = buildTfidfModel(["unrelated"]);
+
+  it("lifts a subscribed channel's upload over an identical unsubscribed one", () => {
+    const signals = emptySignals({ totalWatches: 20 });
+    const plain = scoreCandidateDetail(video, signals, model, 1, {
+      recentCoverageByChannel: new Map(),
+    });
+    const subbed = scoreCandidateDetail(video, signals, model, 1, {
+      recentCoverageByChannel: new Map(),
+      subscribedChannelIds: new Set(["UCsub"]),
+    });
+    expect(plain.breakdown.components.subscription).toBe(0);
+    expect(subbed.breakdown.inputs.isSubscribed).toBe(true);
+    expect(subbed.score - plain.score).toBeCloseTo(
+      subbed.breakdown.components.subscription,
+    );
+    expect(subbed.breakdown.components.subscription).toBeGreaterThan(0.1);
+  });
+
+  it("outweighs a channel watched yesterday", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const recent = scoreCandidateDetail(
+      { ...video, channelId: "UCrecent" },
+      emptySignals({
+        totalWatches: 20,
+        channelLastWatchedAt: new Map([["UCrecent", nowSec - 86_400]]),
+      }),
+      model,
+      1,
+      { recentCoverageByChannel: new Map() },
+    );
+    const subbed = scoreCandidateDetail(
+      video,
+      emptySignals({ totalWatches: 20 }),
+      model,
+      1,
+      {
+        recentCoverageByChannel: new Map(),
+        subscribedChannelIds: new Set(["UCsub"]),
+      },
+    );
+    expect(subbed.score).toBeGreaterThan(recent.score);
   });
 });

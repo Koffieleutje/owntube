@@ -5,6 +5,7 @@ import {
   detailCacheKey,
   readFreshCacheRow,
   readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   relatedCacheKey,
   writeCache,
@@ -143,8 +144,12 @@ function readFreshRelatedCache(
 function readStaleRelatedCache(
   db: AppDb,
   key: string,
+  opts?: { recentOnly?: boolean },
 ): RelatedVideosResult | null {
-  const row = readLatestCacheRow(db, key);
+  const row = (opts?.recentOnly ? readRecentCacheRow : readLatestCacheRow)(
+    db,
+    key,
+  );
   if (!row) return null;
   const parsed = relatedVideosResultSchema.safeParse(
     JSON.parse(row.payloadJson) as unknown,
@@ -371,9 +376,9 @@ export async function fetchRelatedVideos(
   const task = fetchRelatedVideosLive(db, input, key, limit);
   registerInFlight(inFlightRelated, key, task);
 
-  // Serve-stale-and-revalidate: an expired row answers instantly while the
-  // task above refreshes the cache in the background.
-  const stale = readStaleRelatedCache(db, key);
+  // Serve-stale-and-revalidate: a recently expired row answers instantly while
+  // the task above refreshes the cache in the background.
+  const stale = readStaleRelatedCache(db, key, { recentOnly: true });
   if (stale) return { ...stale, warning: undefined };
   return task;
 }

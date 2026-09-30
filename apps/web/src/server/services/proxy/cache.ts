@@ -59,6 +59,8 @@ export function searchCacheKey(input: SearchVideosInput): string {
         q: input.q,
         limit: input.limit ?? 20,
         c: input.continuation ?? null,
+        // Only present when set, so existing unfiltered rows keep their keys.
+        ...(input.date ? { d: input.date } : {}),
       }),
     )
     .digest("hex");
@@ -145,6 +147,24 @@ export function readLatestCacheRow(db: AppDb, key: string) {
     .orderBy(desc(videoCache.fetchedAt))
     .limit(1)
     .all()[0];
+}
+
+/**
+ * Oldest expired row a serve-stale-and-revalidate read answers with instantly.
+ * The warmer only keeps what it knows about (subscribed channels, queued
+ * videos) fresh; any other row can sit for months, and answering with it as if
+ * current hides everything newer. Past this age a read blocks on the live
+ * fetch instead — the upstream-failure fallback still serves any row.
+ */
+export const INSTANT_STALE_MAX_AGE_SEC = 6 * 60 * 60;
+
+/** Latest row for `key` if fetched within {@link INSTANT_STALE_MAX_AGE_SEC}. */
+export function readRecentCacheRow(db: AppDb, key: string) {
+  const row = readLatestCacheRow(db, key);
+  if (!row || row.fetchedAt < nowUnix() - INSTANT_STALE_MAX_AGE_SEC) {
+    return undefined;
+  }
+  return row;
 }
 
 function cacheTtlSecForKind(

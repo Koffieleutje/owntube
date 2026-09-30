@@ -1,12 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { prepareShortsFeedVideos } from "@/lib/shorts-feed-presentation";
+import { ensureAnonViewerId } from "@/server/anon-viewer";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
 import { fetchShortsFeedForViewer } from "@/server/recommendation/shorts-feed";
 import {
-  loadShortSeenVideoIds,
+  recordAnonShortSeen,
   recordShortSeen,
 } from "@/server/recommendation/shorts-seen";
 import { describeUpstreamAvailability } from "@/server/services/proxy";
@@ -15,15 +16,16 @@ import {
   getUserSettings,
   normalizeTrendingRegionStored,
 } from "@/server/settings/profile";
-import {
-  protectedProcedure,
-  publicProcedure,
-  router,
-} from "@/server/trpc/init";
+import { publicProcedure, router } from "@/server/trpc/init";
 
-const shortsFeedQuerySchema = shortsFeedInputSchema.extend({
-  cursor: z.string().max(4096).nullish(),
-});
+// No client-supplied exclusion list: the server owns what each viewer has seen
+// (user id or anonymous cookie), so the request stays a constant size however
+// long someone scrolls.
+const shortsFeedQuerySchema = shortsFeedInputSchema
+  .omit({ excludeVideoIds: true })
+  .extend({
+    cursor: z.string().max(4096).nullish(),
+  });
 
 const markSeenInputSchema = z.object({
   videoId: z.string().min(5).max(64),
@@ -31,14 +33,16 @@ const markSeenInputSchema = z.object({
 });
 
 export const shortsRouter = router({
-  seenVideoIds: protectedProcedure.query(({ ctx }) => {
-    return [...loadShortSeenVideoIds(ctx.db, ctx.userId)];
-  }),
-  markSeen: protectedProcedure
+  markSeen: publicProcedure
     .input(markSeenInputSchema)
     .mutation(({ ctx, input }) => {
-      recordShortSeen(ctx.db, ctx.userId, input.videoId, input.channelId);
-      clearRecommendationCachesForUser(ctx.userId);
+      if (ctx.userId != null) {
+        recordShortSeen(ctx.db, ctx.userId, input.videoId, input.channelId);
+        clearRecommendationCachesForUser(ctx.userId);
+        return { ok: true as const };
+      }
+      const anonId = ctx.anon ? ensureAnonViewerId(ctx.anon) : null;
+      if (anonId) recordAnonShortSeen(ctx.db, anonId, input.videoId);
       return { ok: true as const };
     }),
   feed: publicProcedure
@@ -53,13 +57,17 @@ export const shortsRouter = router({
       const upstream = describeUpstreamAvailability();
       try {
         const requestedLimit = input.limit ?? 24;
-        const result = await fetchShortsFeedForViewer(ctx.db, ctx.userId, {
-          region,
-          limit: requestedLimit,
-          continuation: input.continuation ?? input.cursor ?? undefined,
-          excludeVideoIds: input.excludeVideoIds,
-          purpose: input.purpose,
-        });
+        const result = await fetchShortsFeedForViewer(
+          ctx.db,
+          ctx.userId,
+          {
+            region,
+            limit: requestedLimit,
+            continuation: input.continuation ?? input.cursor ?? undefined,
+            purpose: input.purpose,
+          },
+          ctx.userId == null ? (ctx.anon?.id ?? null) : null,
+        );
         return {
           videos: prepareShortsFeedVideos(result.videos, requestedLimit),
           nextCursor: result.continuation ?? undefined,

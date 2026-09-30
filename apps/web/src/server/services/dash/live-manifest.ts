@@ -16,7 +16,7 @@
  */
 import {
   companionCheckParam,
-  companionInternalBase,
+  companionSabrUrl,
   withCompanionCheck,
 } from "@/server/services/companion";
 
@@ -34,12 +34,6 @@ export const LIVE_INIT_PATH = "init";
 const COMPANION_BASE_URL_RE = /^live\/[^/]+\/(\d{1,3})\/$/;
 
 const cache = new Map<string, { at: number; mpd: Promise<string | null> }>();
-
-function companionSabrUrl(videoId: string, path: string): string | null {
-  const base = companionInternalBase();
-  if (!base) return null;
-  return `${base}/companion/sabr/${encodeURIComponent(videoId)}/${path}`;
-}
 
 async function fetchFreshLiveManifest(videoId: string): Promise<string | null> {
   const url = companionSabrUrl(videoId, "manifest.mpd");

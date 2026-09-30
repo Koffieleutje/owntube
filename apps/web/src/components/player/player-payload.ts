@@ -4,6 +4,8 @@ export type CaptionTrack = {
   languageCode: string;
   /** Same-origin `/captions/{videoId}?label=…` URL serving WebVTT. */
   src: string;
+  /** Start track when captions are on (account caption language). */
+  isDefault?: boolean;
 };
 
 export type ProxiedVariant =

@@ -2,7 +2,7 @@ import { invidiousPortCollidesWithNextApp } from "@/lib/invidious-port-collision
 import type { AppDb } from "@/server/db/client";
 import {
   readFreshCacheRow,
-  readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   writeCache,
 } from "@/server/services/proxy/cache";
@@ -187,10 +187,10 @@ export async function fetchVideoComments(
 
   // Cache-only (SSR prefetch): never block the watch page on an upstream
   // comments fetch. Serve stale if we have any; otherwise signal a miss so the
-  // prefetch doesn't seed the query with empty data — the client fetches on
-  // mount exactly as before.
+  // prefetch doesn't seed the query with empty (or long-outdated) data — the
+  // client fetches on mount exactly as before.
   if (opts?.cacheOnly) {
-    const stale = readCommentsCacheRow(readLatestCacheRow(db, key));
+    const stale = readCommentsCacheRow(readRecentCacheRow(db, key));
     if (stale) return stale;
     throw new CommentsCacheMissError();
   }
@@ -204,17 +204,55 @@ export async function fetchVideoComments(
   })();
   registerInFlight(inFlightComments, key, task);
 
-  const stale = readCommentsCacheRow(readLatestCacheRow(db, key));
+  const stale = readCommentsCacheRow(readRecentCacheRow(db, key));
   if (stale) return stale;
   return task;
 }
 
+/** Invidious answered but failed server-side (e.g. a comment parser crash). */
+const INVIDIOUS_SERVER_ERROR = /^invidious:HTTP 5\d\d\b/;
+
 async function fetchVideoCommentsLive(
   input: VideoCommentsInput,
 ): Promise<VideoCommentsResult> {
+  const continuation = input.continuation?.trim() || undefined;
+  const { resolved, errors } = await fetchInvidiousComments(
+    input.videoId,
+    input.sortBy,
+    continuation,
+  );
+  if (resolved) return resolved;
+
+  // Invidious's "top" parser breaks on some videos whose sort="top" page
+  // includes non-comment items (it 500s with `Missing hash key:
+  // "commentRenderer"`), while sort="new" still parses. Fall back only when
+  // Invidious itself returned a 5xx — rate limits and network failures would
+  // fail the second request just the same.
+  if (
+    input.sortBy === "top" &&
+    !continuation &&
+    errors.some((e) => INVIDIOUS_SERVER_ERROR.test(e))
+  ) {
+    const fallback = await fetchInvidiousComments(input.videoId, "new");
+    if (fallback.resolved) {
+      return {
+        ...fallback.resolved,
+        warning: "Top comments are unavailable; showing newest first.",
+      };
+    }
+    errors.push(...fallback.errors);
+  }
+
+  throwIfUpstreamFailed(errors, "comments unavailable");
+}
+
+async function fetchInvidiousComments(
+  videoId: string,
+  sortBy: "top" | "new",
+  continuation?: string,
+): Promise<{ resolved: VideoCommentsResult | null; errors: string[] }> {
   const { invidiousBases } = resolveProxyBaseCandidates();
   const errors: string[] = [];
-  const continuation = input.continuation?.trim() || undefined;
 
   let resolved: VideoCommentsResult | null = null;
   for (const invidiousBase of invidiousBases) {
@@ -227,23 +265,15 @@ async function fetchVideoCommentsLive(
     try {
       acquireUpstreamSlot();
       const json = await fetchJson(
-        buildInvidiousCommentsUrl(
-          invidiousBase,
-          input.videoId,
-          input.sortBy,
-          continuation,
-        ),
+        buildInvidiousCommentsUrl(invidiousBase, videoId, sortBy, continuation),
         { source: "invidious", baseUrl: invidiousBase },
       );
-      resolved = mapInvidiousComments(json, invidiousBase, input.videoId);
+      resolved = mapInvidiousComments(json, invidiousBase, videoId);
       break;
     } catch (error) {
       recordUpstreamFailure(error, "invidious", errors, invidiousBase);
     }
   }
 
-  if (!resolved) {
-    throwIfUpstreamFailed(errors, "comments unavailable");
-  }
-  return resolved;
+  return { resolved, errors };
 }

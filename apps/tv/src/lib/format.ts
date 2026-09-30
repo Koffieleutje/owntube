@@ -1,4 +1,5 @@
-import { baseUrl } from "@/lib/config";
+import { PixelRatio } from "react-native";
+
 /** mm:ss / h:mm:ss for durations and playback time. */
 export function formatTime(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
@@ -122,53 +123,41 @@ export function channelInitial(name: string | undefined): string {
   return first ? first.toUpperCase() : "o";
 }
 
-/** A YouTube video id: 11 characters. Playlist ids are longer and won't match. */
-const VIDEO_ID = /^[\w-]{11}$/;
-/** The id inside any `/vi/<id>/<file>` thumbnail path, whoever is serving it. */
-const VI_PATH = /\/vi\/([\w-]{11})\//;
+/** An unsigned `/vi/<id>/<still>` path on YouTube's CDN or an Invidious instance. */
+const LARGE_STILL_RE =
+  /^(\/vi\/[^/]+\/)(?:maxres|maxresdefault|hq720)\.jpe?g$/i;
 
 /**
- * The id to ask the instance for, or undefined when we can't tell. Prefer the
- * one inside the row's own thumbnail URL: a playlist row carries its cover
- * video there while `videoId` holds the *playlist* id, and asking the image
- * proxy for a playlist id is worse than showing nothing (see below).
- */
-function thumbnailVideoId(video: {
-  videoId: string;
-  thumbnailUrl?: string;
-}): string | undefined {
-  const fromUrl = video.thumbnailUrl?.match(VI_PATH)?.[1];
-  if (fromUrl) return fromUrl;
-  return VIDEO_ID.test(video.videoId) ? video.videoId : undefined;
-}
-
-/**
- * A video's thumbnail, served by the instance's own image proxy.
+ * A video's thumbnail for a card, falling back to YouTube's own still by id
+ * when the row carries none (history rows, for one, leave it to the client —
+ * as on the web).
  *
- * Three reasons not to hand the box an `i.ytimg.com` URL, even though the web
- * app treats that host as safe to load directly (isYoutubeAvatarCdn):
- *
- * 1. `/image` keeps a disk cache with serve-stale-and-revalidate, so a shelf
- *    of cards costs the instance one fetch, not one CDN round trip per card
- *    per box — measured here at 462ms cold against 22ms warm.
- * 2. It resolves a missing rung server-side, so the client needs no 404
- *    fallback chain of its own.
- * 3. A TV in the living room otherwise tells Google what is on screen. The
- *    browser can make that trade knowingly; an appliance can't.
- *
- * `mqdefault` is 320x180 — the same 16:9 framing as the card at ~16x less
- * memory than the 1280x720 `hqdefault` Android would otherwise decode and hold
- * per card, which is what makes a shelf stutter on a low-power box.
- *
- * Undefined when no usable video id is in reach; callers render a placeholder.
- * Never guess: `/image/vi/<unknown-id>/…` does not 404, it hangs (>30s).
+ * Feed rows arrive with the 1280x720 `maxres` still, chosen for the web's
+ * large cards. A TV card is 264x148 dp, and an Invidious instance takes one
+ * to two seconds to answer `maxres.jpg` every time (it fetches and re-encodes
+ * it per request), against ~30 ms for `hqdefault.jpg` — which is why a fresh
+ * row sat grey for a beat. So cards ask for `hqdefault` instead; its 4:3
+ * letterbox bars fall outside the card's 16:9 "cover" crop. Signed instance
+ * URLs (`?host=…&rs=…`) pair the tier with the signature and stay as they are.
  */
 export function videoThumbnailUrl(video: {
   videoId: string;
   thumbnailUrl?: string;
-}): string | undefined {
-  const id = thumbnailVideoId(video);
-  return id ? `${baseUrl()}/image/vi/${id}/mqdefault.jpg` : undefined;
+}): string {
+  const url = video.thumbnailUrl;
+  if (!url) {
+    return `https://i.ytimg.com/vi/${encodeURIComponent(video.videoId)}/hqdefault.jpg`;
+  }
+  try {
+    const u = new URL(url);
+    if (u.search) return url;
+    const m = LARGE_STILL_RE.exec(u.pathname);
+    if (!m) return url;
+    u.pathname = `${m[1]}hqdefault.jpg`;
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -181,15 +170,13 @@ export function heroThumbnailUrls(video: {
   videoId: string;
   thumbnailUrl?: string;
 }): string[] {
-  const id = thumbnailVideoId(video);
-  if (!id) return [];
-  // Still sharpest-first, but the proxy already substitutes the best rung it
-  // can get, so this chain is now a belt to its braces rather than the only
-  // thing standing between the hero and a 404.
-  return [
-    `${baseUrl()}/image/vi/${id}/maxresdefault.jpg`,
-    `${baseUrl()}/image/vi/${id}/hq720.jpg`,
+  const id = encodeURIComponent(video.videoId);
+  const urls = [
+    `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${id}/hq720.jpg`,
+    videoThumbnailUrl(video),
   ];
+  return urls.filter((url, index) => urls.indexOf(url) === index);
 }
 
 /**
@@ -213,4 +200,20 @@ export function htmlToPlainText(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&");
+}
+
+/**
+ * A channel avatar URL asking for the size it is drawn at. Feeds hand out
+ * Google's 512px avatars (`…=s512-c-k-…`) for circles of 28-96dp; decoded
+ * that is 1 MB each, and Subscriptions keeps an avatar per subscribed channel
+ * attached. With 177 channels the textures overran the GPU cache and every
+ * frame re-uploaded them: 200+ ms frames on a KPN box. Google serves any
+ * `=sN`, so ask for the drawn size in pixels. Other URLs pass through.
+ */
+export function sizedAvatarUrl(url: string, sizeDp: number): string {
+  const px = Math.ceil(sizeDp * PixelRatio.get());
+  return url.replace(
+    /^(https:\/\/(?:yt\d\.)?(?:googleusercontent|ggpht)\.com\/[^=?#]+)=s\d+/,
+    `$1=s${px}`,
+  );
 }

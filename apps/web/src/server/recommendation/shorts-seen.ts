@@ -1,6 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import type { AppDb } from "@/server/db/client";
-import { shortsSeen } from "@/server/db/schema";
+import { anonShortsSeen, shortsSeen } from "@/server/db/schema";
 
 /**
  * Safety cap on how many seen ids we hard-exclude — effectively unbounded for
@@ -79,4 +79,50 @@ export function recordShortSeen(
       seenAt: ts,
     })
     .run();
+}
+
+/**
+ * Signed-out viewers' seen shorts expire: the cookie is the only link back to
+ * them, and an abandoned browser's rows would otherwise live forever.
+ */
+const ANON_SHORTS_SEEN_TTL_SEC = 180 * 24 * 60 * 60;
+
+/** Fraction of anonymous writes that also sweep expired rows. */
+const ANON_SHORTS_SEEN_PRUNE_RATE = 0.01;
+
+/** `loadShortSeenVideoIds` for a signed-out viewer (by `owntube_anon` id). */
+export function loadAnonShortSeenVideoIds(
+  db: AppDb,
+  anonId: string,
+): Set<string> {
+  const rows = db
+    .select({ videoId: anonShortsSeen.videoId })
+    .from(anonShortsSeen)
+    .where(eq(anonShortsSeen.anonId, anonId))
+    .orderBy(desc(anonShortsSeen.seenAt))
+    .limit(SHORTS_SEEN_MAX)
+    .all();
+  return new Set(rows.map((r) => r.videoId));
+}
+
+export function recordAnonShortSeen(
+  db: AppDb,
+  anonId: string,
+  videoId: string,
+): void {
+  const trimmedId = videoId.trim();
+  if (trimmedId.length < 5) return;
+  const ts = nowUnix();
+  db.insert(anonShortsSeen)
+    .values({ anonId, videoId: trimmedId, seenAt: ts })
+    .onConflictDoUpdate({
+      target: [anonShortsSeen.anonId, anonShortsSeen.videoId],
+      set: { seenAt: ts },
+    })
+    .run();
+  if (Math.random() < ANON_SHORTS_SEEN_PRUNE_RATE) {
+    db.delete(anonShortsSeen)
+      .where(lt(anonShortsSeen.seenAt, ts - ANON_SHORTS_SEEN_TTL_SEC))
+      .run();
+  }
 }

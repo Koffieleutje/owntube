@@ -12,9 +12,16 @@ It's a solo side-project. Code is meant to stay maintainable by one person, so t
 - Search, watch, history, like / dislike / save
 - Personal recommendation feed (TF-IDF + MMR diversification, no collaborative filtering) with a local **Algorithm** dashboard, keyword refinement, and an option to keep already-subscribed channels out of recommendations
 - Trending ("Explore") page, channel pages, subscriptions with merged feed and tri-state tag filters
+- **Subscriptions tabs** — *Everything* (merged uploads), *By tag* (a lazily loaded row per channel tag) and *Channels*, with one tag filter and a "hide watched" toggle shared across tabs
+- **Podcast feeds** — playlists, queue, saved, subscriptions, every subscribed channel and every channel tag are published as audio and video podcast RSS (with chapters) to a small public [feeds server](feeds/README.md), at an unguessable per-user secret address; *Copy RSS URL* on those pages and in their ⋯ menus
+- **WebSub push** — new uploads from subscribed channels arrive via YouTube's hub within about a minute instead of on the next poll, and changed feeds are announced to podcast apps through OwnTube's own WebSub hub
+- **API tokens** — revocable, scoped `ot_…` tokens for services that act on your behalf (e.g. syncing playback with a podcast app), created and revoked under Settings
+- **SABR VOD (optional)** — play regular videos through invidious-companion's SABR→DASH connector (the path live streams already use), as a fallback or first choice, for when YouTube stops publishing byte-range formats; set `INVIDIOUS_COMPANION_SABR_VOD=fallback` or `always` (default `off`, needs the patched companion)
+- **Captions everywhere** — a per-account default subtitle language, captions in Picture-in-Picture and native fullscreen, and caption tracks in the HLS stream for native players
 - Auth.js (credentials + bcrypt), multi-user accounts
 - Theme switcher, per-user Piped/Invidious overrides, JSON export/import
 - PiP and keyboard shortcuts in the player (Vidstack)
+- **Android TV / Fire TV app** ([`apps/tv`](apps/tv/README.md)) — lean-back client with device pairing, profiles, the web home's rows and a D-pad player; *Play on TV* on the watch page sends a video to a paired TV
 - Local playlists, dashboard stats, YouTube Takeout history import
 - PWA (manifest + service worker)
 - Docker Compose with healthcheck and restart policy
@@ -36,7 +43,7 @@ It's a solo side-project. Code is meant to stay maintainable by one person, so t
 - [corepack](https://nodejs.org/api/corepack.html) (ships with Node) for pnpm
 - A reachable Piped or Invidious instance — public or self-hosted (see [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md))
 
-This is a pnpm workspace: the web app lives in `apps/web/`, the (work-in-progress) TV client in
+This is a pnpm workspace: the web app lives in `apps/web/`, the Android TV / Fire TV client in
 `apps/tv/`, and a thin native iOS shell in [`apps/ios/`](apps/ios/README.md) — a WKWebView wrapper
 that restores Picture-in-Picture and background audio, which iOS denies to the installed PWA.
 Self-hosting only ever needs `apps/web/`; the Docker image never contains TV or iOS code. The
@@ -81,7 +88,7 @@ For a fully local setup with a self-hosted Invidious, run `bash scripts/setup-in
 | `/playlists`            | Local playlists                                   |
 | `/queue`, `/saved`      | Watch queue and saved videos                      |
 | `/dashboard`            | Algorithm — recommender insights, keywords, settings |
-| `/settings`             | Theme, source instances, JSON export/import       |
+| `/settings`             | Theme, source instances, API tokens, JSON export/import |
 | `/login`, `/register`   | Credentials auth                                  |
 
 ## Scripts
@@ -132,6 +139,7 @@ src/
 docs/
   SELF-HOSTING.md      Self-hosted Invidious / Piped guide + backup cron
   LIVE-AND-DVR-PLAYBACK.md  How live and post-live DVR streams play (via invidious-companion)
+feeds/                 Public podcast feeds server + WebSub hub (see feeds/README.md)
 e2e/                   Playwright tests
 scripts/               Setup + migration scripts
 ```

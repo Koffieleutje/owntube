@@ -31,6 +31,8 @@ export const searchVideosInputSchema = z.object({
   continuation: z.string().max(4096).optional(),
   /** ISO 3166-1 alpha-2, passed through to Invidious search. */
   region: z.string().length(2).optional(),
+  /** Upload-date window (Invidious `date` filter); unset = any time. */
+  date: z.enum(["hour", "today", "week", "month", "year"]).optional(),
 });
 
 export type SearchVideosInput = z.infer<typeof searchVideosInputSchema>;
@@ -41,7 +43,10 @@ export type SearchVideosInput = z.infer<typeof searchVideosInputSchema>;
  */
 export const recommendationReasonSchema = z.object({
   kind: z.enum(["subscription", "channel", "topic", "related", "trending"]),
-  /** Channel the affinity comes from (for `kind: "subscription" | "channel"`). */
+  /**
+   * Channel the affinity comes from (for `kind: "subscription" | "channel"`),
+   * or, for `kind: "related"`, the subscribed channel whose upload seeded it.
+   */
   channelName: z.string().optional(),
   /** Top matched taste terms (for `kind: "topic"`). */
   terms: z.array(z.string()).optional(),
@@ -217,9 +222,9 @@ export const streamSourceSchema = z.object({
    */
   audioTrackDisplayName: z.string().optional(),
   /**
-   * Invidious `audioTrack.audioIsDefault`: true for the video's original
-   * (undubbed) audio. Replaces guessing at `acont=original` inside the stream
-   * URL's `xtags` parameter.
+   * True for the video's original (undubbed) audio: the stream URL's `xtags`
+   * `acont=original`, else the display name's "original". Not Invidious
+   * `audioTrack.audioIsDefault`, which follows the requester's locale.
    */
   audioIsOriginal: z.boolean().optional(),
   /**

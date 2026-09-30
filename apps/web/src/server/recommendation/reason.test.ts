@@ -21,6 +21,7 @@ function makeBreakdown(
       shareFromChannel: 0,
       catalogCoverage: 0,
       recentChannelBoost: 0,
+      subscription: 0,
       ...components,
     },
     inputs: {
@@ -37,6 +38,7 @@ function makeBreakdown(
       recentPageCoverageOnChannel: 0,
       catalogCoverageDamping: 0,
       recentChannelBoostRaw: 0,
+      isSubscribed: false,
       ...inputs,
     },
   };

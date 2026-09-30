@@ -80,7 +80,7 @@ export function ActionToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div
         aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex justify-center px-4"
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--ot-bottom-nav-h,0px)+1.25rem)] z-[70] flex justify-center px-4"
       >
         {toast ? (
           <div

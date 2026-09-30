@@ -15,10 +15,32 @@ export type UserSignals = {
   totalDistinctVideosWatched: number;
   /** Max `started_at` (unix s) per channel in the window — for recency-biased scoring. */
   channelLastWatchedAt: Map<string, number>;
-  /** Channel ids from history, ordered by most recent watch on that channel (desc). */
+  /**
+   * Channel ids from history, ordered by most recent watch on that channel
+   * (desc). Channels the user only ever bounced off (every watch a quick skip,
+   * no like/save) are left out — one accidental click is not a relationship.
+   */
   channelsOrderedByRecentWatch: string[];
-  /** All channel ids that appear in the watch window (for filters / bypass). */
+  /**
+   * Same channels ordered by `channelWeights` (desc): recency-decayed,
+   * engagement-weighted interest. Prefer this when picking which channels to
+   * page for candidates, so a channel watched a dozen times last week outranks
+   * a one-off opened yesterday.
+   */
+  channelsOrderedByWeight: string[];
+  /**
+   * Channel ids the user has a real relationship with (for filters / bypass):
+   * every channel in the watch window except skip-only ones, plus like/save
+   * channels.
+   */
   historyChannelIds: Set<string>;
+  /**
+   * Long-form videos the user actually watched (completed / engaged / left
+   * mid-way, never a quick skip), most recent first. Seeds for related-video
+   * expansion, so discovery grows out of what was watched rather than only out
+   * of configured keywords.
+   */
+  recentEngagedVideoIds: string[];
   /** Videos the user liked (excluding those also disliked). */
   likedVideoIds: Set<string>;
   /** Videos the user disliked — excluded from recommendations. */
@@ -42,8 +64,13 @@ export type UserSignals = {
 };
 
 const WINDOW_SEC = 90 * 24 * 3600;
-/** Recent plays weigh more: `exp(-age / tau)` is near 1 right after a watch, then decays. */
-const CHANNEL_RECENCY_TAU_SEC = 6 * 24 * 3600;
+/**
+ * Recent plays weigh more: `exp(-age / tau)` is near 1 right after a watch,
+ * then decays. Raised from 6 days: with a week-long decay the channels opened in the last
+ * few days dominated every channel weight, so the home feed tracked recent
+ * viewing instead of the user's lasting interests.
+ */
+const CHANNEL_RECENCY_TAU_SEC = 30 * 24 * 3600;
 
 /** Likes/saves boost channel affinity with a slower decay than single watches. */
 const INTERACTION_CHANNEL_TAU_SEC = 45 * 24 * 3600;
@@ -213,7 +240,40 @@ export function collectUserSignals(
     distinctWatchesByChannel.set(ch, ids.size);
   }
 
-  const historyChannelIds = new Set(channelLastWatchedAt.keys());
+  // A channel whose every watch was a quick skip — or a bare open with no
+  // dwell at all on a video whose length we do know — is not one the user
+  // watches: it must neither be paged for candidates nor bypass the taste
+  // gate. (Its channel weight is kept so scoring semantics stay intact.)
+  // Zero-dwell rows stay "unknown" for engagement weighting (a bare mount
+  // must not contradict the completed row that follows it), but for the
+  // *relationship* question they count as a bounce: a home-shelf glance at a
+  // keyword-matched short otherwise turns a random channel into "one you
+  // watch" and floods the feed with its back catalogue.
+  const bestEngagementByChannel = new Map<string, WatchEngagement>();
+  for (const r of rows) {
+    let cls = engagementByVideo.get(r.videoId) ?? "unknown";
+    if (
+      cls === "unknown" &&
+      r.videoDurationSeconds > 0 &&
+      r.durationWatched <= 0
+    ) {
+      cls = "skip";
+    }
+    const prev = bestEngagementByChannel.get(r.channelId);
+    if (!prev || ENGAGEMENT_RANK[cls] > ENGAGEMENT_RANK[prev]) {
+      bestEngagementByChannel.set(r.channelId, cls);
+    }
+  }
+  const skipOnlyChannelIds = new Set<string>();
+  for (const [ch, cls] of bestEngagementByChannel) {
+    if (cls === "skip") skipOnlyChannelIds.add(ch);
+  }
+
+  const historyChannelIds = new Set(
+    [...channelLastWatchedAt.keys()].filter(
+      (ch) => !skipOnlyChannelIds.has(ch),
+    ),
+  );
 
   const likedVideoIds = new Set<string>();
   const dislikedVideoIds = new Set<string>();
@@ -251,6 +311,9 @@ export function collectUserSignals(
     if (r.type !== "like" && r.type !== "save") continue;
     if (!r.channelId || dislikedVideoIds.has(r.videoId)) continue;
     interactionInterestChannelIds.add(r.channelId);
+    // An explicit like/save outweighs a skip-only history on the same channel.
+    skipOnlyChannelIds.delete(r.channelId);
+    historyChannelIds.add(r.channelId);
     const ageSec = Math.max(0, nowSec - r.createdAt);
     const base = r.type === "like" ? LIKE_CHANNEL_WEIGHT : SAVE_CHANNEL_WEIGHT;
     const contrib = base * Math.exp(-ageSec / INTERACTION_CHANNEL_TAU_SEC);
@@ -271,6 +334,8 @@ export function collectUserSignals(
     savedVideoIds.add(ref.videoId);
     if (!ref.channelId) continue;
     interactionInterestChannelIds.add(ref.channelId);
+    skipOnlyChannelIds.delete(ref.channelId);
+    historyChannelIds.add(ref.channelId);
     const ageSec = Math.max(0, nowSec - ref.addedAt);
     const contrib =
       SAVE_CHANNEL_WEIGHT * Math.exp(-ageSec / INTERACTION_CHANNEL_TAU_SEC);
@@ -283,7 +348,12 @@ export function collectUserSignals(
   }
 
   const channelsOrderedByRecentWatch = [...channelLastWatchedAt.entries()]
+    .filter(([id]) => !skipOnlyChannelIds.has(id))
     .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id);
+  const channelsOrderedByWeight = [...channelWeights.entries()]
+    .filter(([id]) => !skipOnlyChannelIds.has(id))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([id]) => id);
 
   const quickSkipVideoIds = new Set<string>();
@@ -295,6 +365,18 @@ export function collectUserSignals(
     quickSkipVideoIds.add(videoId);
   }
 
+  // Rows are newest-first, so the first sighting of a video is its latest.
+  const recentEngagedVideoIds: string[] = [];
+  const seenEngaged = new Set<string>();
+  for (const r of rows) {
+    if (r.isShort === 1 || seenEngaged.has(r.videoId)) continue;
+    seenEngaged.add(r.videoId);
+    const engagement = engagementByVideo.get(r.videoId) ?? "unknown";
+    if (engagement === "skip" || engagement === "unknown") continue;
+    if (dislikedVideoIds.has(r.videoId)) continue;
+    recentEngagedVideoIds.push(r.videoId);
+  }
+
   return {
     channelWeights,
     totalWatches: rows.length,
@@ -304,7 +386,9 @@ export function collectUserSignals(
     totalDistinctVideosWatched: watchedVideoIds.size,
     channelLastWatchedAt,
     channelsOrderedByRecentWatch,
+    channelsOrderedByWeight,
     historyChannelIds,
+    recentEngagedVideoIds,
     likedVideoIds,
     dislikedVideoIds,
     savedVideoIds,

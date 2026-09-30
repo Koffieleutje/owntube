@@ -11,6 +11,7 @@ import {
 } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { type MenuItem, MenuPanel } from "@/components/MenuPanel";
+import { loadHints, markLongPressUsed, takeLongPressHint } from "@/lib/hints";
 import type { Nav } from "@/lib/navigation";
 import { usePlaylistMenu } from "@/lib/playlist-menu";
 import { queryClient } from "@/lib/query-client";
@@ -25,11 +26,14 @@ type CardMenuApi = {
   open: (video: UnifiedVideo, extras?: MenuItem[]) => void;
   /** A short confirmation at the top right ("Added to queue"). */
   notify: (text: string) => void;
+  /** A card took focus: say how to open its menu, the first few times. */
+  hintLongPress: () => void;
 };
 
 const CardMenuContext = createContext<CardMenuApi>({
   open: () => {},
   notify: () => {},
+  hintLongPress: () => {},
 });
 
 export function useCardMenu(): CardMenuApi {
@@ -68,10 +72,19 @@ export function CardMenuProvider({
   );
 
   const close = useCallback(() => setTarget(null), []);
+  useEffect(() => {
+    void loadHints();
+  }, []);
   const api = useMemo<CardMenuApi>(
     () => ({
-      open: (video, extras = []) => setTarget({ video, extras }),
+      open: (video, extras = []) => {
+        markLongPressUsed();
+        setTarget({ video, extras });
+      },
       notify,
+      hintLongPress: () => {
+        if (takeLongPressHint()) notify("Tip: hold OK on a video for options");
+      },
     }),
     [notify],
   );

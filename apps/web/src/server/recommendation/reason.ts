@@ -59,6 +59,10 @@ export function deriveRecommendationReason(
   if (hasChannelName && source.startsWith("subscription:")) {
     return { kind: "subscription", channelName: video.channelName };
   }
+  // A subscribed channel's upload that arrived another way (related, topic).
+  if (hasChannelName && inputs.isSubscribed) {
+    return { kind: "subscription", channelName: video.channelName };
+  }
   if (hasChannelName && source.startsWith("history_channel:")) {
     return { kind: "channel", channelName: video.channelName };
   }

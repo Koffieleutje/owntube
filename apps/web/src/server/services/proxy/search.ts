@@ -4,6 +4,7 @@ import type { AppDb } from "@/server/db/client";
 import {
   readFreshCacheRow,
   readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   searchCacheKey,
   writeCache,
@@ -40,6 +41,9 @@ export function buildInvidiousSearchUrl(
   if (input.region) {
     u.searchParams.set("region", input.region.toUpperCase());
   }
+  if (input.date) {
+    u.searchParams.set("date", input.date);
+  }
   const page =
     input.continuation && /^\d+$/.test(input.continuation)
       ? input.continuation
@@ -70,8 +74,12 @@ function readFreshSearchCache(
 function readStaleSearchCache(
   db: AppDb,
   key: string,
+  opts?: { recentOnly?: boolean },
 ): SearchVideosResult | null {
-  const row = readLatestCacheRow(db, key);
+  const row = (opts?.recentOnly ? readRecentCacheRow : readLatestCacheRow)(
+    db,
+    key,
+  );
   if (!row) return null;
   const raw = JSON.parse(row.payloadJson) as unknown;
   const parsed = cachedSearchPayloadSchema.safeParse(raw);
@@ -141,9 +149,9 @@ export async function searchVideos(
   const task = searchVideosLive(db, input, key);
   registerInFlight(inFlightSearch, key, task);
 
-  // Serve-stale-and-revalidate: an expired row answers instantly while the
-  // task above refreshes the cache in the background.
-  const stale = readStaleSearchCache(db, key);
+  // Serve-stale-and-revalidate: a recently expired row answers instantly while
+  // the task above refreshes the cache in the background.
+  const stale = readStaleSearchCache(db, key, { recentOnly: true });
   if (stale) return { ...stale, warning: undefined };
   return task;
 }

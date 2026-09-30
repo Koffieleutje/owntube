@@ -14,7 +14,7 @@ import {
 import type { AppDb } from "@/server/db/client";
 import {
   readFreshCacheRow,
-  readLatestCacheRow,
+  readRecentCacheRow,
   registerInFlight,
   writeCache,
 } from "@/server/services/proxy/cache";
@@ -113,7 +113,7 @@ async function getRawSegments(
     })();
   if (!inFlight) registerInFlight(inFlightSegments, key, task);
 
-  const stale = readLatestCacheRow(db, key);
+  const stale = readRecentCacheRow(db, key);
   if (stale) {
     const raw = parseRawRow(stale.payloadJson);
     if (raw) return raw;

@@ -7,11 +7,14 @@ import {
   publishedFeeds,
   subscriptions,
   userProfile,
-  users,
   watchHistory,
 } from "@/server/db/schema";
 import { clearRecommendationCachesForUser } from "@/server/recommendation/engine";
-import { ensureRssPass, regenerateRssPass } from "@/server/remote/rss-pass";
+import {
+  ensureRssPass,
+  feedToken,
+  regenerateRssPass,
+} from "@/server/remote/rss-pass";
 import {
   clearProxyCaches,
   getInstanceSourceInfo,
@@ -59,6 +62,9 @@ const settingsPatchSchema = z.object({
   shortsPreloadNext: z.boolean().optional(),
   defaultPlaybackQuality: defaultPlaybackQualitySchema.optional(),
   fullscreenAutoBestQuality: z.boolean().optional(),
+  captionLanguage: withoutDefault(
+    appSettingsSchema.shape.captionLanguage,
+  ).optional(),
   sponsorBlockEnabled: z.boolean().optional(),
   sponsorBlockAutoSkip: z.boolean().optional(),
   sponsorBlockCategories: z.array(sponsorBlockCategorySchema).optional(),
@@ -152,28 +158,32 @@ export const settingsRouter = router({
       upsertUserSettings(ctx.db, ctx.userId, input),
     ),
 
-  /** Basic-Auth credentials for the companion's podcast feeds. */
+  /** The account's secret feed addresses. */
   rssFeeds: protectedProcedure.query(({ ctx }) => {
-    const row = ctx.db
-      .select({ email: users.email })
-      .from(users)
-      .where(eq(users.id, ctx.userId))
-      .get();
+    const pass = ensureRssPass(ctx.db, ctx.userId);
+    const base = process.env.OWNTUBE_PUBLISH_TARGET?.trim().replace(/\/+$/, "");
+    const token = feedToken(pass);
     return {
-      // Full email; URL-encode it when placed inside a feed URL.
-      username: row?.email ?? "",
-      pass: ensureRssPass(ctx.db, ctx.userId),
       companionUrl: process.env.OWNTUBE_PUBLISH_TARGET?.trim() || null,
+      feedsUrl: base ? `${base}/rss/${token}/` : null,
+      queueUrls: base
+        ? {
+            audio: `${base}/rss/${token}/queue/queue.audio.xml`,
+            video: `${base}/rss/${token}/queue/queue.video.xml`,
+          }
+        : null,
     };
   }),
 
-  /** New password; the companion accepts it after the next publish cycle. */
-  regenerateRssPass: protectedProcedure.mutation(({ ctx }) => ({
-    pass: regenerateRssPass(ctx.db, ctx.userId),
-  })),
+  /** Rotates the password the secret feed addresses are derived from, so
+   * every existing address (and any podcast subscription using it) breaks;
+   * the feeds server picks up the new one at the next publish cycle. */
+  regenerateRssPass: protectedProcedure.mutation(({ ctx }) => {
+    regenerateRssPass(ctx.db, ctx.userId);
+  }),
 
   /**
-   * The credentialed companion URL for one feed, resolved through the slugs
+   * The secret companion address for one feed, resolved through the slugs
    * the publisher recorded on its last run. `url` is null when no companion
    * is configured or the feed hasn't been published yet (empty, or created
    * since the last publish cycle).
@@ -215,14 +225,8 @@ export const settingsRouter = router({
         )
         .get();
       if (!row) return none("not-published");
-      const user = ctx.db
-        .select({ email: users.email })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
-      if (!user) return none("not-published");
-      const auth = `${encodeURIComponent(user.email)}:${ensureRssPass(ctx.db, ctx.userId)}`;
-      const feed = `${base.replace(/^(https?:\/\/)/, `$1${auth}@`)}/rss/${encodeURIComponent(input.kind)}/${encodeURIComponent(row.slug)}`;
+      const token = feedToken(ensureRssPass(ctx.db, ctx.userId));
+      const feed = `${base}/rss/${token}/${encodeURIComponent(input.kind)}/${encodeURIComponent(row.slug)}`;
       return {
         audioUrl: `${feed}.audio.xml`,
         videoUrl: `${feed}.video.xml`,

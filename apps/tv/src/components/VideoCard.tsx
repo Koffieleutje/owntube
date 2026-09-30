@@ -7,8 +7,9 @@ import {
   formatPublishedLabel,
   formatThumbnailBadge,
   formatViews,
-  videoThumbnailUrl,
+  sizedAvatarUrl,
 } from "@/lib/format";
+import { useThumbnail } from "@/lib/use-thumbnail";
 import { useWatchProgress } from "@/lib/watch-progress";
 import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
 
@@ -52,7 +53,7 @@ export const VideoCard = memo(function VideoCard({
   );
   const metadata = [views, published].filter(Boolean).join(" - ");
   const watched = useWatchProgress(video.videoId);
-  const thumbnail = videoThumbnailUrl(video);
+  const thumbnail = useThumbnail(video);
 
   return (
     <Pressable
@@ -70,23 +71,20 @@ export const VideoCard = memo(function VideoCard({
       style={[styles.card, focused && styles.cardFocused]}
     >
       <View style={styles.thumbWrap}>
-        {thumbnail ? (
-          <Image
-            source={{ uri: thumbnail }}
-            // Finished videos recede, like the web's watched cards; focus
-            // brings one back to full strength.
-            style={[
-              styles.thumb,
-              watched?.completed && !focused && styles.thumbWatched,
-            ]}
-            resizeMode="cover"
-            // Decode at view size: Android otherwise keeps the full upstream
-            // bitmap (up to 1280x720) per card, which churns memory and GC.
-            resizeMethod="resize"
-          />
-        ) : (
-          <View style={[styles.thumb, styles.thumbPlaceholder]} />
-        )}
+        <Image
+          source={thumbnail.uri ? { uri: thumbnail.uri } : undefined}
+          onError={thumbnail.onError}
+          // Finished videos recede, like the web's watched cards; focus
+          // brings one back to full strength.
+          style={[
+            styles.thumb,
+            watched?.completed && !focused && styles.thumbWatched,
+          ]}
+          resizeMode="cover"
+          // Decode at view size: Android otherwise keeps the full upstream
+          // bitmap (up to 1280x720) per card, which churns memory and GC.
+          resizeMethod="resize"
+        />
         {focused ? (
           <View style={styles.playOverlay} pointerEvents="none">
             <View style={styles.playBubble}>
@@ -154,6 +152,8 @@ export const VideoCard = memo(function VideoCard({
   );
 });
 
+const CHANNEL_AVATAR_SIZE = 32;
+
 function ChannelAvatar({
   imageUrl,
   channelName,
@@ -164,7 +164,7 @@ function ChannelAvatar({
   if (imageUrl) {
     return (
       <Image
-        source={{ uri: imageUrl }}
+        source={{ uri: sizedAvatarUrl(imageUrl, CHANNEL_AVATAR_SIZE) }}
         style={styles.avatar}
         resizeMethod="resize"
       />
@@ -208,7 +208,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.muted,
   },
   thumb: { width: "100%", height: "100%" },
-  thumbPlaceholder: { backgroundColor: colors.surface },
   thumbWatched: { opacity: 0.45 },
   // Sits on the thumbnail's bottom edge, like the web app's watched bar.
   progressTrack: {
@@ -260,9 +259,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: CHANNEL_AVATAR_SIZE,
+    height: CHANNEL_AVATAR_SIZE,
+    borderRadius: CHANNEL_AVATAR_SIZE / 2,
     backgroundColor: colors.avatarFallback,
   },
   avatarFallback: {

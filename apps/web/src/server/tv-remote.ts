@@ -24,6 +24,8 @@ export type TvCommand = {
 type TvDevice = {
   deviceId: string;
   name: string;
+  /** An Android emulator: kept out of the web's list of TVs. */
+  emulator: boolean;
   lastSeen: number;
   pending: TvCommand | null;
 };
@@ -55,22 +57,33 @@ function prune(devices: Map<string, TvDevice>, now: number) {
   }
 }
 
+/**
+ * Whether a TV name is an Android emulator's, for TV builds that don't report
+ * it themselves (the stock TV image's model is "AOSP TV on x86").
+ */
+export function looksLikeEmulator(name: string): boolean {
+  return /\b(AOSP|sdk_\w*|emulator|SDK built for)\b/i.test(name);
+}
+
 /** A TV checks in; returns (and clears) what was sent to it, if anything. */
 export function pollTv(
   userId: number,
   deviceId: string,
   name: string,
   now = Date.now(),
+  emulator = false,
 ): TvCommand | null {
   const devices = devicesOf(userId);
   prune(devices, now);
   const device = devices.get(deviceId) ?? {
     deviceId,
     name,
+    emulator,
     lastSeen: now,
     pending: null,
   };
   device.name = name;
+  device.emulator = emulator;
   device.lastSeen = now;
   devices.set(deviceId, device);
   const command = device.pending;
@@ -78,17 +91,17 @@ export function pollTv(
   return command;
 }
 
-/** TVs of this user that are awake right now. */
+/** TVs of this user that are awake right now, emulators left out. */
 export function listTvs(
   userId: number,
   now = Date.now(),
 ): { deviceId: string; name: string }[] {
   const devices = devicesOf(userId);
   prune(devices, now);
-  return [...devices.values()].map(({ deviceId, name }) => ({
-    deviceId,
-    name,
-  }));
+  return [...devices.values()]
+    .filter((device) => !device.emulator)
+    .map(({ deviceId, name }) => ({ deviceId, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Queues a video for one TV; false when that TV isn't awake. */

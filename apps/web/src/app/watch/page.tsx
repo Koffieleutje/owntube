@@ -22,6 +22,7 @@ import { WatchPageGrid } from "@/components/watch/watch-page-grid";
 import { WatchPlayerMount } from "@/components/watch/watch-player-mount";
 import { WatchUpcomingLive } from "@/components/watch/watch-upcoming-live";
 import { WatchVideoUnavailable } from "@/components/watch/watch-video-unavailable";
+import { pickDefaultCaptionIndex } from "@/lib/caption-default";
 import {
   getAppOriginFromRequestHeaders,
   toProxiedOrDirectPlayback,
@@ -252,11 +253,21 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
           : null
       : null;
   // Subtitle tracks → same-origin `/captions/{id}?label=…` (validating, caching
-  // proxy). Both human-authored and auto-generated tracks are included.
+  // proxy). Both human-authored and auto-generated tracks are included. The
+  // start track follows the account's caption language (lib/caption-default).
+  const defaultCaptionIndex = detail?.captions?.length
+    ? pickDefaultCaptionIndex(detail.captions, {
+        preferred: userSettings?.captionLanguage,
+        originalAudioLanguage: detail.audioSources?.find(
+          (a) => a.audioIsOriginal,
+        )?.language,
+      })
+    : -1;
   const videoCaptions = detail?.captions?.length
-    ? detail.captions.map((c) => ({
+    ? detail.captions.map((c, i) => ({
         label: c.label,
         languageCode: c.languageCode,
+        isDefault: i === defaultCaptionIndex,
         src: `${mediaOrigin}/captions/${encodeURIComponent(detail.videoId)}?label=${encodeURIComponent(
           c.label,
         )}`,
@@ -449,10 +460,15 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-[hsl(var(--border))] pb-4">
-                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                  {/* Basis 18rem: the row wraps the action buttons onto their
+                      own line before the channel block is squeezed — on phones
+                      it used to shrink the name to nothing and push Subscribe
+                      over the subscriber count and the buttons. */}
+                  <div className="flex min-w-0 flex-[1_1_18rem] items-center gap-3">
                     {detail?.channelId ? (
                       <Link
                         href={`/channel/${encodeURIComponent(detail.channelId)}`}
+                        className="shrink-0"
                       >
                         <ChannelAvatarCircle
                           imageUrl={detail.channelAvatarUrl}
@@ -471,16 +487,16 @@ export default async function WatchPage({ searchParams }: WatchPageProps) {
                       {detail?.channelId ? (
                         <Link
                           href={`/channel/${encodeURIComponent(detail.channelId)}`}
-                          className="line-clamp-1 text-sm font-semibold text-[hsl(var(--foreground))] hover:underline"
+                          className="block truncate text-sm font-semibold text-[hsl(var(--foreground))] hover:underline"
                         >
                           {channelLabel}
                         </Link>
                       ) : (
-                        <p className="line-clamp-1 text-sm font-semibold text-[hsl(var(--foreground))]">
+                        <p className="truncate text-sm font-semibold text-[hsl(var(--foreground))]">
                           {channelLabel}
                         </p>
                       )}
-                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                      <p className="truncate text-xs text-[hsl(var(--muted-foreground))]">
                         {subscribersLabel ?? "Channel"}
                       </p>
                       {detail?.channelId ? (

@@ -68,8 +68,11 @@ const CARD_SURFACES: ReadonlySet<VideoActionSurface> = new Set([
   "playlist",
 ]);
 
-/** True when the device can hover — thumbnail quick actions exist there. */
-function useHoverCapable(): boolean {
+/**
+ * True when the device can hover — thumbnail quick actions exist there. False
+ * until mounted, so touch devices never render the overlay.
+ */
+export function useHoverCapable(): boolean {
   const [capable, setCapable] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia("(hover: hover)");

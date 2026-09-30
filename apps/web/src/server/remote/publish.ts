@@ -1,4 +1,8 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import {
+  isSubscriptionShort,
+  type LongFormWindow,
+} from "@/lib/long-form-uploads";
 import { toMediaOriginUrl } from "@/lib/media-origin";
 import { parseChaptersFromDescription } from "@/lib/video-chapters";
 import type { AppDb } from "@/server/db/client";
@@ -13,9 +17,15 @@ import {
   users,
   watchQueue,
 } from "@/server/db/schema";
-import { ensureRssPass, sha256Hex } from "@/server/remote/rss-pass";
-import { getChannelRssEntries } from "@/server/rss/cache";
+import { ensureRssPass, feedToken, sha256Hex } from "@/server/remote/rss-pass";
+import { getChannelRssEntries, getLongFormWindows } from "@/server/rss/cache";
 import { fetchVideoDetail } from "@/server/services/proxy";
+import {
+  channelCacheKey,
+  detailCacheKey,
+  readLatestCacheRow,
+} from "@/server/services/proxy/cache";
+import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 /**
  * Remote-control publisher: turns each user's local library (playlists, queue,
@@ -92,6 +102,9 @@ export type PublishOptions = {
 const DEFAULT_CHANNEL_LIMIT = 30;
 const DEFAULT_MERGED_LIMIT = 50;
 const DEFAULT_CONCURRENCY = 5;
+/** Live detail lookups per publish run for videos no cache has; the rest
+ * wait for the next run (a new subscription's backlog, a cleared cache). */
+const LIVE_LOOKUPS_PER_RUN = 60;
 
 function slugify(input: string, fallback: string): string {
   const s = input
@@ -197,30 +210,158 @@ async function enrichVideoItems(
   return items;
 }
 
-/** Merge several channels' cached uploads RSS into one newest-first item list. */
+/** What a channel-based feed needs from a video beyond its RSS entry. */
+export type VideoFacts = Pick<
+  UnifiedVideo,
+  "durationSeconds" | "isShort" | "isLive" | "isUpcoming"
+>;
+
+export type VideoFactsResolver = (
+  channelId: string,
+  videoId: string,
+) => Promise<VideoFacts>;
+
+/** Facts from a cached channel-page video or video detail; undefined unless
+ * the duration is known (upstreams send 0/-1 when it isn't). */
+function pickFacts(v: unknown): VideoFacts | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const d = o.durationSeconds;
+  if (typeof d !== "number" || !(d > 0)) return undefined;
+  const flag = (k: string) => (o[k] === true ? { [k]: true } : {});
+  return {
+    durationSeconds: d,
+    ...flag("isShort"),
+    ...flag("isLive"),
+    ...flag("isUpcoming"),
+  };
+}
+
+/**
+ * YouTube's uploads RSS carries no duration, so channel-based feed items would
+ * go out without `<itunes:duration>` (podcast apps show "unknown" until the
+ * episode is loaded), and there'd be nothing to tell a Short by once it has
+ * aged out of the long-form window. A video's duration never changes, so any
+ * cached copy will do, stale or not: the channel's cached videos page first,
+ * then a cached video detail. Only a video neither has seen is looked up
+ * live, which caches it for the next run. One resolver per publish run;
+ * lookups are shared across feeds and users.
+ */
+export function createVideoFactsResolver(
+  db: AppDb,
+  options: {
+    liveLookups?: number;
+    fetchDetail?: (videoId: string) => Promise<unknown>;
+  } = {},
+): VideoFactsResolver {
+  const fetchDetail =
+    options.fetchDetail ?? ((videoId) => fetchVideoDetail(db, { videoId }));
+  let liveLeft = options.liveLookups ?? LIVE_LOOKUPS_PER_RUN;
+  const byChannel = new Map<string, Map<string, VideoFacts>>();
+  const byVideo = new Map<string, Promise<VideoFacts>>();
+
+  const channelFacts = (channelId: string): Map<string, VideoFacts> => {
+    let m = byChannel.get(channelId);
+    if (m) return m;
+    m = new Map();
+    byChannel.set(channelId, m);
+    const row = readLatestCacheRow(db, channelCacheKey({ channelId }));
+    if (!row) return m;
+    try {
+      const payload = JSON.parse(row.payloadJson) as {
+        videos?: { videoId?: unknown }[];
+      };
+      for (const v of payload.videos ?? []) {
+        const facts = pickFacts(v);
+        if (typeof v.videoId === "string" && facts) m.set(v.videoId, facts);
+      }
+    } catch {
+      // Corrupt/legacy payload — fall through to the detail cache.
+    }
+    return m;
+  };
+
+  const resolve = async (videoId: string): Promise<VideoFacts> => {
+    const row = readLatestCacheRow(db, detailCacheKey({ videoId }));
+    let cached: VideoFacts | undefined;
+    try {
+      cached = row ? pickFacts(JSON.parse(row.payloadJson)) : undefined;
+    } catch {
+      cached = undefined;
+    }
+    if (cached) return cached;
+    if (liveLeft <= 0) return {};
+    liveLeft--;
+    try {
+      return pickFacts(await fetchDetail(videoId)) ?? {};
+    } catch {
+      return {};
+    }
+  };
+
+  return (channelId, videoId) => {
+    const fromChannel = channelFacts(channelId).get(videoId);
+    if (fromChannel) return Promise.resolve(fromChannel);
+    let p = byVideo.get(videoId);
+    if (!p) {
+      p = resolve(videoId);
+      byVideo.set(videoId, p);
+    }
+    return p;
+  };
+}
+
+/**
+ * Merge several channels' cached uploads RSS into one newest-first item list,
+ * without Shorts — the same rule as the subscriptions page. Facts are looked
+ * up a page at a time until `limit` non-Shorts are found.
+ */
 async function mergedChannelItems(
   db: AppDb,
   channelIds: string[],
   appOrigin: string,
   limit: number,
+  factsOf: VideoFactsResolver,
+  concurrency: number,
 ): Promise<FeedItem[]> {
-  const perChannel = await Promise.all(
-    channelIds.map((c) => getChannelRssEntries(db, c).catch(() => [])),
-  );
+  const [perChannel, windows] = await Promise.all([
+    Promise.all(
+      channelIds.map((c) => getChannelRssEntries(db, c).catch(() => [])),
+    ),
+    getLongFormWindows(db, channelIds).catch(
+      () => new Map<string, LongFormWindow>(),
+    ),
+  ]);
   const seen = new Set<string>();
-  const merged = perChannel
+  const candidates = perChannel
     .flat()
     .filter((e) => (seen.has(e.videoId) ? false : seen.add(e.videoId)))
-    .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0))
-    .slice(0, limit);
-  return merged.map((e) => ({
-    videoId: e.videoId,
-    title: e.title,
-    publishedAt: e.publishedAt,
-    thumbnailUrl: publicThumbnail(e.videoId),
-    channelName: e.channelName,
-    ...enclosures(e.videoId, appOrigin),
-  }));
+    .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0));
+  const out: FeedItem[] = [];
+  for (let i = 0; i < candidates.length && out.length < limit; i += limit) {
+    const page = candidates.slice(i, i + limit);
+    const facts = await mapWithConcurrency(page, concurrency, (e) =>
+      factsOf(e.channelId, e.videoId),
+    );
+    page.forEach((e, j) => {
+      const f = facts[j] ?? {};
+      if (out.length >= limit || isSubscriptionShort({ ...e, ...f }, windows)) {
+        return;
+      }
+      out.push({
+        videoId: e.videoId,
+        title: e.title,
+        ...(f.durationSeconds !== undefined
+          ? { durationSeconds: f.durationSeconds }
+          : {}),
+        publishedAt: e.publishedAt,
+        thumbnailUrl: publicThumbnail(e.videoId),
+        channelName: e.channelName,
+        ...enclosures(e.videoId, appOrigin),
+      });
+    });
+  }
+  return out;
 }
 
 function readChannelNames(
@@ -263,6 +404,7 @@ async function buildFeedsForUser(
   opts: Required<Omit<PublishOptions, "onLog">> & {
     onLog?: PublishOptions["onLog"];
   },
+  factsOf: VideoFactsResolver,
 ): Promise<{ feeds: FeedSnapshot[]; refs: PublishedFeedRef[] }> {
   const { appOrigin, channelFeedLimit, mergedFeedLimit, concurrency } = opts;
   const now = Math.floor(Date.now() / 1000);
@@ -382,6 +524,8 @@ async function buildFeedsForUser(
       subChannelIds,
       appOrigin,
       mergedFeedLimit,
+      factsOf,
+      concurrency,
     );
     pushFeed(
       {
@@ -418,6 +562,8 @@ async function buildFeedsForUser(
       channelIds,
       appOrigin,
       mergedFeedLimit,
+      factsOf,
+      concurrency,
     );
     if (items.length === 0) continue;
     pushFeed(
@@ -443,6 +589,8 @@ async function buildFeedsForUser(
       [channelId],
       appOrigin,
       channelFeedLimit,
+      factsOf,
+      concurrency,
     );
     if (items.length === 0) continue;
     const meta = names.get(channelId);
@@ -470,6 +618,8 @@ export type FeedOwnerCredential = {
   username: string;
   /** SHA-256 hex of the user's RSS password — the plaintext never leaves home. */
   passSha256: string;
+  /** Secret feed-URL path segment derived from the RSS password. */
+  feedToken: string;
 };
 
 /** Build every user's feed snapshots plus the credential set that unlocks them. */
@@ -489,13 +639,25 @@ export async function buildAllFeeds(
     .select({ id: users.id, email: users.email })
     .from(users)
     .all();
+  const factsOf = createVideoFactsResolver(db);
   const all: FeedSnapshot[] = [];
   const creds: FeedOwnerCredential[] = [];
   for (const u of userRows) {
     // The full email — unique by schema, so usernames can't collide.
     const username = u.email;
-    creds.push({ username, passSha256: sha256Hex(ensureRssPass(db, u.id)) });
-    const { feeds, refs } = await buildFeedsForUser(db, u.id, username, opts);
+    const pass = ensureRssPass(db, u.id);
+    creds.push({
+      username,
+      passSha256: sha256Hex(pass),
+      feedToken: feedToken(pass),
+    });
+    const { feeds, refs } = await buildFeedsForUser(
+      db,
+      u.id,
+      username,
+      opts,
+      factsOf,
+    );
     recordPublishedFeeds(db, u.id, refs);
     opts.onLog?.(
       `publish: user ${u.id} (${username}) — ${feeds.length} feed(s)`,
@@ -548,6 +710,7 @@ export async function publishFeeds(
       authorization: `Bearer ${options.secret}`,
     },
     body: JSON.stringify({ feeds, users: feedUsers }),
+    signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");

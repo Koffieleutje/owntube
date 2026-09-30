@@ -246,7 +246,8 @@ export function InteractionButtons({
 /**
  * "Play on TV": offered while one of the user's TVs is on (it polls
  * `tvRemote.poll`). Sends this video from the current position and pauses
- * it here; with several TVs on, a small list picks one.
+ * it here. The TVs are always listed first, so a stray tap on the button
+ * doesn't start the video on a TV.
  */
 function PlayOnTvButton({ videoId }: { videoId: string }) {
   const devices = trpc.tvRemote.devices.useQuery(undefined, {
@@ -293,15 +294,16 @@ function PlayOnTvButton({ videoId }: { videoId: string }) {
         className={cn(pillBase, "rounded-full px-3 sm:px-4", pillTone(false))}
         disabled={send.isPending}
         title={only ? `Play on ${only.name}` : "Play on a TV"}
-        aria-expanded={only ? undefined : open}
-        onClick={() => (only ? playOn(only) : setOpen((o) => !o))}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
       >
         <TvIcon />
         <span className="hidden sm:inline">
           {only ? `Play on ${only.name}` : "Play on TV"}
         </span>
       </button>
-      {open && !only ? (
+      {open ? (
         <div
           role="menu"
           className="absolute left-0 top-full z-40 mt-1.5 w-56 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-1 text-sm shadow-lg"

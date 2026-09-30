@@ -11,7 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { trpc } from "@/trpc/react";
 
-export type LibrarySection = "history" | "queue" | "saved";
+export type LibrarySection = "history" | "queue" | "saved" | "subscriptions";
 
 const DEFAULT_PREFS = { hideCompleted: false, rowSize: "md" as HomeBlockSize };
 
@@ -25,16 +25,43 @@ export function useSectionPagePrefs(section: LibrarySection): {
 }
 
 /**
- * Library-page options behind a ⋯ menu (History / Queue / Saved): row size
- * (XS–XL) and the hide-watched filter. Values live in the shared
+ * Library-page options behind a ⋯ menu (History / Queue / Saved, and
+ * Subscriptions > By tag): row size (XS–XL) and the hide-watched filter. Values live in the shared
  * sectionPrefs base, one entry per page.
  */
-export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
+export function SectionOptionsMenu({
+  section,
+  showRowSize = true,
+}: {
+  section: LibrarySection;
+  /** Off where the page's layout has no row sizes (Subscriptions' grid). */
+  showRowSize?: boolean;
+}) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const utils = trpc.useUtils();
   const settings = trpc.settings.get.useQuery();
+  // Optimistic: the checkbox and the filtered lists change on the tap, not
+  // after the save round-trip (seconds on a slow server).
   const update = trpc.settings.update.useMutation({
+    onMutate: async (patch) => {
+      await utils.settings.get.cancel();
+      const previous = utils.settings.get.getData();
+      utils.settings.get.setData(undefined, (old) =>
+        old && patch.sectionPrefs
+          ? {
+              ...old,
+              // This menu always sends every section, complete (see patch).
+              sectionPrefs: patch.sectionPrefs as typeof old.sectionPrefs,
+            }
+          : old,
+      );
+      return { previous };
+    },
+    onError: (_error, _patch, context) => {
+      if (context?.previous)
+        utils.settings.get.setData(undefined, context.previous);
+    },
     onSettled: () => utils.settings.get.invalidate(),
   });
   const copyRssUrl = useCopyRssUrl();
@@ -59,6 +86,7 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
     history: DEFAULT_PREFS,
     queue: DEFAULT_PREFS,
     saved: DEFAULT_PREFS,
+    subscriptions: DEFAULT_PREFS,
   };
   const current = prefs[section] ?? DEFAULT_PREFS;
 
@@ -84,27 +112,31 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
           role="menu"
           className="absolute right-0 top-full z-40 mt-1 w-64 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-2 text-sm shadow-lg"
         >
-          <p className="px-1 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-[hsl(var(--muted-foreground))]">
-            Row size
-          </p>
-          <div className="flex overflow-hidden rounded-full border border-[hsl(var(--border))] text-xs font-medium">
-            {HOME_BLOCK_SIZES.map((size) => (
-              <button
-                key={size}
-                type="button"
-                aria-pressed={current.rowSize === size}
-                className={cn(
-                  "flex-1 px-2 py-1.5 transition",
-                  current.rowSize === size
-                    ? "bg-[hsl(var(--primary))] text-white"
-                    : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]",
-                )}
-                onClick={() => patch({ rowSize: size })}
-              >
-                {HOME_BLOCK_SIZE_LABEL[size]}
-              </button>
-            ))}
-          </div>
+          {showRowSize ? (
+            <>
+              <p className="px-1 pb-1.5 font-mono text-[10px] font-semibold uppercase tracking-widest text-[hsl(var(--muted-foreground))]">
+                Row size
+              </p>
+              <div className="flex overflow-hidden rounded-full border border-[hsl(var(--border))] text-xs font-medium">
+                {HOME_BLOCK_SIZES.map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    aria-pressed={current.rowSize === size}
+                    className={cn(
+                      "flex-1 px-2 py-1.5 transition",
+                      current.rowSize === size
+                        ? "bg-[hsl(var(--primary))] text-white"
+                        : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]",
+                    )}
+                    onClick={() => patch({ rowSize: size })}
+                  >
+                    {HOME_BLOCK_SIZE_LABEL[size]}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
           <label className="mt-2 flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-1 py-2 transition hover:bg-[hsl(var(--muted)_/_0.65)]">
             <input
               type="checkbox"
@@ -116,8 +148,9 @@ export function SectionOptionsMenu({ section }: { section: LibrarySection }) {
             />
             Hide watched videos
           </label>
-          {/* History has no companion feed; Queue and Saved publish as fixed slugs. */}
-          {section !== "history"
+          {/* History has no companion feed; Queue and Saved publish as fixed
+              slugs (Subscriptions has its own Copy RSS URL button). */}
+          {section === "queue" || section === "saved"
             ? (["audio", "video"] as const).map((variant) => (
                 <button
                   key={variant}

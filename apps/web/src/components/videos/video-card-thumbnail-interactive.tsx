@@ -170,8 +170,7 @@ export function VideoCardThumbnailInteractive({
   // Hover previews are a pointer/desktop affordance. On touch devices the
   // synthesized mouseenter plus the preview <video> swapping in over the link
   // swallowed taps, so opening a video took several taps. Gate the preview to
-  // hover-capable devices; touch taps then navigate straight through (the CSS
-  // hover overlay still appears on the first tap, then the next tap opens).
+  // hover-capable devices; touch taps then navigate straight through.
   const [hoverCapable, setHoverCapable] = useState(false);
   useEffect(() => {
     setHoverCapable(

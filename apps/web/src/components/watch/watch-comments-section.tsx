@@ -231,6 +231,12 @@ export function WatchCommentsSection({ videoId }: WatchCommentsSectionProps) {
         </p>
       ) : null}
 
+      {firstPage?.warning && comments.length > 0 ? (
+        <p className="text-xs text-[hsl(var(--muted-foreground))]">
+          {firstPage.warning}
+        </p>
+      ) : null}
+
       {comments.length > 0 ? (
         <ul className="divide-y divide-[hsl(var(--border))] rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4">
           {comments.map((comment) => (

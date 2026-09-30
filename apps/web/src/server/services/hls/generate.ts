@@ -190,6 +190,18 @@ export function fetchVideoCaptions(
   return fetchVideoPayload(videoId).then((p) => p.captions);
 }
 
+/** Stream URLs embed `dur=<seconds>`; cheaper than a second detail fetch. */
+export function durationSecondsFromFormats(af: AdaptiveFormat[]): number {
+  for (const f of af) {
+    const m = /[?&]dur=([\d.]+)/.exec(f.url ?? "");
+    if (m?.[1]) {
+      const n = Number.parseFloat(m[1]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return 0;
+}
+
 /** The `sidx` box: per-fragment byte size + duration, plus where media begins. */
 export type Sidx = {
   timescale: number;
@@ -392,10 +404,47 @@ function mediaPlaylistUri(t: AudioTrackVariant): string {
   return `media.m3u8?itag=${t.format.itag}${xt}`;
 }
 
+/**
+ * How `/captions/<videoId>` identifies a caption track upstream: by language
+ * when known, else by label. Same rule as the DASH manifest's subtitle sets.
+ */
+function captionQuery(caption: InvidiousCaption): string | null {
+  const lang = (caption.language_code ?? caption.languageCode)?.trim();
+  if (lang) return `lang=${encodeURIComponent(lang)}`;
+  const label = caption.label?.trim();
+  if (label) return `label=${encodeURIComponent(label)}`;
+  return null;
+}
+
+/** Quoted-string attribute values may not contain `"` or line breaks. */
+function hlsAttributeText(value: string): string {
+  return value.replace(/["\r\n]/g, "");
+}
+
+/**
+ * One SUBTITLES rendition per caption track, so native HLS players (AVPlayer)
+ * offer the captions the web player already shows. Never DEFAULT: captions
+ * start off unless the viewer — or the system's closed-captions setting,
+ * which honours AUTOSELECT — asks for them.
+ */
+function subtitleRenditions(captions: InvidiousCaption[]): string[] {
+  return captions.flatMap((caption) => {
+    const query = captionQuery(caption);
+    if (!query) return [];
+    const lang = (caption.language_code ?? caption.languageCode)?.trim();
+    const name = hlsAttributeText(caption.label?.trim() || lang || "Captions");
+    const language = lang ? `,LANGUAGE="${hlsAttributeText(lang)}"` : "";
+    return [
+      `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="${name}"${language},DEFAULT=NO,AUTOSELECT=YES,URI="subtitles.m3u8?${query}"`,
+    ];
+  });
+}
+
 /** Pure master-playlist builder (exported for tests). */
 export function buildMasterPlaylist(
   videos: AdaptiveFormat[],
   audioTracks: AudioTrackVariant[],
+  captions: InvidiousCaption[] = [],
 ): string {
   const defaultAudio =
     audioTracks.find((t) => t.isDefault) ??
@@ -406,18 +455,25 @@ export function buildMasterPlaylist(
   for (const [i, t] of audioTracks.entries()) {
     const name = audioTracks.length === 1 ? "Audio" : audioTrackName(t, i);
     const language = t.lang ? `,LANGUAGE="${t.lang}"` : "";
+    // AUTOSELECT only on the default (original) track: Apple's native player
+    // lets an AUTOSELECT=YES rendition that matches the system language beat
+    // DEFAULT=YES, so an English iPhone started Dutch videos on the English
+    // auto-dub. Dubs stay manually selectable (the spec requires
+    // AUTOSELECT=YES on the DEFAULT=YES rendition).
+    const flag = t.isDefault ? "YES" : "NO";
     lines.push(
-      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="${name}"${language},DEFAULT=${
-        t.isDefault ? "YES" : "NO"
-      },AUTOSELECT=YES,URI="${mediaPlaylistUri(t)}"`,
+      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="${name}"${language},DEFAULT=${flag},AUTOSELECT=${flag},URI="${mediaPlaylistUri(t)}"`,
     );
   }
+  const subtitles = subtitleRenditions(captions);
+  lines.push(...subtitles);
+  const subtitlesGroup = subtitles.length > 0 ? `,SUBTITLES="subs"` : "";
   for (const v of videos) {
     const bandwidth = (Number(v.bitrate) || 0) + audioBitrate;
     const res = v.size ? `,RESOLUTION=${v.size}` : "";
     const codecs = [codecsOf(v.type), audioCodec].filter(Boolean).join(",");
     lines.push(
-      `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth}${res},CODECS="${codecs}",AUDIO="aud"`,
+      `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth}${res},CODECS="${codecs}",AUDIO="aud"${subtitlesGroup}`,
     );
     lines.push(`media.m3u8?itag=${v.itag}`);
   }
@@ -432,7 +488,55 @@ export async function generateMasterPlaylist(videoId: string): Promise<string> {
   if (videos.length === 0 || audioTracks.length === 0) {
     throw new Error("no AVC video + AAC audio streams");
   }
-  return buildMasterPlaylist(videos, audioTracks);
+  // Subtitles are best-effort, and need the duration for their playlist: a
+  // caption lookup failure or an unknown duration costs the captions, not
+  // the playback.
+  const captions =
+    durationSecondsFromFormats(af) > 0
+      ? await fetchVideoCaptions(videoId).catch(() => [] as InvidiousCaption[])
+      : [];
+  return buildMasterPlaylist(videos, audioTracks, captions);
+}
+
+/**
+ * Pure subtitle-playlist builder (exported for tests): the whole WebVTT file
+ * from `/captions/<videoId>` as one segment spanning the video. HLS wants
+ * subtitles as a media playlist; one segment is enough for VOD, and AVPlayer
+ * lines its cues up with the video's own timeline.
+ */
+export function buildSubtitlePlaylist(
+  videoId: string,
+  query: string,
+  durationSeconds: number,
+): string {
+  const duration = durationSeconds.toFixed(3);
+  return `${[
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    `#EXT-X-TARGETDURATION:${Math.ceil(durationSeconds)}`,
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    `#EXTINF:${duration},`,
+    `/captions/${encodeURIComponent(videoId)}?${query}`,
+    "#EXT-X-ENDLIST",
+  ].join("\n")}\n`;
+}
+
+/** Subtitle playlist for the caption track `lang` (or, lacking one, `label`) names. */
+export async function generateSubtitlePlaylist(
+  videoId: string,
+  caption: { lang?: string; label?: string },
+): Promise<string> {
+  const query = captionQuery({
+    languageCode: caption.lang,
+    label: caption.label,
+  });
+  if (!query) throw new Error("missing lang or label");
+  const durationSeconds = durationSecondsFromFormats(
+    await fetchAdaptiveFormats(videoId),
+  );
+  if (durationSeconds <= 0) throw new Error("unknown video duration");
+  return buildSubtitlePlaylist(videoId, query, durationSeconds);
 }
 
 /** Parsed `sidx` per (videoId, itag); dedupes the byte-range fetch across the

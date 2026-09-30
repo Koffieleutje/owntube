@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   Animated,
+  AppState,
   BackHandler,
   Linking,
   type StyleProp,
@@ -70,8 +71,41 @@ type Route =
     }
   | { name: "channel"; key: string; channelId: string };
 
+/**
+ * Besides Home, how many of the most recently used sections stay mounted.
+ * Returning to one of them is instant (scroll, focus and loaded pages
+ * intact); an older one mounts afresh. Keeping every section visited let a
+ * long session hold every screen's shelves and pages at once.
+ */
+const KEPT_RECENT_SECTIONS = 4;
+
+/** `visited` after showing `section`: Home, then the most recent, newest last. */
+export function keepRecentSections(
+  visited: readonly Section[],
+  section: Section,
+): Section[] {
+  if (section === "home") return visited as Section[];
+  const others = visited.filter((s) => s !== "home" && s !== section);
+  const next: Section[] = [
+    "home",
+    ...others.slice(-(KEPT_RECENT_SECTIONS - 1)),
+    section,
+  ];
+  const same =
+    next.length === visited.length && next.every((s, i) => s === visited[i]);
+  return same ? (visited as Section[]) : next;
+}
+
 let routeSequence = 0;
 const nextRouteKey = () => `route-${++routeSequence}`;
+
+/**
+ * Away from the app longer than this (another app, or the TV switched off),
+ * a player left on top is closed on return: coming back to a paused video
+ * nobody remembers is less useful than the screen it was opened from, and
+ * Continue watching still resumes it.
+ */
+const AWAY_CLOSES_PLAYER_MS = 60_000;
 
 /**
  * Sections kept mounted once visited. Shorts plays video and Settings grabs
@@ -103,13 +137,22 @@ export function Shell({
   // back to a section doesn't refetch it.
   const me = trpc.auth.me.useQuery(undefined, { retry: 1 });
   const [section, setSection] = useState<Section>("home");
-  /** Kept sections visited so far, in first-visit order. */
+  /** Kept sections still mounted: Home, then the most recently used. */
   const [visited, setVisited] = useState<Section[]>(["home"]);
   useEffect(() => {
     if (!KEPT_SECTIONS.has(section)) return;
-    setVisited((v) => (v.includes(section) ? v : [...v, section]));
+    setVisited((v) => keepRecentSections(v, section));
   }, [section]);
   const [stack, setStack] = useState<Route[]>([]);
+  /**
+   * Per section, bumped when it is chosen again while already showing. Its
+   * layer is keyed on it, so the section mounts afresh: back at the top with
+   * focus on its first item, as the YouTube TV app does. Its data comes from
+   * the query cache, so it doesn't reload.
+   */
+  const [resets, setResets] = useState<Partial<Record<Section, number>>>({});
+  const shownRef = useRef({ section, depth: stack.length });
+  shownRef.current = { section, depth: stack.length };
   const [searchQuery, setSearchQuery] = useState<string | undefined>(undefined);
   /** The short the Shorts section opens at (from a Shorts row), if any. */
   const [shortsStart, setShortsStart] = useState<UnifiedVideo | undefined>(
@@ -181,6 +224,10 @@ export function Shell({
         setSection("shorts");
         setStack([]);
       },
+      openSearch: () => {
+        setSection("search");
+        setStack([]);
+      },
     }),
     [watchRoute],
   );
@@ -192,6 +239,10 @@ export function Shell({
    */
   const selectSection = useCallback(
     (next: Section) => {
+      const shown = shownRef.current;
+      if (next === shown.section && shown.depth === 0) {
+        setResets((r) => ({ ...r, [next]: (r[next] ?? 0) + 1 }));
+      }
       setSection(next);
       setStack([]);
       refreshProgress();
@@ -221,6 +272,25 @@ export function Shell({
     [nav, replaceVideo],
   );
   useTvRemoteReceiver(playFromOutside);
+
+  // Registered once; reads the stack's top through topRef.
+  const popRef = useRef(pop);
+  popRef.current = pop;
+  useEffect(() => {
+    let leftAt: number | null = null;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "background") {
+        leftAt ??= Date.now();
+      } else if (state === "active") {
+        const away = leftAt === null ? 0 : Date.now() - leftAt;
+        leftAt = null;
+        if (away > AWAY_CLOSES_PLAYER_MS && topRef.current?.name === "watch") {
+          popRef.current();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   /**
    * Deep links: owntube:// URLs (the Android TV home screen's Watch Next row,
@@ -392,7 +462,7 @@ export function Shell({
                 const visible = key === section && !channelShown;
                 return (
                   <ScreenLayer
-                    key={key}
+                    key={`${key}-${resets[key] ?? 0}`}
                     visible={visible}
                     focused={visible && !watchActive}
                   >
@@ -445,6 +515,7 @@ export function Shell({
             onReplaceVideo={replaceVideo}
             onOpenChannel={nav.openChannel}
             onBack={pop}
+            onHome={() => selectSection("home")}
           />
         </ScreenLayer>
       ) : null}

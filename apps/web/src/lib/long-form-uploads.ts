@@ -1,3 +1,6 @@
+import { isStrictShortVideo } from "@/lib/short-video";
+import type { UnifiedVideo } from "@/server/services/proxy.types";
+
 /**
  * YouTube exposes a hidden per-channel "long-form videos" playlist whose ID is the
  * channel ID with the leading `UC` swapped for `UULF`. Its RSS feed
@@ -88,4 +91,33 @@ export async function fetchLongFormWindows(
     if (window) out.set(c, window);
   }
   return out;
+}
+
+/**
+ * A subscription-feed video is treated as a Short when the channel's long-form
+ * uploads playlist (UULF) — an authoritative, Shorts-free allowlist — is available
+ * and the video sits inside that recent window yet is absent from it (this catches
+ * long Shorts the duration heuristic misses, with no false positives, since any
+ * long-form upload newer than the window's oldest entry would be in the window).
+ * Live/upcoming are never hidden (the long-form playlist also omits those). Videos
+ * older than the fetched window, or channels with no playlist data, fall back to the
+ * duration/#shorts heuristic in `isStrictShortVideo`.
+ */
+export function isSubscriptionShort(
+  video: UnifiedVideo,
+  windows: ReadonlyMap<string, LongFormWindow>,
+): boolean {
+  if (video.isLive || video.isUpcoming) return false;
+  const window = video.channelId ? windows.get(video.channelId) : undefined;
+  if (window) {
+    if (window.ids.has(video.videoId)) return false;
+    if (
+      typeof video.publishedAt === "number" &&
+      window.oldestPublishedAt !== null &&
+      video.publishedAt >= window.oldestPublishedAt
+    ) {
+      return true;
+    }
+  }
+  return isStrictShortVideo(video);
 }

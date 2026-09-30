@@ -176,6 +176,8 @@ export function PlayerChrome({
     if (fsActive && cinemaMode) onExitCinema();
   }, [fsActive, cinemaMode, onExitCinema]);
 
+  // Pointer type of the press that produced the next surface click.
+  const surfacePointerTypeRef = useRef<string>("mouse");
   const onSurfaceClick = (e: ReactMouseEvent) => {
     if (suppressNextClickRef.current) {
       suppressNextClickRef.current = false;
@@ -186,6 +188,13 @@ export function PlayerChrome({
     if ((e.target as HTMLElement).closest("[data-controls]")) return;
     if (settingsOpen) {
       onSettingsOpenChange(false);
+      return;
+    }
+    // Touch: a tap on the video only brings the controls up (play/pause is
+    // the center button). Toggling here paused the video on every tap meant
+    // to reveal the controls — including taps on the hidden scrubber.
+    if (surfacePointerTypeRef.current === "touch" && !shortsMode) {
+      ping();
       return;
     }
     adapter.togglePaused();
@@ -238,7 +247,10 @@ export function PlayerChrome({
         data-tap-surface
         aria-label={adapter.paused ? "Play" : "Pause"}
         onClick={onSurfaceClick}
-        onPointerDown={onSurfacePointerDown}
+        onPointerDown={(e) => {
+          surfacePointerTypeRef.current = e.pointerType;
+          onSurfacePointerDown(e);
+        }}
         onPointerUp={onSurfacePointerUp}
         onPointerCancel={onSurfacePointerUp}
         onPointerLeave={onSurfacePointerLeave}
@@ -247,6 +259,14 @@ export function PlayerChrome({
       />
 
       <CaptionOverlay text={captionText} raised={chromeShown} />
+
+      {/* Stands in for WebKit's "playing in picture in picture" placeholder,
+          which fades out with the inline <video> while it's in native PiP
+          (see player-captions.ts). Shown by CSS off `data-native-pip`. */}
+      <div className="ot-pip-placeholder" aria-hidden>
+        <PipIcon className="h-10 w-10" />
+        <span>Playing in Picture in Picture</span>
+      </div>
 
       {/* On-video scrub preview: while actively dragging the scrubber, the frame
           fills the whole video area (YouTube-style) with the target time floated
@@ -288,7 +308,7 @@ export function PlayerChrome({
         // whole player), so every button scales with the video — small inline,
         // large in fullscreen — clamped to sane min/max. Icons are a fraction of
         // their button, so they scale with it.
-        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center gap-[clamp(0.5rem,5cqmin,3.5rem)] [container-type:size]">
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center gap-[clamp(0.5rem,5cqmin,3.5rem)] [container-type:size]">
           {!shortsMode ? (
             <button
               type="button"
@@ -480,6 +500,7 @@ export function PlayerChrome({
             current={seekPos}
             duration={adapter.duration}
             buffered={adapter.bufferedEnd}
+            interactive={chromeShown}
             onScrub={(t) => {
               setScrub(t);
               adapter.seekPreview(t);
@@ -491,11 +512,15 @@ export function PlayerChrome({
           />
         </div>
       ) : miniMode ? null : (
+        // Never a tap target itself: its gradient padding (pt-12) reaches up
+        // over the center play/skip buttons on a small phone player and
+        // swallowed their taps. Only the scrubber and the control row
+        // capture, and only while the chrome is shown.
         <div
           data-controls
           className={cn(
-            "absolute inset-x-0 bottom-0 z-30 transition-opacity duration-200",
-            chromeShown ? "opacity-100" : "opacity-0 pointer-events-none",
+            "pointer-events-none absolute inset-x-0 bottom-0 z-30 transition-opacity duration-200",
+            chromeShown ? "opacity-100" : "opacity-0",
           )}
           style={{
             background:
@@ -520,6 +545,7 @@ export function PlayerChrome({
               sponsorSegments={sponsorSegments}
               scrubPreview={scrubPreview ?? null}
               completed={watchedCompleted}
+              interactive={chromeShown}
               onScrub={(t) => {
                 setScrub(t);
                 adapter.seekPreview(t);
@@ -529,13 +555,15 @@ export function PlayerChrome({
                 adapter.seek(t);
               }}
             />
-            {/* No negative margin: pulling this row up overlapped the scrubber's
-                40px touch target with the top half of these 36px buttons, and
-                the strip just above them still belonged to the scrubber. On a
-                phone the right-hand group sits against the right edge, so a
-                near-miss on fullscreen seeked to ~95% — it looked like the
-                video jumped to the end. */}
-            <div className="mt-1 flex items-center gap-1.5 text-white sm:gap-2">
+            {/* Kept clear of the scrubber's 40px touch strip on every size: phones
+                used to pull this row up 18px into it, so button taps landed
+                on the scrubber. */}
+            <div
+              className={cn(
+                "mt-1 flex items-center gap-1.5 text-white sm:gap-2",
+                chromeShown ? "pointer-events-auto" : "pointer-events-none",
+              )}
+            >
               {/* Phones use the big center play/pause overlay instead. */}
               <button
                 type="button"
@@ -1003,9 +1031,7 @@ function PlayerMobileMenu({
 
 /**
  * Renders the active caption cue ourselves (the native track is kept `hidden`).
- * The text is left-anchored to the same edge as the scrubber (the bottom-chrome
- * `px-3 sm:px-4` inset), so a growing/word-by-word cue extends rightward without
- * its left edge jittering. Lines stay left-aligned (shared left margin). It
+ * Lines are centered, matching the native rendering in Picture-in-Picture. It
  * rides low at rest and lifts above the scrubber while the chrome is shown.
  *
  * YouTube-style roll-up: earlier lines stay as full-brightness context above

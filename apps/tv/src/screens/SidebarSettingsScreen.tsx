@@ -133,12 +133,15 @@ export function SidebarSettingsScreen({
         right show or hide it
       </Text>
 
-      {order.map((key) => {
+      {order.map((key, index) => {
         const meta = SECTIONS.find((s) => s.key === key);
         if (!meta) return null;
         return (
           <SidebarRow
             key={key}
+            // The button that opened the page is gone; without a first
+            // row to land on, focus fell back to the rail.
+            hasTVPreferredFocus={index === 0}
             label={meta.label}
             icon={meta.icon}
             hidden={hidden.has(key)}
@@ -158,6 +161,7 @@ function SidebarRow({
   hidden,
   grabbed,
   locked,
+  hasTVPreferredFocus,
   onPress,
 }: {
   label: string;
@@ -165,6 +169,7 @@ function SidebarRow({
   hidden: boolean;
   grabbed: boolean;
   locked: boolean;
+  hasTVPreferredFocus?: boolean;
   onPress: () => void;
 }) {
   const [focused, setFocused] = useState(false);
@@ -184,6 +189,7 @@ function SidebarRow({
   return (
     <Pressable
       ref={rowRef}
+      hasTVPreferredFocus={hasTVPreferredFocus}
       onLayout={() => {
         if (handle === null) setHandle(findNodeHandle(rowRef.current));
       }}

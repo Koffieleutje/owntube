@@ -24,12 +24,30 @@ export const ALL_SECTIONS: Section[] = [
   "settings",
 ];
 
+/**
+ * The sections a since-removed Library entry gathered up. Installs that
+ * stored it get these back in its place on the rail (see `unfoldLibrary`).
+ */
+const LIBRARY_SECTIONS: Section[] = ["queue", "saved", "playlists", "history"];
+
 export type SidebarPrefs = {
   /** Ordered; sections absent from this list are hidden. */
   order: Section[];
 };
 
 export const DEFAULT_PREFS: SidebarPrefs = { order: ALL_SECTIONS };
+
+/**
+ * Library folded Queue, Saved, Playlists and History off the rail. With it
+ * gone, a stored order that still names it gets those four back where it sat
+ * (any already on the rail stay where they are).
+ */
+function unfoldLibrary(order: unknown): unknown {
+  if (!Array.isArray(order) || !order.includes("library")) return order;
+  const at = order.indexOf("library");
+  const missing = LIBRARY_SECTIONS.filter((s) => !order.includes(s));
+  return [...order.slice(0, at), ...missing, ...order.slice(at + 1)];
+}
 
 /**
  * Every section the stored prefs have been offered. A section added since
@@ -87,7 +105,7 @@ export async function loadSidebarPrefs(): Promise<SidebarPrefs> {
     const raw = await SecureStore.getItemAsync(KEY);
     if (!raw) return DEFAULT_PREFS;
     const stored = JSON.parse(raw);
-    const prefs = sanitize(stored?.order);
+    const prefs = sanitize(unfoldLibrary(stored?.order));
     return { order: withNewSections(prefs.order, stored?.known) };
   } catch {
     return DEFAULT_PREFS;

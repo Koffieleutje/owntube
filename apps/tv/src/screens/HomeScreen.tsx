@@ -1,24 +1,21 @@
-import {
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { ContinueWatchingRow } from "@/components/ContinueWatchingRow";
-import { HomeBlockRow } from "@/components/HomeBlockRow";
+import { type HomeBlock, HomeBlockRow } from "@/components/HomeBlockRow";
 import { HomeHero } from "@/components/HomeHero";
-import { baseUrl } from "@/lib/config";
+import { SearchBar } from "@/components/SearchBar";
+import { SkeletonRows } from "@/components/Skeleton";
 import type { Nav } from "@/lib/navigation";
+import { useRowScroll } from "@/lib/row-scroll";
 import { useScreenActive } from "@/lib/screen-active";
 import { trpc } from "@/lib/trpc-react";
 import { colors, fontSize, spacing } from "@/theme";
 
 /**
- * Home mirrors the web home: the blocks the user arranged there
- * (`settings.homeBlocks`), one row each, in their order. Above them sit the
- * TV's own hero — the top recommendation — and Continue watching. The web
- * stays the editor; the footer says where.
+ * Home: a search bar and the TV's own hero (the top recommendation) above
+ * Continue watching and the blocks the user arranged on the web
+ * (`settings.homeBlocks`), one row each. A row takes the top of the scroll
+ * area when one of its cards is focused; moving up past the first row brings
+ * the hero and the search bar back into view.
  */
 export function HomeScreen({ nav }: { nav: Nav }) {
   // Kept mounted while hidden: stop listening, refetch stale data on return.
@@ -35,19 +32,36 @@ export function HomeScreen({ nav }: { nav: Nav }) {
     top.data?.kind === "personalized" && top.data.coldStart !== true;
   const blocks = settings.data?.homeBlocks ?? [];
 
-  if (!heroVideo && (top.isPending || settings.isPending)) {
+  const { scrollRef, onRowLayout, scrollToRow, scrollToTop } = useRowScroll();
+
+  const loading = !settings.data && (settings.isPending || top.isPending);
+
+  // The search bar is the ScrollView's first child rather than a sibling above
+  // it: Android's ScrollView swallows Up at its top edge, so a bar outside it
+  // could never take focus from the hero.
+  const searchBar = (
+    <SearchBar
+      onPress={nav.openSearch}
+      onFocusChange={(f) => f && scrollToTop()}
+    />
+  );
+
+  if (loading) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.brand} />
+      <View style={styles.content}>
+        {searchBar}
+        <SkeletonRows rows={2} />
       </View>
     );
   }
 
   return (
     <ScrollView
+      ref={scrollRef}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
+      {searchBar}
       {heroVideo ? (
         <HomeHero
           video={heroVideo}
@@ -59,19 +73,30 @@ export function HomeScreen({ nav }: { nav: Nav }) {
           }
         />
       ) : null}
-      <ContinueWatchingRow nav={nav} />
-      {blocks.map((block) => (
-        <HomeBlockRow key={block.id} block={block} region={region} nav={nav} />
+      <View onLayout={(e) => onRowLayout("continue", e)}>
+        <ContinueWatchingRow
+          nav={nav}
+          onCardFocusChange={(focused) => focused && scrollToRow("continue")}
+        />
+      </View>
+      {blocks.map((block: HomeBlock) => (
+        <View key={block.id} onLayout={(e) => onRowLayout(block.id, e)}>
+          <HomeBlockRow
+            block={block}
+            region={region}
+            nav={nav}
+            onCardFocusChange={(focused) => focused && scrollToRow(block.id)}
+          />
+        </View>
       ))}
       <Text style={styles.hint}>
-        Customise these rows on the web: {baseUrl().replace(/^https?:\/\//, "")}
+        Rearrange these rows in Settings → Home rows, or on the web.
       </Text>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   content: {
     gap: spacing.xl,
     paddingTop: 8,

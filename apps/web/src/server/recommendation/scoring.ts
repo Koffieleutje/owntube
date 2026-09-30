@@ -1,3 +1,4 @@
+import { publishedSortKey } from "@/lib/published-sort-key";
 import { deterministicUnitInterval } from "@/server/recommendation/deterministic-jitter";
 import type { UserSignals } from "@/server/recommendation/signals";
 import type { TfidfModel } from "@/server/recommendation/tfidf";
@@ -11,10 +12,23 @@ import type { UnifiedVideo } from "@/server/services/proxy.types";
 const W_TITLE = 0.42;
 const W_CHANNEL = 0.14;
 const W_POP = 0.08;
-const W_FRESH = 0.16;
+/**
+ * Raised from 0.16: keyword searches and related lists return plenty of
+ * multi-year-old evergreen uploads, and at 0.16 a saturated title match (0.42)
+ * buried the age gap. Combined with the steeper old-age buckets below, a
+ * two-year-old on-topic video now trails an equally on-topic fresh one by ~0.2.
+ */
+const W_FRESH = 0.2;
 const W_SHARE = 0.12;
 const W_CATALOG = 0.14;
-const W_RECENT_CH = 0.14;
+/**
+ * Lowered from 0.14: "watched this channel in the last few days" used to be
+ * one of the largest terms, so the feed followed whatever was opened lately.
+ * Subscriptions (`W_SUBSCRIPTION`) now carry the channel-level lift instead.
+ */
+const W_RECENT_CH = 0.04;
+/** Candidate is from a subscribed channel (only when those may be shown). */
+const W_SUBSCRIPTION = 0.16;
 /** Subtracted when a candidate title resembles the user's disliked titles. */
 const W_DISLIKE = 0.2;
 const FORMAT_BIAS_SHORT = -0.055;
@@ -46,6 +60,11 @@ export type RecommendationScoreContext = {
    * (tests and contexts where reproducible scores matter).
    */
   exploreSeed?: string;
+  /**
+   * Subscribed channels whose uploads get the subscription lift. Absent when
+   * subscribed uploads are stripped from the feed (discovery mode) or unknown.
+   */
+  subscribedChannelIds?: ReadonlySet<string>;
 };
 
 /** Maps an age in hours to the freshness score buckets (shared by both inputs). */
@@ -56,7 +75,11 @@ function freshnessFromAgeHours(approxHours: number): number {
   if (approxHours <= 24 * 7) return 0.86;
   if (approxHours <= 24 * 30) return 0.7;
   if (approxHours <= 24 * 90) return 0.5;
-  return 0.34;
+  if (approxHours <= 24 * 365) return 0.34;
+  // Older than a year keeps sinking instead of sharing one floor with a
+  // three-month-old upload — the home feed is not an archive.
+  if (approxHours <= 24 * 365 * 2) return 0.2;
+  return 0.12;
 }
 
 /**
@@ -84,7 +107,7 @@ export function publicationFreshnessScore(
     return 1.16;
   }
   const m = p.match(
-    /(\d+)\s*(second|minute|hour|day|week|month)s?\s*(ago|before)?/,
+    /(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*(ago|before)?/,
   );
   const amount = m?.[1];
   if (amount) {
@@ -96,14 +119,35 @@ export function publicationFreshnessScore(
     else if (unit === "hour") approxHours = n;
     else if (unit === "day") approxHours = n * 24;
     else if (unit === "week") approxHours = n * 24 * 7;
-    else approxHours = n * 24 * 30;
+    else if (unit === "month") approxHours = n * 24 * 30;
+    else approxHours = n * 24 * 365;
     return freshnessFromAgeHours(approxHours);
   }
   if (p.includes("minute") || p.includes("hour")) return 1.05;
   if (p.includes("day")) return 0.78;
   if (p.includes("week")) return 0.6;
   if (p.includes("month")) return 0.44;
+  if (p.includes("year")) return 0.2;
   return 0.3;
+}
+
+/**
+ * Hard age ceiling for a home-feed candidate. Related lists and relevance
+ * search lean on evergreen uploads (over half of the related rows in a real
+ * pool were older than 90 days, a third older than a year), and a channel the
+ * user watches whose newest unwatched upload is this old is dormant — neither
+ * is "new for you". Rows without any parseable date are kept (cannot judge).
+ */
+export const MAX_RECOMMENDATION_AGE_SEC = 365 * 24 * 3600;
+
+export function isTooOldForRecommendations(
+  video: UnifiedVideo,
+  nowSec: number,
+  maxAgeSec = MAX_RECOMMENDATION_AGE_SEC,
+): boolean {
+  const key = publishedSortKey(video, nowSec);
+  if (key <= 0) return false;
+  return nowSec - key > maxAgeSec;
 }
 
 /** Heuristic short-form / vertical — duration and title markers from upstreams. */
@@ -386,6 +430,7 @@ export type RecommendationScoreBreakdown = {
     shareFromChannel: number;
     catalogCoverage: number;
     recentChannelBoost: number;
+    subscription: number;
   };
   inputs: {
     /** Raw TF-IDF cosine before the title gain is applied. */
@@ -403,6 +448,7 @@ export type RecommendationScoreBreakdown = {
     /** Damping applied to catalog coverage (distinct watches / saturation, capped at 1). */
     catalogCoverageDamping: number;
     recentChannelBoostRaw: number;
+    isSubscribed: boolean;
   };
 };
 
@@ -493,6 +539,10 @@ export function scoreCandidateDetail(
   );
   const wCatalog = W_CATALOG * Math.min(1, catalogCoverage) * catalogDamping;
   const wRecentCh = W_RECENT_CH * recentChannelBoostRaw;
+  const isSubscribed = Boolean(
+    video.channelId && ctx.subscribedChannelIds?.has(video.channelId),
+  );
+  const wSubscription = isSubscribed ? W_SUBSCRIPTION : 0;
   const score =
     wTitle +
     wChannel +
@@ -504,7 +554,8 @@ export function scoreCandidateDetail(
     explore +
     wShare +
     wCatalog +
-    wRecentCh;
+    wRecentCh +
+    wSubscription;
   return {
     score,
     breakdown: {
@@ -520,6 +571,7 @@ export function scoreCandidateDetail(
         shareFromChannel: wShare,
         catalogCoverage: wCatalog,
         recentChannelBoost: wRecentCh,
+        subscription: wSubscription,
       },
       inputs: {
         titleSimilarity: tagRaw,
@@ -535,6 +587,7 @@ export function scoreCandidateDetail(
         recentPageCoverageOnChannel: catalogCoverage,
         catalogCoverageDamping: catalogDamping,
         recentChannelBoostRaw,
+        isSubscribed,
       },
     },
   };

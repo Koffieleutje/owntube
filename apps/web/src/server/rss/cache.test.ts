@@ -81,6 +81,20 @@ describe("rss cache", () => {
     sqlite.close();
   });
 
+  it("blocks on the live fetch when the only row is months old", async () => {
+    const { db, sqlite } = createTestDb();
+    stubFetchXml([rssXml("vid00000001", "2026-07-01T00:00:00Z")]);
+    await refreshChannelRss(db, CHANNEL);
+
+    db.update(videoCache).set({ expiresAt: 1, fetchedAt: 1 }).run();
+    clearRssInFlight();
+    stubFetchXml([rssXml("vid00000002", "2026-07-02T00:00:00Z")]);
+
+    const served = await getChannelRssEntries(db, CHANNEL);
+    expect(served[0]?.videoId).toBe("vid00000002");
+    sqlite.close();
+  });
+
   it("keeps the previous row when the live refresh fails", async () => {
     const { db, sqlite } = createTestDb();
     stubFetchXml([rssXml("vid00000001", "2026-07-01T00:00:00Z")]);

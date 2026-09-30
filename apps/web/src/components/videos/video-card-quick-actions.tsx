@@ -8,7 +8,10 @@ import {
   type VideoActionSurface,
   videoActionShortLabel,
 } from "@/components/videos/video-action-registry";
-import { PlaylistPicker } from "@/components/videos/video-actions-menu";
+import {
+  PlaylistPicker,
+  useHoverCapable,
+} from "@/components/videos/video-actions-menu";
 import { DEFAULT_QUICK_ACTIONS, type QuickAction } from "@/lib/quick-actions";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/trpc/react";
@@ -24,8 +27,9 @@ type VideoCardQuickActionsProps = {
 
 /**
  * The thumbnail hover buttons — the user's first three quick-action verbs
- * (defaults: Save, Ignore, Mark watched). Desktop-only: hidden on coarse
- * pointers, where the always-visible kebab and its bottom sheet take over.
+ * (defaults: Save, Ignore, Mark watched). Hover-capable devices only: on
+ * touch (phone/tablet) a tap on the thumbnail opens the video straight away,
+ * and every action lives in the always-visible ⋯ menu instead.
  * "Add to playlist" opens the shared picker in a popover; membership state
  * shows as pills, so these buttons never persist un-hovered.
  */
@@ -38,33 +42,7 @@ export function VideoCardQuickActions({
 }: VideoCardQuickActionsProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Plex-style on touch: the first tap on the thumbnail reveals the overlay
-  // (and is swallowed); the next tap acts — a button, or the link itself.
-  const [revealed, setRevealed] = useState(false);
-  const revealedRef = useRef(revealed);
-  revealedRef.current = revealed;
-
-  useEffect(() => {
-    const mq = window.matchMedia("(hover: none)");
-    if (!mq.matches) return;
-    const parent = rootRef.current?.parentElement;
-    if (!parent) return;
-    const onParentClick = (e: MouseEvent) => {
-      if (revealedRef.current) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setRevealed(true);
-    };
-    const onDocPointerDown = (e: PointerEvent) => {
-      if (!parent.contains(e.target as Node)) setRevealed(false);
-    };
-    parent.addEventListener("click", onParentClick, true);
-    document.addEventListener("pointerdown", onDocPointerDown);
-    return () => {
-      parent.removeEventListener("click", onParentClick, true);
-      document.removeEventListener("pointerdown", onDocPointerDown);
-    };
-  }, []);
+  const hoverCapable = useHoverCapable();
 
   const authed = trpc.auth.session.useQuery().data?.authed ?? false;
   const settings = trpc.settings.get.useQuery(undefined, {
@@ -104,7 +82,7 @@ export function VideoCardQuickActions({
     };
   }, [pickerOpen, closePicker]);
 
-  if (!authed || quick.length === 0) return null;
+  if (!hoverCapable || !authed || quick.length === 0) return null;
 
   const buttonClass = (active: boolean) =>
     cn(
@@ -117,10 +95,10 @@ export function VideoCardQuickActions({
       ref={rootRef}
       className={cn(
         "flex flex-col gap-1.5",
-        // Hidden at rest; hover reveals on desktop, first tap on touch.
+        // Hidden at rest; hover (or keyboard focus) reveals.
         "pointer-events-none opacity-0 transition-opacity duration-150",
         "focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
-        (pickerOpen || revealed) && "pointer-events-auto opacity-100",
+        pickerOpen && "pointer-events-auto opacity-100",
         className,
       )}
     >

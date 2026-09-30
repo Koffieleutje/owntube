@@ -154,8 +154,13 @@ export function useHlsVodPlayback(
       video.canPlayType("application/vnd.apple.mpegurl") !== "" ||
       video.canPlayType("application/x-mpegURL") !== "";
     if (canNative && !hasRealMediaSource) {
-      // Language renditions surface on WebKit's AudioTrackList; the manifest's
-      // DEFAULT=YES (the original — see hls/generate.ts) picks the start track.
+      // Language renditions surface on WebKit's AudioTrackList. The manifest
+      // marks the original DEFAULT=YES (see hls/generate.ts), but iOS's player
+      // still starts on a dub matching the system language (an English iPhone
+      // got the English auto-dub of a Dutch video). So once per source, when
+      // the list first appears, enable the track our manifest names
+      // "(Original)"; later changes are the viewer's own choice.
+      let startTrackPicked = false;
       const syncNativeAudio = () => {
         const list = nativeAudioTracksOf(video);
         if (!list) return;
@@ -163,6 +168,17 @@ export function useHlsVodPlayback(
         for (let i = 0; i < list.length; i++) {
           const t = list[i];
           if (t) tracks.push(t);
+        }
+        if (!startTrackPicked && tracks.length > 1) {
+          startTrackPicked = true;
+          const original = tracks.findIndex((t) =>
+            /\(original\)\s*$/i.test(t.label ?? ""),
+          );
+          if (original >= 0 && !tracks[original]?.enabled) {
+            tracks.forEach((t, k) => {
+              t.enabled = k === original;
+            });
+          }
         }
         setAudioItems(
           tracks.length > 1

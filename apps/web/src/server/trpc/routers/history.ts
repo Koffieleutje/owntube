@@ -242,8 +242,12 @@ export const historyRouter = router({
       ]);
       const enriched = await Promise.all(
         rows.map(async (row) => {
-          const channelAvatarUrl =
-            metaById.get(row.channelId)?.avatarUrl ?? undefined;
+          const meta = metaById.get(row.channelId);
+          const channelAvatarUrl = meta?.avatarUrl ?? undefined;
+          // A row without a denormalized name (older rows, and plays the DASH
+          // route recorded before it sent one) borrows the cached channel
+          // name. Never the channel id: clients print this under the title.
+          const cachedChannelName = row.channelName ?? meta?.channelName;
           // Rows written since titles were denormalized need no upstream call;
           // the client derives the thumbnail from videoId.
           if (row.videoTitle) {
@@ -251,7 +255,7 @@ export const historyRouter = router({
               ...row,
               videoTitle: row.videoTitle,
               thumbnailUrl: undefined as string | undefined,
-              channelName: row.channelName ?? row.channelId,
+              channelName: cachedChannelName,
               channelAvatarUrl,
             };
           }
@@ -263,7 +267,7 @@ export const historyRouter = router({
               ...row,
               videoTitle: detail.title,
               thumbnailUrl: detail.thumbnailUrl,
-              channelName: detail.channelName ?? row.channelId,
+              channelName: detail.channelName ?? cachedChannelName,
               channelAvatarUrl: detail.channelAvatarUrl ?? channelAvatarUrl,
             };
           } catch {
@@ -271,7 +275,7 @@ export const historyRouter = router({
               ...row,
               videoTitle: row.videoId,
               thumbnailUrl: undefined,
-              channelName: row.channelId,
+              channelName: cachedChannelName,
               channelAvatarUrl,
             };
           }

@@ -63,6 +63,17 @@ describe("buildShortsExclusionSet", () => {
     vi.restoreAllMocks();
   });
 
+  it("excludes a signed-out viewer's seen shorts by anonymous id", () => {
+    const { db, sqlite } = createTestDb();
+    shortsSeen.recordAnonShortSeen(db, "anonViewerA", "anonSeen001");
+    shortsSeen.recordAnonShortSeen(db, "anonViewerB", "otherAnon01");
+
+    const set = buildShortsExclusionSet(db, null, undefined, "anonViewerA");
+    expect(set).toEqual(new Set(["anonSeen001"]));
+    expect(buildShortsExclusionSet(db, null)).toBeNull();
+    sqlite.close();
+  });
+
   it("excludes every seen short regardless of age (never recycles)", () => {
     const { db, sqlite } = createTestDb();
     const now = Math.floor(Date.now() / 1000);

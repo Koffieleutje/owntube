@@ -6,7 +6,10 @@ import {
   clearShortsRecommendationCacheForUser,
   getShortsRecommendations,
 } from "@/server/recommendation/shorts-recommendation-pool";
-import { loadShortSeenVideoIds } from "@/server/recommendation/shorts-seen";
+import {
+  loadAnonShortSeenVideoIds,
+  loadShortSeenVideoIds,
+} from "@/server/recommendation/shorts-seen";
 import { collectUserSignals } from "@/server/recommendation/signals";
 import { readCachedDetailTitlesForVideos } from "@/server/recommendation/taste-corpus";
 import { loadWatchedVideoIdsForRecommendations } from "@/server/recommendation/watched-videos";
@@ -58,11 +61,16 @@ export function shortsContinuationForcesPoolRefresh(
   return continuation === "rec:refresh";
 }
 
-/** Merges DB watch history with client session exclusions for feed pagination. */
+/**
+ * Everything the viewer must not be offered again: a signed-in user's watch
+ * history and seen shorts, or a signed-out viewer's seen shorts (by anonymous
+ * cookie id), plus any caller-supplied ids.
+ */
 export function buildShortsExclusionSet(
   db: AppDb,
   userId: number | null,
   excludeVideoIds?: readonly string[],
+  anonId?: string | null,
 ): Set<string> | null {
   const merged = new Set<string>();
   if (userId) {
@@ -70,6 +78,10 @@ export function buildShortsExclusionSet(
       merged.add(id);
     }
     for (const id of loadShortSeenVideoIds(db, userId)) {
+      merged.add(id);
+    }
+  } else if (anonId) {
+    for (const id of loadAnonShortSeenVideoIds(db, anonId)) {
       merged.add(id);
     }
   }
@@ -352,11 +364,13 @@ async function fetchShortsShelfFeed(
   input: ShortsFeedInput,
   region: string,
   limit: number,
+  anonId: string | null,
 ): Promise<ShortsFeedResult> {
   const watchedEver = buildShortsExclusionSet(
     db,
     userId,
     input.excludeVideoIds,
+    anonId,
   );
   let videos: UnifiedVideo[] = [];
   /** Tracks whether the watched/seen filter actually removed shelf candidates. */
@@ -473,6 +487,8 @@ export async function fetchShortsFeedForViewer(
   db: AppDb,
   userId: number | null,
   input: ShortsFeedInput,
+  /** Signed-out viewer's anonymous id; ignored when `userId` is set. */
+  anonId: string | null = null,
 ): Promise<ShortsFeedResult> {
   const region = input.region.toUpperCase();
   const purpose = input.purpose ?? "feed";
@@ -482,7 +498,7 @@ export async function fetchShortsFeedForViewer(
       : Math.min(40, input.limit ?? SHORTS_PAGE_SIZE);
 
   if (purpose === "shelf") {
-    return fetchShortsShelfFeed(db, userId, input, region, limit);
+    return fetchShortsShelfFeed(db, userId, input, region, limit, anonId);
   }
   const forcePoolRefresh = shortsContinuationForcesPoolRefresh(
     input.continuation,
@@ -492,6 +508,7 @@ export async function fetchShortsFeedForViewer(
     db,
     userId,
     input.excludeVideoIds,
+    anonId,
   );
 
   const isUpstreamContinuation =

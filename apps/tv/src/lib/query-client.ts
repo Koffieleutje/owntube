@@ -20,15 +20,22 @@ import * as FileSystem from "expo-file-system";
 
 /** Bump to discard a persisted cache whose shape no longer matches. */
 export const CACHE_BUSTER = "v1";
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A snapshot on disk older than this is discarded at launch. */
+export const PERSIST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long data no screen is using stays in memory. It used to be the full
+ * day of the disk snapshot, so a session kept everything it ever loaded (a
+ * page per channel focused in Subscriptions, every video opened) and memory
+ * only grew. Screens still showing their data keep it however long.
+ */
+const IN_MEMORY_MS = 30 * 60 * 1000;
 const FILE = `${FileSystem.cacheDirectory ?? ""}owntube-query-cache.json`;
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 60_000,
-      // Long enough that a persisted entry is still resident after a relaunch.
-      gcTime: MAX_AGE_MS,
+      gcTime: IN_MEMORY_MS,
       retry: (failureCount, error) =>
         isTransientNetworkError(error) && failureCount < 3,
       // A TV app has no window focus, and remounting a screen shouldn't refetch
@@ -75,9 +82,9 @@ const fileStorage = {
 export const persister: Persister = createAsyncStoragePersister({
   storage: fileStorage,
   key: "owntube-query-cache",
-  // Serializing runs on the JS thread, so writes are spaced out: a stringify
-  // mid-scroll shows up as a dropped D-pad frame on a TV box.
-  throttleTime: 5_000,
+  // Saved only when the app goes to the background (see trpc-react), so there
+  // is nothing to space out.
+  throttleTime: 0,
   serialize: (client: PersistedClient) => JSON.stringify(trimFeeds(client)),
   deserialize: (cached: string) => JSON.parse(cached) as PersistedClient,
 });
@@ -85,8 +92,7 @@ export const persister: Persister = createAsyncStoragePersister({
 /**
  * Persists only the first page of each infinite feed. A relaunch only needs
  * the first screenful to paint instantly; every extra page scrolled through
- * (and never pruned — gcTime is a day) made each write, and the restore on
- * launch, slower.
+ * made each write, and the restore on launch, slower.
  */
 function trimFeeds(client: PersistedClient): PersistedClient {
   return {

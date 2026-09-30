@@ -16,6 +16,8 @@ function signalsWithHistory(overrides: Partial<UserSignals> = {}): UserSignals {
     totalDistinctVideosWatched: 0,
     channelLastWatchedAt: new Map(),
     channelsOrderedByRecentWatch: [],
+    channelsOrderedByWeight: [],
+    recentEngagedVideoIds: [],
     historyChannelIds: new Set(),
     likedVideoIds: new Set(),
     dislikedVideoIds: new Set(),

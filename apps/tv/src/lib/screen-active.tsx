@@ -34,6 +34,39 @@ export function useScreenActive(): boolean {
 }
 
 /**
+ * Query options for a component in a kept screen. It stays subscribed while
+ * hidden, so the cache counts its data as in use and doesn't collect it (a
+ * screen left for longer than gcTime would otherwise come back empty), but it
+ * doesn't re-render then. Pair with `useRefetchStaleOnShow`.
+ */
+export function useKeptQueryOptions(): {
+  notifyOnChangeProps: [] | undefined;
+} {
+  const active = useScreenActive();
+  return { notifyOnChangeProps: active ? undefined : [] };
+}
+
+/**
+ * Refetches a query that went stale while its screen was hidden, once the
+ * screen is shown again: what re-subscribing on show used to do.
+ */
+export function useRefetchStaleOnShow(query: {
+  isStale: boolean;
+  refetch: () => unknown;
+}): void {
+  const active = useScreenActive();
+  const wasActive = useRef(active);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  useEffect(() => {
+    if (active && !wasActive.current && queryRef.current.isStale) {
+      void queryRef.current.refetch();
+    }
+    wasActive.current = active;
+  }, [active]);
+}
+
+/**
  * A hardwareBackPress handler that only exists while its screen is shown. A
  * hidden screen must never consume Back: React Native asks the newest handler
  * first, so a background screen's "close my submenu" would otherwise swallow

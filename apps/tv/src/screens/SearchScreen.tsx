@@ -140,6 +140,7 @@ export function SearchScreen({
 
   const search = (q: string) => {
     const trimmed = q.trim();
+    setVoiceError(null);
     setText(trimmed);
     setQuery(trimmed);
     setSort("relevance");
@@ -183,7 +184,10 @@ export function SearchScreen({
           autoCapitalize="none"
           autoCorrect={false}
           value={text}
-          onChangeText={setText}
+          onChangeText={(value) => {
+            setVoiceError(null);
+            setText(value);
+          }}
           onFocusChange={setInputFocused}
           onSubmitEditing={submit}
           returnKeyType="search"

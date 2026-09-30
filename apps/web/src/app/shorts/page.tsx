@@ -1,7 +1,6 @@
 import { ShortsFeedClient } from "@/components/shorts/shorts-feed-client";
 import { auth } from "@/server/auth";
 import { getDb } from "@/server/db/client";
-import { buildShortsExclusionSet } from "@/server/recommendation/shorts-feed";
 import { describeUpstreamAvailability } from "@/server/services/proxy";
 import { peekFreshVideoDetail } from "@/server/services/proxy/video";
 import type { VideoDetail } from "@/server/services/proxy.types";
@@ -34,9 +33,6 @@ export default async function ShortsPage({ searchParams }: ShortsPageProps) {
   const initialUpstream = describeUpstreamAvailability();
 
   const viewerId = Number.isFinite(userId) && userId > 0 ? userId : null;
-  const exclusionSet =
-    viewerId != null ? buildShortsExclusionSet(db, viewerId) : null;
-  const initialWatchedVideoIds = exclusionSet ? [...exclusionSet] : [];
 
   // The feed is resolved on the CLIENT, not here: fetching it during SSR blocks
   // the whole page for the upstream resolve (~11s cold, since a Next RSC render
@@ -64,7 +60,6 @@ export default async function ShortsPage({ searchParams }: ShortsPageProps) {
         initialFeed={null}
         initialDetail={initialDetail}
         initialUpstream={initialUpstream}
-        initialWatchedVideoIds={initialWatchedVideoIds}
         signedIn={viewerId != null}
       />
     </div>

@@ -34,6 +34,18 @@ function deviceName(): string {
   return model ? `TV (${model})`.slice(0, 60) : "TV";
 }
 
+/** Android emulators poll too, but the web leaves them out of its TV list. */
+function isEmulator(): boolean {
+  const { Fingerprint = "", Model = "" } = Platform.constants as {
+    Fingerprint?: string;
+    Model?: string;
+  };
+  return (
+    /generic|emulator|\/sdk_/i.test(Fingerprint) ||
+    /AOSP|sdk_|Emulator|SDK built for/i.test(Model)
+  );
+}
+
 export function useTvRemoteReceiver(
   onPlay: (videoId: string, startSeconds?: number) => void,
 ) {
@@ -52,6 +64,7 @@ export function useTvRemoteReceiver(
           const { command } = await trpcClient.tvRemote.poll.query({
             deviceId: await deviceId(),
             name: deviceName(),
+            emulator: isEmulator(),
           });
           if (command && !stopped) {
             onPlayRef.current(command.videoId, command.startSeconds);

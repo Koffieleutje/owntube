@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ApiTokensSection } from "@/components/settings/api-tokens-section";
 import { InstanceSourceHint } from "@/components/settings/instance-source-hint";
 import { RssFeedsSection } from "@/components/settings/rss-feeds-section";
 import { Button } from "@/components/ui/button";
+import {
+  captionLanguageOptions,
+  ORIGINAL_CAPTION_LANGUAGE,
+} from "@/lib/caption-default";
 import {
   DEFAULT_PLAYBACK_QUALITY_SELECT_OPTIONS,
   type DefaultPlaybackQuality,
@@ -82,6 +87,9 @@ export function SettingsPanel({
   const [fullscreenAutoBestQuality, setFullscreenAutoBestQuality] = useState(
     initial.fullscreenAutoBestQuality ?? false,
   );
+  const [captionLanguage, setCaptionLanguage] = useState(
+    initial.captionLanguage ?? ORIGINAL_CAPTION_LANGUAGE,
+  );
   const [enableSwipeGestures, setEnableSwipeGestures] = useState(
     initial.enableSwipeGestures ?? true,
   );
@@ -149,6 +157,10 @@ export function SettingsPanel({
   useEffect(() => {
     setShortsPreloadNext(initial.shortsPreloadNext ?? true);
   }, [initial.shortsPreloadNext]);
+
+  useEffect(() => {
+    setCaptionLanguage(initial.captionLanguage ?? ORIGINAL_CAPTION_LANGUAGE);
+  }, [initial.captionLanguage]);
 
   useEffect(() => {
     const q = initial.defaultPlaybackQuality ?? "1080p";
@@ -272,6 +284,7 @@ export function SettingsPanel({
       shortsPreloadNext,
       defaultPlaybackQuality,
       fullscreenAutoBestQuality,
+      captionLanguage,
       sponsorBlockEnabled,
       sponsorBlockAutoSkip,
       sponsorBlockCategories,
@@ -608,6 +621,31 @@ export function SettingsPanel({
             Switch to the best available quality in fullscreen (uses more data;
             reverts on exit)
           </label>
+          <div className="max-w-md space-y-1 pt-1">
+            <label
+              htmlFor="settings-caption-language"
+              className="text-sm font-medium"
+            >
+              Default subtitle language
+            </label>
+            <select
+              id="settings-caption-language"
+              className="w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+              value={captionLanguage}
+              onChange={(e) => setCaptionLanguage(e.currentTarget.value)}
+            >
+              {captionLanguageOptions().map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              Language subtitles start in when they're on. Videos without it use
+              their original language. Picking another language in the player
+              only changes that video.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -680,6 +718,8 @@ export function SettingsPanel({
       </section>
 
       <RssFeedsSection />
+
+      <ApiTokensSection />
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Data export / import</h2>

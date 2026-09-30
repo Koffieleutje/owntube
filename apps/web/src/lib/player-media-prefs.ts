@@ -46,35 +46,9 @@ export function writePlayerVolumeOnly(volume: number): void {
   writePlayerMediaPrefs({ ...cur, volume });
 }
 
-// Caption language lives under its own key so the volume-only write above
-// (which fully rewrites the media-prefs object) can never clobber it.
-const CAPTION_LANG_KEY = "owntube:captionLang";
-
-/** Remembered caption language (BCP-47), or `null` when captions are off. */
-export function readCaptionLangPref(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(CAPTION_LANG_KEY);
-    return raw && raw.length > 0 ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeCaptionLangPref(lang: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (lang) window.localStorage.setItem(CAPTION_LANG_KEY, lang);
-    else window.localStorage.removeItem(CAPTION_LANG_KEY);
-  } catch {
-    /* quota / private mode */
-  }
-}
-
 // Whether captions are on, stored explicitly so "off" is a remembered choice
-// rather than merely the absence of a language. Without it, turning captions on
-// once left a sticky language that re-enabled them on every video with a
-// matching track — there was no way to remember "off". Default: off.
+// rather than merely the absence of a language. Which language they start in is
+// the account's `captionLanguage` setting, resolved server-side. Default: off.
 const CAPTIONS_ENABLED_KEY = "owntube:captionsEnabled";
 
 export function readCaptionsEnabledPref(): boolean {

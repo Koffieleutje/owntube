@@ -3,7 +3,11 @@ import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { ChannelTiles } from "@/components/ChannelTiles";
 import { FocusButton } from "@/components/FocusButton";
-import { channelInitial, formatSubscribersLabel } from "@/lib/format";
+import {
+  channelInitial,
+  formatSubscribersLabel,
+  sizedAvatarUrl,
+} from "@/lib/format";
 import type { Nav } from "@/lib/navigation";
 import { queryClient } from "@/lib/query-client";
 import { trpcClient } from "@/lib/trpc";
@@ -18,6 +22,9 @@ type ChannelMeta = {
 };
 
 /** A channel's videos as stacked carousels, reachable from the player. */
+/** dp; the header avatar. */
+const CHANNEL_AVATAR = 84;
+
 export function ChannelScreen({
   channelId,
   nav,
@@ -146,7 +153,10 @@ export function ChannelScreen({
   const header = (
     <View style={styles.header}>
       {meta.avatarUrl ? (
-        <Image source={{ uri: meta.avatarUrl }} style={styles.avatar} />
+        <Image
+          source={{ uri: sizedAvatarUrl(meta.avatarUrl, CHANNEL_AVATAR) }}
+          style={styles.avatar}
+        />
       ) : (
         <View style={[styles.avatar, styles.avatarFallback]}>
           <Text style={styles.avatarInitial}>{channelInitial(meta.name)}</Text>
@@ -293,9 +303,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardElevated,
   },
   avatar: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+    width: CHANNEL_AVATAR,
+    height: CHANNEL_AVATAR,
+    borderRadius: CHANNEL_AVATAR / 2,
     backgroundColor: colors.muted,
   },
   avatarFallback: {

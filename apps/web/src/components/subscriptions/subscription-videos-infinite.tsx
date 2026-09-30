@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSectionPagePrefs } from "@/components/library/section-options-menu";
 import { RefreshControl } from "@/components/ui/refresh-control";
 import { useIgnoredVideos } from "@/components/videos/ignored-videos-context";
 import { VideoGrid } from "@/components/videos/video-grid";
+import { useWatchProgressMap } from "@/components/videos/video-membership-context";
 import { trpc } from "@/trpc/react";
 
 /** Pixels the user must pull past (at the top of the page) to trigger a refresh. */
@@ -24,6 +26,9 @@ export function SubscriptionVideosInfinite({
 }: SubscriptionVideosInfiniteProps) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const { sessionIgnored } = useIgnoredVideos();
+  // The Subscriptions ⋯ menu's "Hide watched videos" (shared with By tag).
+  const { hideCompleted } = useSectionPagePrefs("subscriptions");
+  const progressMap = useWatchProgressMap();
   // Starts at 0 (not Date.now()) so the first query key is stable and matches
   // the server's SSR prefetch → the feed hydrates instead of flashing a
   // skeleton. A manual pull-to-refresh bumps it to Date.now() to force a
@@ -139,7 +144,13 @@ export function SubscriptionVideosInfinite({
 
   const videos = query.data.pages
     .flatMap((p) => p.videos)
-    .filter((v) => !sessionIgnored.has(v.videoId));
+    .filter((v) => !sessionIgnored.has(v.videoId))
+    .filter((v) => {
+      if (!hideCompleted) return true;
+      const p = progressMap.get(v.videoId);
+      // As Home's blocks: near-finished (≥90%) counts as watched.
+      return !p || (!p.completed && p.fraction < 0.9);
+    });
   // Only reflect the pull gesture here; the RefreshControl button owns the
   // refreshing spinner/label, so there's no duplicate indicator during a refresh.
   const pullActive = pull > 0 && !isRefreshing;
@@ -174,9 +185,11 @@ export function SubscriptionVideosInfinite({
         />
       </div>
 
-      {videos.length === 0 && filterActive ? (
+      {videos.length === 0 && (filterActive || hideCompleted) ? (
         <p className="rounded-[var(--radius-card)] border border-dashed border-[hsl(var(--border))] bg-[hsl(var(--muted)_/_0.35)] py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
-          No videos match the current tag filter.
+          {filterActive
+            ? "No videos match the current tag filter."
+            : "No unwatched videos here yet."}
         </p>
       ) : (
         <VideoGrid videos={videos} size="large" enableSwipe />

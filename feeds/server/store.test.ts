@@ -40,20 +40,21 @@ test("feeds are scoped per owner; same slug can exist twice", () => {
 
 test("replaceAll prunes feeds and users absent from the payload", () => {
   const { store } = freshStore();
+  const token = "1".repeat(32);
   store.replaceAll(
     [snap("alice", "queue", "queue"), snap("alice", "playlist", "tech")],
-    [{ username: "alice", passSha256: "a".repeat(64) }],
+    [{ username: "alice", passSha256: "a".repeat(64), feedToken: token }],
   );
   store.replaceAll(
     [snap("alice", "queue", "queue")],
-    [{ username: "alice", passSha256: "c".repeat(64) }],
+    [{ username: "alice", passSha256: "c".repeat(64), feedToken: token }],
   );
   assert.equal(store.get("alice", "playlist", "tech"), null);
-  assert.equal(store.getUser("alice")?.passSha256, "c".repeat(64));
+  assert.equal(store.getUserByToken(token)?.passSha256, "c".repeat(64));
 
   store.replaceAll([], []);
   assert.equal(store.list("alice").length, 0);
-  assert.equal(store.getUser("alice"), null);
+  assert.equal(store.getUserByToken(token), null);
 });
 
 test("legacy ownerless table is migrated and orphans pruned on publish", () => {
@@ -150,4 +151,87 @@ test("a fresh data dir just starts a new database", () => {
   const store = new FeedStore(dir);
   assert.equal(fs.existsSync(path.join(dir, "feeds.db")), true);
   assert.equal(store.list("alice").length, 0);
+});
+
+test("replaceAll reports feeds whose content changed, ignoring updatedAt", () => {
+  const { store } = freshStore();
+  const users = [{ username: "alice", passSha256: "a".repeat(64) }];
+  const queue = snap("alice", "queue", "queue");
+  const tech = snap("alice", "playlist", "tech");
+
+  assert.deepEqual(store.replaceAll([queue, tech], users).changed, [
+    { owner: "alice", kind: "queue", slug: "queue" },
+    { owner: "alice", kind: "playlist", slug: "tech" },
+  ]);
+
+  const rebuilt = [
+    { ...queue, updatedAt: queue.updatedAt + 60 },
+    { ...tech, updatedAt: tech.updatedAt + 60 },
+  ];
+  assert.deepEqual(store.replaceAll(rebuilt, users).changed, []);
+
+  const newEpisode = {
+    ...tech,
+    items: [
+      {
+        videoId: "abc123XYZ_-",
+        title: "New",
+        enclosureAudio: "https://m/a.m4a",
+        enclosureVideo: "https://m/a.mp4",
+      },
+    ],
+  };
+  assert.deepEqual(store.replaceAll([queue, newEpisode], users).changed, [
+    { owner: "alice", kind: "playlist", slug: "tech" },
+  ]);
+});
+
+test("feed tokens are stored with the credentials and looked up exactly", () => {
+  const { store } = freshStore();
+  const tokA = "a".repeat(32);
+  store.replaceAll(
+    [snap("alice", "queue", "queue")],
+    [
+      { username: "alice", passSha256: "a".repeat(64), feedToken: tokA },
+      { username: "bob", passSha256: "b".repeat(64) },
+    ],
+  );
+  assert.equal(store.getUserByToken(tokA)?.username, "alice");
+  assert.equal(store.tokenFor("alice"), tokA);
+  assert.equal(store.tokenFor("bob"), null);
+  assert.equal(store.getUserByToken("A".repeat(32)), null);
+  assert.equal(store.getUserByToken("a".repeat(31)), null);
+  assert.equal(store.getUserByToken("b".repeat(32)), null);
+});
+
+test("a new token replaces the old one; a publish without tokens clears them", () => {
+  const { store } = freshStore();
+  const users = (feedToken?: string) => [
+    { username: "alice", passSha256: "a".repeat(64), feedToken },
+  ];
+  store.replaceAll([], users("1".repeat(32)));
+  store.replaceAll([], users("2".repeat(32)));
+  assert.equal(store.getUserByToken("1".repeat(32)), null);
+  assert.equal(store.getUserByToken("2".repeat(32))?.username, "alice");
+  store.replaceAll([], users(undefined));
+  assert.equal(store.tokenFor("alice"), null);
+});
+
+test("an existing users table without feed_token is migrated in place", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feeds-server-store-"));
+  const db = new Database(path.join(dir, "feeds.db"));
+  db.exec(
+    "CREATE TABLE users (username TEXT PRIMARY KEY, pass_sha256 TEXT NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO users VALUES ('alice', '" +
+      "a".repeat(64) +
+      "', 1)",
+  );
+  db.close();
+  const store = new FeedStore(dir);
+  assert.equal(store.tokenFor("alice"), null);
+  const check = new Database(path.join(dir, "feeds.db"));
+  const row = check
+    .prepare("SELECT pass_sha256 FROM users WHERE username = ?")
+    .get("alice") as { pass_sha256: string };
+  check.close();
+  assert.equal(row.pass_sha256, "a".repeat(64));
 });

@@ -270,7 +270,9 @@ export function useVideoActions({
 
   const redirectToLogin = useCallback(() => {
     router.push(
-      `/login?callbackUrl=${encodeURIComponent(window.location.pathname)}`,
+      `/login?callbackUrl=${encodeURIComponent(
+        window.location.pathname + window.location.search,
+      )}`,
     );
   }, [router]);
 
