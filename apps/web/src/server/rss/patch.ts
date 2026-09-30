@@ -3,19 +3,21 @@ import { getChannelRssEntries } from "@/server/rss/cache";
 import type { UnifiedVideo } from "@/server/services/proxy.types";
 
 /**
- * Correct a list of a channel's videos against that channel's uploads RSS.
+ * Correct a list of videos against their channels' uploads RSS.
  *
  * Invidious' channel listing does not carry real publish dates: it derives
  * `published` from YouTube's coarse relative text ("2 weeks ago") at request
  * time, so every row in one response shares the same time-of-day and is only
  * accurate to the granularity of that text. When the text itself degenerates
  * ("0 seconds ago") the video lands on *now*, which reads as "just uploaded"
- * and keeps resetting every time the cache refreshes. The same rows sometimes
- * report `viewCount: 0` for a video with hundreds of thousands of views.
+ * and keeps resetting every time the cache refreshes. Those same rows report
+ * `viewCount: 0`, while the single-video endpoint and the RSS both have the
+ * real count.
  *
- * Measured against James Hoffmann's channel (2026-09-05): the listing dated
- * `Iq34gq2ihMk` to that minute with 0 views, while both the RSS feed and the
- * single-video endpoint put it at 2026-07-16 with ~414k views.
+ * Measured across 22 subscribed channels (2026-09-30): 2 of 224 public videos
+ * came back from the listing as "0 seconds ago" with 0 views — among them
+ * James Hoffmann's `Iq34gq2ihMk` (449,214 views per the RSS), which had shown
+ * the same symptom on 2026-09-05.
  *
  * RSS is authoritative for both fields and covers a channel's ~15 newest
  * uploads — exactly the head of a subscriptions feed or a channel page.
@@ -63,9 +65,9 @@ export async function patchVideosWithChannelRss(
       ...v,
       publishedAt: rss.publishedAt,
       publishedText: new Date(rss.publishedAt * 1000).toISOString(),
-      // Fill only what upstream failed to give. A real view count from the
-      // listing is fresher than RSS (which lags by minutes), so it wins; a
-      // missing or zero one is the failure mode described above.
+      // Fill only what the listing failed to give. A real count from it is
+      // fresher than the RSS (which lags by minutes), so it wins; a missing or
+      // zero one is the failure mode described above.
       viewCount:
         typeof v.viewCount === "number" && v.viewCount > 0
           ? v.viewCount
