@@ -1,5 +1,5 @@
 # Debian-slim (glibc) so better-sqlite3 uses its prebuilt binary — no toolchain.
-FROM node:22-bookworm-slim
+FROM node:22.23.4-bookworm-slim
 
 WORKDIR /app
 
