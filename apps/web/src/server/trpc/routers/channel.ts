@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { sortVideosNewestFirst } from "@/lib/published-sort-key";
 import { RateLimitExceededError } from "@/server/errors/rate-limit-exceeded";
 import { UpstreamUnavailableError } from "@/server/errors/upstream-unavailable";
 import { patchVideosWithChannelRss } from "@/server/rss/patch";
@@ -47,14 +48,16 @@ export const channelRouter = router({
         // patchVideosWithChannelRss. The subscriptions feed already corrected
         // for this; a channel's own page showed the raw values.
         //
-        // Deliberately not re-sorted: the listing comes in YouTube's own
-        // newest-first order, which is right even when a row's date is not.
-        // The RSS only reaches a channel's ~15 newest uploads, so an older row
-        // with a broken date stays broken — and sorting by date would lift it
-        // from its true place to the top of the page, as "just now".
+        // Sorted again afterwards. fetchChannelPage already orders the page
+        // newest-first (sortVideosNewestFirst), but by the dates Invidious
+        // derived — and a broken row's date is "now", so it arrives at the
+        // top. Once the patch has given it its real date, the same sort puts
+        // it back where it belongs.
         return {
           ...page,
-          videos: await patchVideosWithChannelRss(ctx.db, page.videos),
+          videos: sortVideosNewestFirst(
+            await patchVideosWithChannelRss(ctx.db, page.videos),
+          ),
         };
       } catch (e) {
         if (e instanceof UpstreamUnavailableError) {
