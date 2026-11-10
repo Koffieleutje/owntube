@@ -30,6 +30,7 @@ import { parseDeepLink } from "@/lib/deep-links";
 import { useLongSelectDispatcher } from "@/lib/long-press";
 import type { Nav, OpenVideoOptions, PlayContext } from "@/lib/navigation";
 import { ScreenActiveProvider } from "@/lib/screen-active";
+import { SidebarFocusContext } from "@/lib/sidebar-focus";
 import { loadSidebarPrefs } from "@/lib/sidebar-prefs";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
@@ -38,6 +39,7 @@ import { useResumeLookup, useWatchProgressRefresh } from "@/lib/watch-progress";
 import { ChannelScreen } from "@/screens/ChannelScreen";
 import { HistoryScreen } from "@/screens/HistoryScreen";
 import { HomeScreen } from "@/screens/HomeScreen";
+import { LibraryScreen } from "@/screens/LibraryScreen";
 import { PlaylistsScreen } from "@/screens/PlaylistsScreen";
 import { QueueScreen } from "@/screens/QueueScreen";
 import { RecommendedScreen } from "@/screens/RecommendedScreen";
@@ -121,22 +123,31 @@ const KEPT_SECTIONS: ReadonlySet<Section> = new Set<Section>([
   "playlists",
   "queue",
   "history",
+  "library",
 ]);
 
 export function Shell({
   onSignOut,
   onChangeServer,
   onSwitchProfile,
+  suspended = false,
 }: {
   onSignOut: () => void;
   onChangeServer: () => void;
   onSwitchProfile: () => void;
+  /**
+   * Covered by Who's watching: stays mounted, so backing out of the picker
+   * returns to the same screen and card, but takes no focus or Back and
+   * counts no screen as shown.
+   */
+  suspended?: boolean;
 }) {
   useLongSelectDispatcher();
   // Names the sidebar's profile row. Cached like every other read, so switching
   // back to a section doesn't refetch it.
   const me = trpc.auth.me.useQuery(undefined, { retry: 1 });
   const [section, setSection] = useState<Section>("home");
+  const [sidebarHandle, setSidebarHandle] = useState<number | null>(null);
   /** Kept sections still mounted: Home, then the most recently used. */
   const [visited, setVisited] = useState<Section[]>(["home"]);
   useEffect(() => {
@@ -357,11 +368,12 @@ export function Shell({
   // Registered once, reading state through refs: re-registering on every stack
   // change made this the newest handler — after the watch screen's own, which
   // registers as it mounts — so Back skipped the player's dismiss-controls step.
-  const backStateRef = useRef({ depth: stack.length, section, pop });
-  backStateRef.current = { depth: stack.length, section, pop };
+  const backStateRef = useRef({ depth: stack.length, section, pop, suspended });
+  backStateRef.current = { depth: stack.length, section, pop, suspended };
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      const { depth, section, pop } = backStateRef.current;
+      const { depth, section, pop, suspended } = backStateRef.current;
+      if (suspended) return false;
       if (depth > 0) {
         pop();
         return true;
@@ -384,12 +396,13 @@ export function Shell({
     if (route.name === "watch") playerRoute = route;
     else channelRoute = route;
   }
-  const watchActive = top?.name === "watch";
+  const watchOnTop = top?.name === "watch";
+  const watchActive = watchOnTop && !suspended;
   // A player survives under a channel page only if it was on screen when the
   // page opened; a route uncovered by Back (its player already gone) loads
   // again when it reaches the front, not hidden behind the page.
   const shownPlayerKey = useRef<string | undefined>(undefined);
-  if (watchActive) shownPlayerKey.current = playerRoute?.key;
+  if (watchOnTop) shownPlayerKey.current = playerRoute?.key;
   const keptPlayer =
     playerRoute && playerRoute.key === shownPlayerKey.current
       ? playerRoute
@@ -429,6 +442,8 @@ export function Shell({
         );
       case "playlists":
         return <PlaylistsScreen nav={nav} />;
+      case "library":
+        return <LibraryScreen nav={nav} />;
       case "queue":
         return <QueueScreen nav={nav} />;
       default:
@@ -452,54 +467,61 @@ export function Shell({
       {/* Stays laid out under the player: hiding it would re-lay out every
           shelf and lose their scroll offsets. Blocking focus is enough — the
           player covers it opaquely. */}
-      <TVFocusGuideView autoFocus focusable={!watchActive} style={styles.base}>
+      <TVFocusGuideView
+        autoFocus
+        focusable={!watchOnTop && !suspended}
+        style={styles.base}
+      >
         <CardMenuProvider nav={nav}>
-          <View style={styles.base}>
-            <Animated.View
-              style={[styles.content, { marginLeft: contentInset }]}
-            >
-              {sectionLayers.map((key) => {
-                const visible = key === section && !channelShown;
-                return (
-                  <ScreenLayer
-                    key={`${key}-${resets[key] ?? 0}`}
-                    visible={visible}
-                    focused={visible && !watchActive}
-                  >
-                    {renderSection(key)}
-                  </ScreenLayer>
-                );
-              })}
-              {stack.map((route) => {
-                if (route.name !== "channel") return null;
-                const visible = route.key === channelRoute?.key;
-                return (
-                  <ScreenLayer
-                    key={route.key}
-                    visible={visible}
-                    focused={visible && !watchActive}
-                  >
-                    <ChannelScreen channelId={route.channelId} nav={nav} />
-                  </ScreenLayer>
-                );
-              })}
-            </Animated.View>
-            <Sidebar
-              active={section}
-              onSelect={selectSection}
-              profileLabel={me.data?.email}
-              onSwitchProfile={onSwitchProfile}
-              sections={sections}
-              onExpandedChange={onSidebarExpanded}
-              width={contentInset}
-            />
-          </View>
+          <SidebarFocusContext.Provider value={sidebarHandle}>
+            <View style={styles.base}>
+              <Animated.View
+                style={[styles.content, { marginLeft: contentInset }]}
+              >
+                {sectionLayers.map((key) => {
+                  const visible = key === section && !channelShown;
+                  return (
+                    <ScreenLayer
+                      key={`${key}-${resets[key] ?? 0}`}
+                      visible={visible}
+                      focused={visible && !watchOnTop && !suspended}
+                    >
+                      {renderSection(key)}
+                    </ScreenLayer>
+                  );
+                })}
+                {stack.map((route) => {
+                  if (route.name !== "channel") return null;
+                  const visible = route.key === channelRoute?.key;
+                  return (
+                    <ScreenLayer
+                      key={route.key}
+                      visible={visible}
+                      focused={visible && !watchOnTop && !suspended}
+                    >
+                      <ChannelScreen channelId={route.channelId} nav={nav} />
+                    </ScreenLayer>
+                  );
+                })}
+              </Animated.View>
+              <Sidebar
+                active={section}
+                onSelect={selectSection}
+                profileLabel={me.data?.email}
+                onSwitchProfile={onSwitchProfile}
+                sections={sections}
+                onExpandedChange={onSidebarExpanded}
+                width={contentInset}
+                onActiveRowHandle={setSidebarHandle}
+              />
+            </View>
+          </SidebarFocusContext.Provider>
         </CardMenuProvider>
       </TVFocusGuideView>
 
       {keptPlayer ? (
         <ScreenLayer
-          visible={watchActive}
+          visible={watchOnTop}
           focused={watchActive}
           style={styles.watchLayer}
         >

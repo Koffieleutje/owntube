@@ -1,11 +1,13 @@
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, forwardRef, useEffect, useRef, useState } from "react";
 import {
   Animated,
+  findNodeHandle,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TVFocusGuideView,
   View,
 } from "react-native";
 import { channelInitial } from "@/lib/format";
@@ -22,6 +24,7 @@ export type Section =
   | "playlists"
   | "queue"
   | "history"
+  | "library"
   | "settings";
 
 /** Row box and the pitch between two rows, shared with the scroll maths. */
@@ -36,13 +39,14 @@ export const EXPANDED_WIDTH = 228;
 export type FeatherName = keyof typeof Feather.glyphMap;
 
 export const SECTIONS: { key: Section; label: string; icon: FeatherName }[] = [
-  { key: "home", label: "Home", icon: "home" },
   { key: "search", label: "Search", icon: "search" },
-  { key: "queue", label: "Queue", icon: "list" },
+  { key: "home", label: "Home", icon: "home" },
+  { key: "shorts", label: "Shorts", icon: "smartphone" },
   { key: "subscriptions", label: "Subscriptions", icon: "tv" },
+  { key: "library", label: "Library", icon: "layers" },
   { key: "recommended", label: "Recommended", icon: "star" },
   { key: "trending", label: "Trending", icon: "trending-up" },
-  { key: "shorts", label: "Shorts", icon: "smartphone" },
+  { key: "queue", label: "Queue", icon: "list" },
   { key: "saved", label: "Saved", icon: "bookmark" },
   { key: "playlists", label: "Playlists", icon: "folder" },
   { key: "history", label: "History", icon: "clock" },
@@ -66,6 +70,8 @@ type Props = {
   width?: Animated.Value;
   /** Ordered visible sections; omitted ones are hidden (see sidebar-prefs). */
   sections?: Section[];
+  /** Reports the active row's native handle (see lib/sidebar-focus). */
+  onActiveRowHandle?: (handle: number | null) => void;
 };
 
 export function Sidebar({
@@ -76,6 +82,7 @@ export function Sidebar({
   sections,
   onExpandedChange,
   width,
+  onActiveRowHandle,
 }: Props) {
   const visible = sections
     ? sections
@@ -87,7 +94,16 @@ export function Sidebar({
 
   const scrollRef = useRef<ScrollView>(null);
   const [navHeight, setNavHeight] = useState(0);
-  const activeIndex = visible.findIndex((s) => s.key === active);
+  // Settings sits at the rail's foot, apart from the scrolling sections, as in
+  // the YouTube app.
+  const settings = visible.find((s) => s.key === "settings");
+  const listed = visible.filter((s) => s.key !== "settings");
+  const activeIndex = listed.findIndex((s) => s.key === active);
+  // State, not a ref: the guide's destinations must follow the active row.
+  const [activeRow, setActiveRow] = useState<View | null>(null);
+  useEffect(() => {
+    onActiveRowHandle?.(activeRow ? findNodeHandle(activeRow) : null);
+  }, [activeRow, onActiveRowHandle]);
 
   // Collapsing hands the rail back to the page, so put the active section back
   // in view: left where the user scrolled it, a rail parked on Settings shows
@@ -125,38 +141,66 @@ export function Sidebar({
         { width: width ?? (expanded ? EXPANDED_WIDTH : RAIL_WIDTH) },
       ]}
     >
-      <ProfileRow
-        label={profileLabel}
-        expanded={expanded}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        onPress={() => onSwitchProfile?.()}
-      />
+      {/* Entering the rail from the page lands on the section you're in, not
+          on whichever row happens to sit level with the card you left — from a
+          shelf halfway down Home that was Subscriptions. While focus is inside,
+          Up and Down move between rows as usual. */}
+      <TVFocusGuideView
+        destinations={activeRow ? [activeRow] : []}
+        style={styles.guide}
+      >
+        <ProfileRow
+          label={profileLabel}
+          expanded={expanded}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onPress={() => onSwitchProfile?.()}
+        />
 
-      {/* Scrolls: at 50dp a row, only seven fit a 540dp panel, and every
+        {/* Scrolls: at 50dp a row, only seven fit a 540dp panel, and every
           section past that used to take focus while staying off screen —
           invisible rows you could land on but never see. Android scrolls the
           newly focused child into view for us. */}
-      <ScrollView
-        ref={scrollRef}
-        style={styles.nav}
-        contentContainerStyle={styles.navContent}
-        onLayout={(e) => setNavHeight(e.nativeEvent.layout.height)}
-        showsVerticalScrollIndicator={false}
-      >
-        {visible.map((section) => (
+        <ScrollView
+          ref={scrollRef}
+          style={styles.nav}
+          contentContainerStyle={styles.navContent}
+          onLayout={(e) => setNavHeight(e.nativeEvent.layout.height)}
+          showsVerticalScrollIndicator={false}
+        >
+          {listed.map((section, index) => (
+            <Fragment key={section.key}>
+              <NavRow
+                ref={active === section.key ? setActiveRow : undefined}
+                icon={section.icon}
+                label={section.label}
+                active={active === section.key}
+                expanded={expanded}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
+                onPress={() => onSelect(section.key)}
+              />
+              {/* The YouTube app's line under Library: its own sections
+                  above, everything else below. */}
+              {section.key === "library" && index < listed.length - 1 ? (
+                <View style={styles.divider} />
+              ) : null}
+            </Fragment>
+          ))}
+        </ScrollView>
+        {settings ? (
           <NavRow
-            key={section.key}
-            icon={section.icon}
-            label={section.label}
-            active={active === section.key}
+            ref={active === "settings" ? setActiveRow : undefined}
+            icon={settings.icon}
+            label={settings.label}
+            active={active === "settings"}
             expanded={expanded}
             onFocus={handleFocus}
             onBlur={handleBlur}
-            onPress={() => onSelect(section.key)}
+            onPress={() => onSelect("settings")}
           />
-        ))}
-      </ScrollView>
+        ) : null}
+      </TVFocusGuideView>
     </Animated.View>
   );
 }
@@ -182,7 +226,7 @@ function ProfileRow({
   onPress: () => void;
 }) {
   const [focused, setFocused] = useState(false);
-  const tint = focused ? colors.brand : colors.foreground;
+  const tint = focused ? colors.focusForeground : colors.foreground;
 
   return (
     <Pressable
@@ -218,28 +262,27 @@ function ProfileRow({
   );
 }
 
-function NavRow({
-  icon,
-  label,
-  active,
-  expanded,
-  onFocus,
-  onBlur,
-  onPress,
-}: {
-  icon: FeatherName;
-  label: string;
-  active: boolean;
-  expanded: boolean;
-  onFocus: () => void;
-  onBlur: () => void;
-  onPress: () => void;
-}) {
+const NavRow = forwardRef<
+  View,
+  {
+    icon: FeatherName;
+    label: string;
+    active: boolean;
+    expanded: boolean;
+    onFocus: () => void;
+    onBlur: () => void;
+    onPress: () => void;
+  }
+>(function NavRow(
+  { icon, label, active, expanded, onFocus, onBlur, onPress },
+  ref,
+) {
   const [focused, setFocused] = useState(false);
-  const tint = active || focused ? colors.brand : colors.foreground;
+  const tint = focused ? colors.focusForeground : colors.foreground;
 
   return (
     <Pressable
+      ref={ref}
       onFocus={() => {
         setFocused(true);
         onFocus();
@@ -262,12 +305,11 @@ function NavRow({
           <Text style={[styles.label, { color: tint }]} numberOfLines={1}>
             {label}
           </Text>
-          {active ? <View style={styles.underscore} /> : null}
         </View>
       ) : null}
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   sidebar: {
@@ -297,6 +339,13 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
   },
   switchHint: { color: colors.mutedForeground, fontSize: fontSize.sm },
+  guide: { flex: 1, gap: spacing.lg },
+  divider: {
+    height: 1,
+    marginVertical: spacing.xs,
+    marginHorizontal: spacing.sm,
+    backgroundColor: colors.border,
+  },
   nav: { flex: 1 },
   navContent: { gap: spacing.xs },
   row: {
@@ -310,23 +359,13 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   rowCollapsed: { justifyContent: "center", paddingHorizontal: 0 },
-  rowActive: { backgroundColor: colors.brandSoft },
+  // As in the YouTube app: the section you're in is a quiet grey pill, the
+  // focused row a white one with dark text.
+  rowActive: { backgroundColor: colors.surfaceStrong },
   rowFocused: {
-    backgroundColor: colors.accent,
-    borderColor: colors.ring,
-    shadowColor: colors.brand,
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    backgroundColor: colors.focusFill,
+    borderColor: colors.focusFill,
   },
   labelWrap: { alignItems: "flex-start" },
   label: { fontSize: fontSize.md, fontWeight: "600" },
-  underscore: {
-    marginTop: 3,
-    height: 2,
-    alignSelf: "stretch",
-    backgroundColor: colors.foreground,
-    borderRadius: 2,
-  },
 });

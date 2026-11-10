@@ -2,7 +2,11 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { UnifiedVideo } from "@web/server/services/proxy.types";
 import type { AppRouter } from "@web/server/trpc/root";
 import { useMemo } from "react";
+import { StyleSheet, Text, View } from "react-native";
+import { FocusButton } from "@/components/FocusButton";
+import { SkeletonRows } from "@/components/Skeleton";
 import { VideoRow } from "@/components/VideoRow";
+import { errorMessage } from "@/lib/error-message";
 import type { Nav, PlayContext } from "@/lib/navigation";
 import { playAllStart } from "@/lib/play-all";
 import {
@@ -12,6 +16,7 @@ import {
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { useProgressLookup } from "@/lib/watch-progress";
+import { colors, fontSize } from "@/theme";
 
 export type HomeBlock =
   inferRouterOutputs<AppRouter>["settings"]["get"]["homeBlocks"][number];
@@ -61,8 +66,11 @@ export function HomeBlockRow({
   nav,
   onCardFocusChange,
   onCardFocus,
+  preferFirstFocus,
 }: {
   block: HomeBlock;
+  /** The row Home opens on: its first card takes focus. */
+  preferFirstFocus?: boolean;
   region: string;
   nav: Nav;
   /** Bubbles card focus so Home can bring the row into view. */
@@ -76,14 +84,20 @@ export function HomeBlockRow({
   // and refetches the row's query on return if it went stale.
   const kept = useKeptQueryOptions();
 
-  const subscriptions = trpc.subscriptions.mergedFeedInfinite.useQuery(
+  // Pages on as the row is scrolled, so every subscription upload is
+  // reachable rather than the first 24.
+  const subscriptions = trpc.subscriptions.mergedFeedInfinite.useInfiniteQuery(
     {
       limit: ROW_VIDEOS,
       hideShorts: option(block, "hideShorts", true),
       hideIgnored: option(block, "hideIgnored", true),
       ...tagFilters(block),
     },
-    { enabled: type === "subscriptions", ...kept },
+    {
+      enabled: type === "subscriptions",
+      getNextPageParam: (page) => page.nextCursor ?? undefined,
+      ...kept,
+    },
   );
   const recommended = trpc.feed.home.useQuery(
     { page: 1, pageSize: ROW_VIDEOS, region },
@@ -158,7 +172,7 @@ export function HomeBlockRow({
       }));
     switch (type) {
       case "subscriptions":
-        return subscriptions.data?.videos ?? [];
+        return subscriptions.data?.pages.flatMap((p) => p.videos) ?? [];
       case "recommended":
         return recommended.data?.videos ?? [];
       case "explore":
@@ -209,8 +223,8 @@ export function HomeBlockRow({
       (hideFinished
         ? videos.filter((v) => !progress(v.videoId)?.completed)
         : videos
-      ).slice(0, ROW_VIDEOS),
-    [videos, hideFinished, progress],
+      ).slice(0, type === "subscriptions" ? undefined : ROW_VIDEOS),
+    [videos, hideFinished, progress, type],
   );
 
   const title =
@@ -219,6 +233,31 @@ export function HomeBlockRow({
         HOME_BLOCK_TITLES.playlist)
       : HOME_BLOCK_TITLES[type];
 
+  // The row Home opens on keeps its place while it loads and says so when
+  // it fails: rendering nothing let the rows below move up into its spot and
+  // take the first focus, and hid why it was missing.
+  const lead = rowQueries[type];
+  if (shown.length === 0 && preferFirstFocus && lead) {
+    const status = lead as {
+      isPending?: boolean;
+      isError?: boolean;
+      error?: unknown;
+    };
+    if (status.isPending) return <SkeletonRows rows={1} />;
+    if (status.isError) {
+      return (
+        <View style={styles.failed}>
+          <Text style={styles.failedTitle}>{title} didn't load</Text>
+          <Text style={styles.failedText}>{errorMessage(status.error)}</Text>
+          <FocusButton
+            label="Retry"
+            hasTVPreferredFocus
+            onPress={() => void lead.refetch()}
+          />
+        </View>
+      );
+    }
+  }
   if (shown.length === 0) return null;
 
   if (type === "playlists") {
@@ -263,6 +302,19 @@ export function HomeBlockRow({
     <VideoRow
       title={title}
       videos={shown}
+      preferFirstFocus={preferFirstFocus}
+      onEndReached={
+        type === "subscriptions"
+          ? () => {
+              if (
+                subscriptions.hasNextPage &&
+                !subscriptions.isFetchingNextPage
+              ) {
+                void subscriptions.fetchNextPage();
+              }
+            }
+          : undefined
+      }
       onSelect={(videoId) => nav.openVideo(videoId, { context })}
       onCardFocusChange={(focused, video) => {
         onCardFocusChange?.(focused);
@@ -274,3 +326,13 @@ export function HomeBlockRow({
 
 /** For a row type without a query of its own here. */
 const NOTHING_TO_REFETCH = { isStale: false, refetch: () => undefined };
+
+const styles = StyleSheet.create({
+  failed: { gap: 10, alignItems: "flex-start" },
+  failedTitle: {
+    color: colors.cardTitle,
+    fontSize: fontSize.md,
+    fontWeight: "600",
+  },
+  failedText: { color: colors.mutedForeground, fontSize: fontSize.sm },
+});

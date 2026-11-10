@@ -44,6 +44,10 @@ import type {
 } from "@/server/services/proxy.types";
 import { getUserSettings } from "@/server/settings/profile";
 import { dropMembersOnlyVideos } from "@/server/subscriptions/members-only";
+import {
+  memoMergedPage,
+  mergedPageKey,
+} from "@/server/subscriptions/merged-page-cache";
 import { reconcileSubscriptionChannelIdsForUser } from "@/server/subscriptions/reconcile-channel-ids";
 import {
   protectedProcedure,
@@ -1110,11 +1114,11 @@ export const subscriptionsRouter = router({
         };
       }
 
-      const { videos, exhausted } = await collectSortedFeedPage(
-        ctx.db,
-        channelIds,
-        offset,
-        limit,
+      // Memoized for a minute per channel set and window: a page re-walks
+      // the merge from the start, and the TV asks for the same ones often.
+      const { videos, exhausted } = await memoMergedPage(
+        mergedPageKey(channelIds, offset, limit),
+        () => collectSortedFeedPage(ctx.db, channelIds, offset, limit),
       );
       // Members-only uploads can't be played here (see members-only.ts), so
       // they'd only be dead "0 views" cards. After the RSS patch, which has

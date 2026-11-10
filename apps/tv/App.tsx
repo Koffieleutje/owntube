@@ -1,6 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, SafeAreaView, StyleSheet } from "react-native";
+import {
+  ActivityIndicator,
+  SafeAreaView,
+  StyleSheet,
+  View,
+} from "react-native";
 import { Shell } from "@/components/Shell";
 import {
   clearAllProfiles,
@@ -40,6 +45,13 @@ async function nextAfterLeaving(): Promise<AuthState> {
 
 export default function App() {
   const [auth, setAuth] = useState<AuthState>("checking");
+  // Who's watching opened from a signed-in session covers the shell rather
+  // than replacing it, so Back returns to the very screen and card it was
+  // opened from. At start, or once a profile has left, it is the "profiles"
+  // state instead, with nothing to go back to.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  /** Bumped when another account is chosen: its shell starts fresh. */
+  const [shellKey, setShellKey] = useState(0);
 
   useEffect(() => {
     Promise.all([loadServerUrl(), getToken(), listProfiles()]).then(
@@ -87,10 +99,9 @@ export default function App() {
       .finally(() => void afterLeaving());
   };
 
-  const switchProfile = () => {
-    void dropCache();
-    setAuth("profiles");
-  };
+  // The cache goes once another account is chosen (see ProfilesScreen), not
+  // on the way in: backing out keeps the current profile and what it loaded.
+  const switchProfile = () => setPickerOpen(true);
 
   /** Another server's accounts don't apply: every profile goes. */
   const changeServer = () => {
@@ -110,17 +121,43 @@ export default function App() {
             color={colors.brand}
           />
         ) : auth === "signedIn" ? (
-          <WatchProgressProvider>
+          <WatchProgressProvider key={shellKey}>
             <Shell
               onSignOut={signOut}
               onChangeServer={changeServer}
               onSwitchProfile={switchProfile}
+              suspended={pickerOpen}
             />
+            {pickerOpen ? (
+              <View style={StyleSheet.absoluteFill}>
+                <ProfilesScreen
+                  onChosen={(changed) => {
+                    setPickerOpen(false);
+                    if (changed) {
+                      void dropCache();
+                      setShellKey((k) => k + 1);
+                    }
+                  }}
+                  onAdd={() => {
+                    setPickerOpen(false);
+                    void dropCache();
+                    setAuth("signedOut");
+                  }}
+                  onBack={() => setPickerOpen(false)}
+                />
+              </View>
+            ) : null}
           </WatchProgressProvider>
         ) : auth === "profiles" ? (
           <ProfilesScreen
-            onChosen={() => setAuth("signedIn")}
-            onAdd={() => setAuth("signedOut")}
+            onChosen={(changed) => {
+              if (changed) void dropCache();
+              setAuth("signedIn");
+            }}
+            onAdd={() => {
+              void dropCache();
+              setAuth("signedOut");
+            }}
           />
         ) : auth === "server" ? (
           <ServerScreen onDone={() => setAuth("signedOut")} />

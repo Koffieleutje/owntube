@@ -5,22 +5,46 @@ import {
   isRecognitionAvailable,
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  type ComponentRef,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  type FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  TVFocusGuideView,
+  View,
+} from "react-native";
 import { CarouselFeed } from "@/components/CarouselFeed";
 import { type ChannelTileData, ChannelTiles } from "@/components/ChannelTiles";
-import { FocusButton } from "@/components/FocusButton";
-import { FocusableTextInput } from "@/components/focusable-text-input";
+import { LetterKeyboard } from "@/components/LetterKeyboard";
+import { VideoRow } from "@/components/VideoRow";
 import type { Nav } from "@/lib/navigation";
 import { loadRecentSearches, rememberSearch } from "@/lib/recent-searches";
+import { useActiveBackHandler } from "@/lib/screen-active";
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { useInfiniteFeed } from "@/lib/use-infinite-feed";
-import { colors, focus, fontSize, radius, spacing } from "@/theme";
+import { colors, focus, fontSize, spacing } from "@/theme";
+
+/** How long typing has to pause before the results follow it. */
+const LIVE_SEARCH_DELAY_MS = 700;
+/** Uploads in the "Recently uploaded" row, newest first. */
+const RECENT_ROW_SIZE = 12;
 
 /**
- * Full-text search. Typing on a TV keyboard is slow, so voice is the primary
- * input: the mic runs Android's recogniser and searches as soon as it settles.
+ * Search, laid out like the Android TV YouTube app: a mic and the query on
+ * top, suggestions beside an on-page letter grid (never the system keyboard),
+ * and results that follow the query as it is typed, in rows underneath.
+ * Results arriving don't take focus from the keyboard; moving down into them
+ * folds the keyboard away, and Up or Back to the query brings it back.
  */
 export function SearchScreen({
   nav,
@@ -32,7 +56,6 @@ export function SearchScreen({
 }) {
   const [text, setText] = useState(initialQuery ?? "");
   const [query, setQuery] = useState(initialQuery ?? "");
-  const [inputFocused, setInputFocused] = useState(false);
   const [listening, setListening] = useState(false);
   // Not every TV ships a recogniser — this box has none — so the in-app mic
   // hides rather than offering a control that can only fail.
@@ -115,12 +138,23 @@ export function SearchScreen({
     if (!query) setChannels([]);
   }, [query]);
 
-  // Sorted on the client, as the web's search page does.
-  const [sort, setSort] = useState<SearchSort>("relevance");
-  const sortedVideos = useMemo(
-    () => sortVideos(feed.videos, sort),
-    [feed.videos, sort],
+  // The YouTube app's "Recently uploaded" row: the newest of what was found.
+  const recentUploads = useMemo(
+    () =>
+      feed.videos
+        .filter((v) => v.publishedAt)
+        .sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0))
+        .slice(0, RECENT_ROW_SIZE),
+    [feed.videos],
   );
+
+  // The results follow the query as it is typed, a beat after typing pauses.
+  useEffect(() => {
+    const trimmed = text.trim();
+    if (trimmed === query) return;
+    const timer = setTimeout(() => setQuery(trimmed), LIVE_SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [text, query]);
 
   // Suggestions follow what's typed (or dictated), a beat after it settles.
   const [suggestFor, setSuggestFor] = useState("");
@@ -130,12 +164,16 @@ export function SearchScreen({
   }, [text]);
   const suggestions = trpc.search.suggestions.useQuery(
     { q: suggestFor },
-    { enabled: suggestFor.length > 1 && suggestFor !== query },
+    { enabled: suggestFor.length > 1 },
   );
 
   const [recent, setRecent] = useState<string[]>([]);
   useEffect(() => {
     loadRecentSearches().then(setRecent);
+  }, []);
+  const remember = useCallback((q: string) => {
+    const trimmed = q.trim();
+    if (trimmed) setRecent((r) => rememberSearch(r, trimmed));
   }, []);
 
   const search = (q: string) => {
@@ -143,8 +181,7 @@ export function SearchScreen({
     setVoiceError(null);
     setText(trimmed);
     setQuery(trimmed);
-    setSort("relevance");
-    if (trimmed) setRecent((r) => rememberSearch(r, trimmed));
+    remember(trimmed);
   };
 
   const searchRef = useRef(search);
@@ -154,183 +191,303 @@ export function SearchScreen({
     if (initialQuery !== undefined) searchRef.current(initialQuery);
   }, [initialQuery]);
 
-  const submit = () => search(text);
+  // Open while focus is on the query, the keyboard or the suggestions; folded
+  // away once it moves down into the results, as the YouTube app does.
+  const [keyboardOpen, setKeyboardOpen] = useState(true);
+  const resultsRef = useRef<FlatList<UnifiedVideo[]>>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const onResultFocus = useCallback(
+    (focused: boolean) => {
+      if (!focused) return;
+      setKeyboardOpen(false);
+      // Going into the results is choosing them: the query becomes recent.
+      remember(textRef.current);
+    },
+    [remember],
+  );
+  const openKeyboard = () => {
+    setKeyboardOpen(true);
+    resultsRef.current?.scrollToOffset({ offset: 0, animated: true });
+  };
 
-  // Under the bar: suggestions while typing, else recent searches when idle.
-  const chipWords =
-    text.trim() && text.trim() !== query
-      ? (suggestions.data?.suggestions ?? []).slice(0, 8)
-      : !query
-        ? recent
-        : [];
-  const chipsLabel = text.trim() && text.trim() !== query ? null : "Recent";
+  // Back from the results returns to the query (and its keyboard) first;
+  // from there it leaves as before.
+  const barRef = useRef<ComponentRef<typeof TVFocusGuideView>>(null);
+  const [queryBox, setQueryBox] = useState<View | null>(null);
+  useActiveBackHandler(() => {
+    if (keyboardOpen) return false;
+    openKeyboard();
+    barRef.current?.requestTVFocus?.();
+    return true;
+  });
+
+  // Beside the keyboard: completions while typing, recent searches before.
+  const typed = text.trim();
+  const listWords = typed
+    ? (suggestions.data?.suggestions ?? []).slice(0, 6)
+    : recent.slice(0, 6);
+
+  const status =
+    voiceError ??
+    (listening
+      ? "Listening…"
+      : query && feed.status === "ready" && feed.videos.length === 0
+        ? "No results."
+        : null);
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.searchSurface,
-          inputFocused && styles.searchSurfaceFocused,
-        ]}
+      <TVFocusGuideView
+        ref={barRef}
+        destinations={queryBox ? [queryBox] : []}
+        style={styles.bar}
       >
-        <Feather name="search" size={28} color={colors.mutedForeground} />
-        {/* A bare TextInput can't take D-pad focus on Android (ReactEditText
-            refuses focus it didn't request), so moving right from the sidebar
-            went nowhere. The wrapper gives it a focusable surface. */}
-        <FocusableTextInput
-          containerStyle={styles.inputSurface}
-          inputStyle={styles.input}
-          placeholder="Search"
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={text}
-          onChangeText={(value) => {
-            setVoiceError(null);
-            setText(value);
-          }}
-          onFocusChange={setInputFocused}
-          onSubmitEditing={submit}
-          returnKeyType="search"
-          hasTVPreferredFocus
-        />
         {micAvailable ? (
-          <FocusButton
-            label={listening ? "Listening..." : "Speak"}
+          <RoundButton
+            icon="mic"
+            active={listening}
             onPress={toggleListening}
-            style={listening ? styles.listening : undefined}
+            onFocusChange={(f) => f && openKeyboard()}
+            hasTVPreferredFocus
           />
         ) : null}
-        <FocusButton
-          label="Search"
-          variant="primary"
-          onPress={submit}
-          style={styles.searchButton}
+        <QueryPill
+          ref={setQueryBox}
+          text={text}
+          onPress={openKeyboard}
+          onFocusChange={(f) => f && openKeyboard()}
         />
-      </View>
-      {chipWords.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chips}
-        >
-          {chipsLabel ? (
-            <Text style={styles.chipsLabel}>{chipsLabel}</Text>
-          ) : null}
-          {chipWords.map((word) => (
-            <FocusButton
-              key={word}
-              label={word}
-              onPress={() => search(word)}
-              style={styles.chip}
-            />
-          ))}
-        </ScrollView>
+      </TVFocusGuideView>
+
+      {keyboardOpen ? (
+        <View style={styles.entry}>
+          <TVFocusGuideView autoFocus style={styles.words}>
+            {listWords.map((word) => (
+              <WordRow
+                key={word}
+                word={word}
+                typed={typed}
+                recent={!typed}
+                onPress={() => search(word)}
+              />
+            ))}
+          </TVFocusGuideView>
+          <LetterKeyboard
+            hasTVPreferredFocus={!micAvailable}
+            onKey={(c) => {
+              setVoiceError(null);
+              setText((t) => t + c);
+            }}
+            onDelete={() => setText((t) => t.slice(0, -1))}
+            onClear={() => setText("")}
+            onSubmit={() => search(text)}
+          />
+        </View>
       ) : null}
+
+      {status ? <Text style={styles.status}>{status}</Text> : null}
+
       <View style={styles.results}>
-        <CarouselFeed
-          feed={feed}
-          videos={sortedVideos}
-          onSelect={(videoId, videos) =>
-            nav.openVideo(videoId, { context: { source: "feed", videos } })
-          }
-          header={
-            query ? (
+        {query ? (
+          <CarouselFeed
+            feed={feed}
+            videos={feed.videos}
+            onSelect={(videoId, videos) =>
+              nav.openVideo(videoId, { context: { source: "feed", videos } })
+            }
+            // Results arrive while typing; they must not pull focus off the
+            // keyboard.
+            preferFirstRowFocus={false}
+            listRef={resultsRef}
+            onCardFocusChange={onResultFocus}
+            firstRowTitle={`Results for “${query}”`}
+            header={
               <View style={styles.resultsHeader}>
-                <View style={styles.chipsRow}>
-                  {SORTS.map(({ key, label }) => (
-                    <FocusButton
-                      key={key}
-                      label={label}
-                      variant={sort === key ? "primary" : "ghost"}
-                      onPress={() => setSort(key)}
-                      style={styles.chip}
-                    />
-                  ))}
-                </View>
                 {channels.length > 0 ? (
                   <ChannelTiles
                     title="Channels"
                     channels={channels}
                     onSelect={nav.openChannel}
+                    onTileFocusChange={onResultFocus}
+                  />
+                ) : null}
+                {recentUploads.length > 3 ? (
+                  <VideoRow
+                    title="Recently uploaded"
+                    videos={recentUploads}
+                    onSelect={(videoId) =>
+                      nav.openVideo(videoId, {
+                        context: { source: "feed", videos: recentUploads },
+                      })
+                    }
+                    onCardFocusChange={onResultFocus}
                   />
                 ) : null}
               </View>
-            ) : undefined
-          }
-          emptyText={
-            voiceError ??
-            (query ? "No results." : "Press Speak, or type and press Search.")
-          }
-        />
+            }
+            emptyText=""
+          />
+        ) : null}
       </View>
     </View>
   );
 }
 
-type SearchSort = "relevance" | "newest" | "views";
+/** The query as typed, in a pill; focusing it brings the keyboard back. */
+const QueryPill = forwardRef<
+  View,
+  { text: string; onPress: () => void; onFocusChange: (f: boolean) => void }
+>(function QueryPill({ text, onPress, onFocusChange }, ref) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable
+      ref={ref}
+      onFocus={() => {
+        setFocused(true);
+        onFocusChange(true);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        onFocusChange(false);
+      }}
+      onPress={onPress}
+      style={[styles.pill, focused && styles.pillFocused]}
+    >
+      <Text
+        style={[styles.pillText, !text && styles.pillPlaceholder]}
+        numberOfLines={1}
+      >
+        {text || "Search"}
+      </Text>
+    </Pressable>
+  );
+});
 
-const SORTS: { key: SearchSort; label: string }[] = [
-  { key: "relevance", label: "Relevance" },
-  { key: "newest", label: "Newest" },
-  { key: "views", label: "Most viewed" },
-];
-
-/** The web search page's client-side sorts (app/search/page.tsx). */
-function sortVideos(videos: UnifiedVideo[], sort: SearchSort): UnifiedVideo[] {
-  if (sort === "relevance") return videos;
-  const by =
-    sort === "newest"
-      ? (v: UnifiedVideo) => v.publishedAt ?? 0
-      : (v: UnifiedVideo) => v.viewCount ?? 0;
-  return [...videos].sort((a, b) => by(b) - by(a));
+function RoundButton({
+  icon,
+  active,
+  onPress,
+  onFocusChange,
+  hasTVPreferredFocus,
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  active?: boolean;
+  onPress: () => void;
+  onFocusChange?: (focused: boolean) => void;
+  hasTVPreferredFocus?: boolean;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <Pressable
+      hasTVPreferredFocus={hasTVPreferredFocus}
+      onFocus={() => {
+        setFocused(true);
+        onFocusChange?.(true);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        onFocusChange?.(false);
+      }}
+      onPress={onPress}
+      style={[
+        styles.round,
+        active && styles.roundActive,
+        focused && styles.roundFocused,
+      ]}
+    >
+      <Feather
+        name={icon}
+        size={20}
+        color={focused ? colors.focusForeground : colors.foreground}
+      />
+    </Pressable>
+  );
 }
 
+/**
+ * A suggestion (what's typed, then the rest in bold, as in the YouTube app)
+ * or a recent search.
+ */
+function WordRow({
+  word,
+  typed,
+  recent,
+  onPress,
+}: {
+  word: string;
+  typed: string;
+  recent: boolean;
+  onPress: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const color = focused ? colors.focusForeground : colors.foreground;
+  const prefix =
+    typed && word.toLowerCase().startsWith(typed.toLowerCase())
+      ? word.slice(0, typed.length)
+      : "";
+  return (
+    <Pressable
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onPress={onPress}
+      style={[styles.word, focused && styles.wordFocused]}
+    >
+      <Feather name={recent ? "clock" : "search"} size={16} color={color} />
+      <Text style={[styles.wordText, { color }]} numberOfLines={1}>
+        {prefix}
+        <Text style={styles.wordRest}>{word.slice(prefix.length)}</Text>
+      </Text>
+    </Pressable>
+  );
+}
+
+const BAR_HEIGHT = 44;
+
 const styles = StyleSheet.create({
-  container: { flex: 1, gap: spacing.lg },
-  chips: { gap: spacing.sm, alignItems: "center", paddingVertical: 4 },
-  chipsRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
-  chip: { minHeight: 40, paddingHorizontal: spacing.md },
-  chipsLabel: { color: colors.mutedForeground, fontSize: fontSize.sm },
-  resultsHeader: { gap: spacing.lg },
-  searchSurface: {
-    flexDirection: "row",
+  container: { flex: 1, gap: spacing.md, paddingTop: spacing.sm },
+  bar: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  round: {
+    width: BAR_HEIGHT,
+    height: BAR_HEIGHT,
+    borderRadius: BAR_HEIGHT / 2,
     alignItems: "center",
-    gap: spacing.md,
-    minHeight: 72,
-    paddingLeft: spacing.lg,
-    paddingRight: spacing.sm,
-    borderRadius: radius.shell,
-    backgroundColor: colors.surface,
+    justifyContent: "center",
+    backgroundColor: colors.surfaceStrong,
+  },
+  roundActive: { backgroundColor: colors.brand },
+  roundFocused: { backgroundColor: colors.focusFill },
+  pill: {
+    width: 480,
+    height: BAR_HEIGHT,
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+    borderRadius: BAR_HEIGHT / 2,
+    backgroundColor: colors.surfaceStrong,
     borderWidth: focus.borderWidth,
-    borderColor: colors.surfaceBorder,
+    borderColor: "transparent",
   },
-  searchSurfaceFocused: {
-    borderColor: colors.ring,
-    backgroundColor: colors.surfaceStrongSolid,
-    shadowColor: colors.brand,
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
-  },
-  // The bar draws the focus ring, so the wrapper's own surface stays invisible.
-  inputSurface: {
-    flex: 1,
-    minHeight: 0,
-    paddingHorizontal: 0,
-    borderWidth: 0,
-    backgroundColor: "transparent",
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  input: {
+  pillFocused: { borderColor: colors.ring },
+  pillText: {
     color: colors.foreground,
     fontSize: fontSize.lg,
-    paddingVertical: spacing.md,
+    fontWeight: "600",
   },
-  // Opaque: the mic button is focused while it listens, so this fill sits
-  // under the focus glow. See colors.surfaceStrongSolid.
-  listening: { backgroundColor: colors.brandSoftSolid },
-  searchButton: { width: 156 },
+  pillPlaceholder: { color: colors.mutedForeground },
+  entry: { flexDirection: "row", gap: spacing.xl },
+  words: { width: 240, gap: 2 },
+  word: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    height: 32,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 6,
+  },
+  wordFocused: { backgroundColor: colors.focusFill },
+  wordText: { flex: 1, fontSize: fontSize.md },
+  wordRest: { fontWeight: "700" },
+  status: { color: colors.mutedForeground, fontSize: fontSize.md },
   results: { flex: 1 },
+  resultsHeader: { gap: spacing.lg },
 });

@@ -338,6 +338,19 @@ export function WatchScreen({
   const swallowPressRef = useRef(false);
   /** Playback reached the end (and wasn't dismissed since). */
   const [ended, setEnded] = useState(false);
+  /**
+   * Whether OK went down on the scrubber itself. Cancel on the up-next card
+   * goes on the key's release, which then lands on the scrubber that takes
+   * focus in the card's place and would replay the finished video; a press
+   * that never went down there is ignored instead.
+   */
+  const scrubberPressedInRef = useRef(true);
+  /**
+   * Played to the end and not started again. The controls can't auto-hide
+   * then (nothing plays), and hiding them would only uncover a finished
+   * picture, so Back leaves at once.
+   */
+  const finishedRef = useRef(false);
   /** Marked watched from the menu: kept out of Continue watching on leave. */
   const markedWatchedRef = useRef(false);
   const onBackRef = useRef(onBack);
@@ -886,8 +899,9 @@ export function WatchScreen({
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       // In the background (under a channel page): Back belongs to the shell.
       if (!activeRef.current) return false;
-      // Declining what's next leaves the finished video too.
-      if (showUpNextRef.current) {
+      // A finished video, with or without the card over it, is left in one
+      // press; Cancel on the card is the way to stay on it.
+      if (showUpNextRef.current || finishedRef.current) {
         onBackRef.current();
         return true;
       }
@@ -962,6 +976,7 @@ export function WatchScreen({
         playedMsRef.current + (since === null ? 0 : Date.now() - since);
       if (playedMs < END_TOLERANCE_SECONDS * 1000) return;
       recordCompleted(videoId, detailRef.current, currentTimeRef.current);
+      finishedRef.current = true;
       setEnded(true);
     });
     return () => sub.remove();
@@ -1063,6 +1078,7 @@ export function WatchScreen({
         const since = playingSinceRef.current;
         if (since !== null) playedMsRef.current += Date.now() - since;
         playingSinceRef.current = playing ? Date.now() : null;
+        if (playing) finishedRef.current = false;
         // The MediaSession still owns the hardware Play/Pause key while the
         // player sits behind a channel page; don't let it resume there.
         if (playing && !activeRef.current) {
@@ -1188,7 +1204,18 @@ export function WatchScreen({
     holdTimerRef.current = null;
   };
 
+  /** Cancel on the up-next card: stay on the finished video, controls up. */
+  const dismissUpNext = () => {
+    scrubberPressedInRef.current = false;
+    setEnded(false);
+    revealControls();
+  };
+
   const commitScrubOrToggle = () => {
+    if (!scrubberPressedInRef.current) {
+      scrubberPressedInRef.current = true;
+      return;
+    }
     if (swallowPressRef.current) {
       swallowPressRef.current = false;
       return;
@@ -1812,7 +1839,7 @@ export function WatchScreen({
           contextLabel={context?.label}
           autoplay={settingsRef.current.autoplayNext}
           onPlay={playNext}
-          onCancel={onBack}
+          onCancel={dismissUpNext}
         />
       ) : menuOpen ? (
         <MenuPanel
@@ -1887,6 +1914,9 @@ export function WatchScreen({
                 hasTVPreferredFocus
                 onFocus={() => setScrubberFocused(true)}
                 onBlur={() => setScrubberFocused(false)}
+                onPressIn={() => {
+                  scrubberPressedInRef.current = true;
+                }}
                 onPress={commitScrubOrToggle}
                 style={styles.scrubber}
               >
@@ -1979,6 +2009,13 @@ export function WatchScreen({
                     )}
                   </Pressable>
                 ) : null}
+                {/* The YouTube app's left group: channel, description,
+                    Subscribe. Description and comments share the panel. */}
+                <IconButton
+                  icon="info"
+                  onPress={() => setDetailsOpen(true)}
+                  onFocusChange={onButtonFocusChange}
+                />
                 {subscribed !== null ? (
                   <FocusButton
                     label={subscribed ? "Subscribed" : "Subscribe"}
@@ -1990,11 +2027,12 @@ export function WatchScreen({
                 ) : null}
               </View>
 
+              {/* Previous, play, next, as in the YouTube app; ±10 s stays on
+                  the D-pad and the remote's rewind and fast-forward keys. */}
               <View style={styles.transport}>
                 <IconButton
-                  icon="rotate-ccw"
-                  action="skip"
-                  onPress={() => seekBy(-10)}
+                  icon="skip-back"
+                  onPress={playPrevious}
                   onFocusChange={onButtonFocusChange}
                 />
                 <IconButton
@@ -2004,12 +2042,13 @@ export function WatchScreen({
                   onPress={togglePlayback}
                   onFocusChange={onButtonFocusChange}
                 />
-                <IconButton
-                  icon="rotate-cw"
-                  action="skipForward"
-                  onPress={() => seekBy(10)}
-                  onFocusChange={onButtonFocusChange}
-                />
+                {nextVideo ? (
+                  <IconButton
+                    icon="skip-forward"
+                    onPress={() => playNextRef.current()}
+                    onFocusChange={onButtonFocusChange}
+                  />
+                ) : null}
                 {/* Same threshold as the web (LIVE_EDGE_SECONDS). */}
                 {detail.isLive && behindLive >= LIVE_EDGE_SECONDS ? (
                   <FocusButton
@@ -2065,11 +2104,6 @@ export function WatchScreen({
                     onFocusChange={onButtonFocusChange}
                   />
                 ) : null}
-                <IconButton
-                  icon="info"
-                  onPress={() => setDetailsOpen(true)}
-                  onFocusChange={onButtonFocusChange}
-                />
                 {/* Quality, captions, audio language, speed, chapters… */}
                 <IconButton
                   icon="more-vertical"
