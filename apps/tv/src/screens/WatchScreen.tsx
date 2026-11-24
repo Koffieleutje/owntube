@@ -81,6 +81,10 @@ import {
 import { trpcClient } from "@/lib/trpc";
 import { trpc } from "@/lib/trpc-react";
 import { colors, focus, fontSize, monoFont, radius, spacing } from "@/theme";
+import {
+  getPlayingVideoFormat,
+  type PlayingVideoFormat,
+} from "../../modules/player-stats";
 import { raiseSubtitles } from "../../modules/player-subtitles";
 import { removeWatchNext, upsertWatchNext } from "../../modules/watch-next";
 
@@ -319,8 +323,9 @@ export function WatchScreen({
   menuOpenRef.current = menuOpen;
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   /**
-   * Quality ceiling picked in the panel, in pixels; null follows the
-   * defaultPlaybackQuality setting. Applied to the server DASH manifest.
+   * Quality ceiling picked in the panel, in pixels, applied to the server
+   * DASH manifest. Null is Auto: the full ladder, which ExoPlayer limits to
+   * the display's resolution (1080p on a Full HD TV, 2160p on a 4K one).
    */
   const [qualityCap, setQualityCap] = useState<number | null>(null);
   const [playbackRate, setPlaybackRate] = useState(
@@ -331,6 +336,32 @@ export function WatchScreen({
     null,
   );
   const [statsOn, setStatsOn] = useState(false);
+  /**
+   * Height of the rendition Auto is playing, read from ExoPlayer every 2 s so
+   * the label can say what Auto picked. Only changes re-render the screen.
+   */
+  const [autoHeight, setAutoHeight] = useState<number | null>(null);
+  const autoActive =
+    state.status === "ready" &&
+    state.playbackOptions[state.selectedOptionIndex]?.id === "dash-vp9" &&
+    qualityCap === null;
+  useEffect(() => {
+    if (!autoActive) {
+      setAutoHeight(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () =>
+      getPlayingVideoFormat().then((format) => {
+        if (!cancelled) setAutoHeight(format?.height ?? null);
+      });
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [autoActive]);
   const [segments, setSegments] = useState<SponsorBlockSegment[]>([]);
   /** Segments the viewer chose to watch (undo), so they aren't skipped again. */
   const keptSegmentsRef = useRef(new Set<string>());
@@ -736,10 +767,11 @@ export function WatchScreen({
           const picked = langs[audioLangIndex];
           if (picked) uri = `${uri}&lang=${encodeURIComponent(picked.lang)}`;
         }
-        // The panel's choice, else the shared defaultPlaybackQuality. Servers
-        // without the parameter ignore it and serve the full ladder.
-        const cap = qualityCap ?? settingsRef.current.maxHeight;
-        if (Number.isFinite(cap)) uri = `${uri}&maxHeight=${cap}`;
+        // Only an explicit panel choice caps the ladder. Auto leaves it whole:
+        // ExoPlayer's track selector already stops at the display's resolution,
+        // so the shared defaultPlaybackQuality (a web/bandwidth preference,
+        // often 720p) must not cap a TV that can show more.
+        if (qualityCap !== null) uri = `${uri}&maxHeight=${qualityCap}`;
       }
       player.muted = false;
       player.replace({ uri, headers: authHeader, metadata });
@@ -1595,13 +1627,10 @@ export function WatchScreen({
 
   const selectedOption = state.playbackOptions[state.selectedOptionIndex];
   const onDash = selectedOption?.id === "dash-vp9";
-  const effectiveCap = qualityCap ?? settingsRef.current.maxHeight;
   const qualityLabelNow = !onDash
     ? (selectedOption?.label ?? "")
     : qualityCap === null
-      ? Number.isFinite(effectiveCap)
-        ? `Auto (up to ${effectiveCap}p)`
-        : "Auto"
+      ? autoLabel(autoHeight)
       : `${qualityCap}p`;
   const heights = qualityHeights(detail);
   // Some streams label tracks with just their code ("nl-nl"): name those.
@@ -1621,9 +1650,7 @@ export function WatchScreen({
           items: [
             {
               key: "auto",
-              label: Number.isFinite(settingsRef.current.maxHeight)
-                ? `Auto (up to ${settingsRef.current.maxHeight}p)`
-                : "Auto",
+              label: autoLabel(autoHeight),
               selected: onDash && qualityCap === null,
               onPress: () => chooseQuality(null),
             },
@@ -1827,7 +1854,7 @@ export function WatchScreen({
         <StatsOverlay
           player={player}
           option={selectedOption}
-          cap={onDash ? effectiveCap : undefined}
+          cap={onDash && qualityCap !== null ? qualityCap : undefined}
           subtitles={subtitleTrack ? subtitleLabel(subtitleTrack) : "off"}
         />
       ) : null}
@@ -2521,6 +2548,21 @@ function sourceMenuLabel(option: PlaybackOption): string {
   return option.label;
 }
 
+/** "Auto (1080p)" once the player has picked a rendition, else "Auto". */
+function autoLabel(height: number | null): string {
+  return height ? `Auto (${height}p)` : "Auto";
+}
+
+/** "1920x1080 · avc1.640028 · 4.2 Mbps · 30 fps", or "?" before a frame. */
+function formatVideo(format: PlayingVideoFormat | null): string {
+  if (!format) return "?";
+  const parts = [`${format.width}x${format.height}`];
+  if (format.codecs) parts.push(format.codecs);
+  if (format.bitrate) parts.push(`${(format.bitrate / 1e6).toFixed(1)} Mbps`);
+  if (format.frameRate) parts.push(`${Math.round(format.frameRate)} fps`);
+  return parts.join(" · ");
+}
+
 /**
  * Stats for nerds: what is actually playing, for debugging real TVs. Polls the
  * player once a second on its own, so the screen around it doesn't re-render.
@@ -2541,6 +2583,20 @@ function StatsOverlay({
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
+  const [format, setFormat] = useState<PlayingVideoFormat | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () =>
+      getPlayingVideoFormat().then((f) => {
+        if (!cancelled) setFormat(f);
+      });
+    poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
   const buffered = Math.max(0, player.bufferedPosition - player.currentTime);
   const host = (() => {
     try {
@@ -2553,6 +2609,7 @@ function StatsOverlay({
     ["Source", `${option?.id ?? "?"} · ${option?.label ?? ""}`],
     ["Host", host],
     ["Cap", cap === undefined || !Number.isFinite(cap) ? "none" : `${cap}p`],
+    ["Video", formatVideo(format)],
     ["Status", `${player.status}${player.playing ? " · playing" : ""}`],
     [
       "Position",

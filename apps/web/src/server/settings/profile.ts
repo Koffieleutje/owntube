@@ -5,6 +5,11 @@ import {
   MAX_BOTTOM_NAV,
   MIN_BOTTOM_NAV,
 } from "@/lib/bottom-nav";
+import {
+  CHANNEL_TAG_MAX_LEN,
+  DEFAULT_FAVORITE_TAG,
+  normalizeChannelTag,
+} from "@/lib/channel-tag";
 import { defaultPlaybackQualitySchema } from "@/lib/default-playback-quality";
 import { DEFAULT_HOME_BLOCKS, HOME_BLOCK_TYPES } from "@/lib/home-blocks";
 import {
@@ -12,6 +17,7 @@ import {
   LEGACY_DEFAULT_QUICK_ACTIONS_LIST,
   QUICK_ACTION_VALUES,
 } from "@/lib/quick-actions";
+import { DEFAULT_SIDEBAR_NAV } from "@/lib/sidebar-nav";
 import {
   DEFAULT_SPONSORBLOCK_CATEGORIES,
   normalizeSponsorBlockCategories,
@@ -159,6 +165,15 @@ export const appSettingsSchema = z.object({
         : value,
     z.array(quickActionSchema).max(4).default(DEFAULT_QUICK_ACTIONS),
   ),
+  /**
+   * The channel tag the favorite button toggles. Favorites (sidebar page and
+   * home block) are the subscribed channels carrying it. Stored normalized.
+   */
+  favoriteTag: z
+    .string()
+    .min(1)
+    .max(CHANNEL_TAG_MAX_LEN)
+    .default(DEFAULT_FAVORITE_TAG),
   /** Ordered blocks of the modular home page. */
   homeBlocks: z
     .array(
@@ -166,6 +181,8 @@ export const appSettingsSchema = z.object({
         id: z.string().min(1).max(64),
         type: z.enum(HOME_BLOCK_TYPES),
         playlistId: z.number().int().positive().optional(),
+        /** Heading override (tag blocks). */
+        title: z.string().trim().max(60).optional(),
         limit: z.number().int().min(1).max(24).default(8),
         rows: z.number().int().min(1).max(8).default(2),
         layout: z.enum(["cards", "rows"]).default("cards"),
@@ -186,6 +203,25 @@ export const appSettingsSchema = z.object({
     .min(MIN_BOTTOM_NAV)
     .max(MAX_BOTTOM_NAV)
     .default([...DEFAULT_BOTTOM_NAV_KEYS]),
+  /**
+   * Desktop sidebar: ordered entries (nav keys, plus `divider` and
+   * `following`), each shown or hidden, and whether the Following list is
+   * collapsed. Unknown keys are ignored and missing ones added by the
+   * renderer (`resolveSidebarEntries`), like `bottomNav`.
+   */
+  sidebarNav: z
+    .object({
+      items: z
+        .array(
+          z.object({
+            key: z.string().min(1).max(32),
+            hidden: z.boolean().default(false),
+          }),
+        )
+        .max(32),
+      followingCollapsed: z.boolean().default(false),
+    })
+    .default(DEFAULT_SIDEBAR_NAV),
   /**
    * Per-section preferences — the single "base" shared by a section's page
    * and its home block (e.g. History's hide-completed filter), so the option
@@ -244,8 +280,10 @@ const defaultSettings: AppSettings = {
     right: "queue",
   },
   quickActions: DEFAULT_QUICK_ACTIONS,
+  favoriteTag: DEFAULT_FAVORITE_TAG,
   homeBlocks: DEFAULT_HOME_BLOCKS,
   bottomNav: [...DEFAULT_BOTTOM_NAV_KEYS],
+  sidebarNav: DEFAULT_SIDEBAR_NAV,
   sectionPrefs: {
     history: DEFAULT_SECTION_PAGE_PREFS,
     queue: DEFAULT_SECTION_PAGE_PREFS,
@@ -349,6 +387,10 @@ export function upsertUserSettings(
     tasteKeywords: nextKeywords,
     blockedRecommendationChannels: nextBlockedChannels,
     sponsorBlockCategories: nextSponsorBlockCategories,
+    favoriteTag:
+      patch.favoriteTag !== undefined
+        ? (normalizeChannelTag(patch.favoriteTag) ?? previous.favoriteTag)
+        : previous.favoriteTag,
     trendingRegion: normalizeTrendingRegionStored(
       patch.trendingRegion ?? previous.trendingRegion,
     ),

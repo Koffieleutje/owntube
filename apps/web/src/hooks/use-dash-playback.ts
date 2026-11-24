@@ -7,6 +7,10 @@ import type {
   Representation,
 } from "dashjs";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  recordPlayerError,
+  registerStatsSource,
+} from "@/components/player/player-stats";
 import { languageFirstAudioMenuLabel } from "@/lib/audio-track-label";
 import {
   getClientAppOrigin,
@@ -15,6 +19,7 @@ import {
 import { isIosLikeBrowser } from "@/lib/ios-playback";
 import { getMediaOrigin } from "@/lib/media-origin";
 import { isLiveDashManifestUrl } from "@/lib/pick-playback";
+import { qualityLabel, qualityLabelHeight } from "@/lib/quality-label";
 
 type IsTypeSupported = { isTypeSupported?(type: string): boolean };
 
@@ -175,6 +180,7 @@ export function useDashPlayback(
 
     let cancelled = false;
     let player: MediaPlayerClass | null = null;
+    let unregisterStats = () => {};
     let portalObserver: ResizeObserver | null = null;
     let onFullscreenChange: (() => void) | null = null;
     const mediaOrigin = getMediaOrigin(getClientAppOrigin());
@@ -285,6 +291,21 @@ export function useDashPlayback(
         // come from <track> instead). A failed "cc" track must not tear down
         // an otherwise-healthy video/audio pipeline.
         if (e.error === "cc") return;
+        // Say what failed (console and stats for nerds): the fallback that
+        // follows is otherwise silent, and the cause is browser-specific.
+        const err =
+          e.error && typeof e.error === "object"
+            ? (e.error as { code?: number | null; message?: string | null })
+            : { code: null, message: String(e.error ?? "") };
+        const text = [
+          "dash.js",
+          err.code != null ? `#${err.code}` : null,
+          err.message || null,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        console.warn("[owntube] dash.js error, falling back to HLS:", e);
+        recordPlayerError(video, `${text} → HLS`);
         onFatalErrorRef.current?.();
       });
 
@@ -331,8 +352,12 @@ export function useDashPlayback(
           let capHeight = Number.POSITIVE_INFINITY;
           for (const r of allVideoReps) {
             if (!r.height || !r.bitrateInKbit) continue;
-            if (r.height >= portalH && r.height < capHeight) {
-              capHeight = r.height;
+            // By the 16:9 box, like the menu's labels and the portal above:
+            // a 2:1 video's 1920×960 is the "1080p" rung, so a 1080p cap
+            // stops there instead of climbing to 2560×1280 (960 < 1080).
+            const h = qualityLabelHeight(r.width, r.height);
+            if (h >= portalH && h < capHeight) {
+              capHeight = h;
               cap = r.bitrateInKbit;
             }
           }
@@ -407,7 +432,8 @@ export function useDashPlayback(
         setItems(
           allVideoReps.map((r) => ({
             id: r.id,
-            label: r.height ? `${r.height}p` : "?",
+            // By the 16:9 box, as YouTube names it: 1920×960 is "1080p".
+            label: qualityLabel(r.width, r.height),
           })),
         );
         audioTracks = player?.getTracksFor("audio") ?? [];
@@ -560,6 +586,23 @@ export function useDashPlayback(
       // NaN, not 0, when there's no resume point: dash.js reads NaN as
       // "unset" (the start for VOD, the live edge for a dynamic manifest),
       // whereas 0 would start a live stream at the oldest segment it lists.
+      const instance = player;
+      unregisterStats = registerStatsSource(video, () => {
+        const v = instance.getCurrentRepresentationForType("video");
+        const a = instance.getCurrentRepresentationForType("audio");
+        return {
+          engine: `dash.js ${instance.getVersion()}`,
+          src: manifestUrl,
+          width: v?.width,
+          height: v?.height,
+          frameRate: v?.frameRate,
+          videoCodec: v?.codecs ?? undefined,
+          audioCodec: a?.codecs ?? undefined,
+          bitrateKbps: v ? v.bandwidth / 1000 : undefined,
+          bandwidthKbps: instance.getAverageThroughput("video"),
+          abr: qualityStateRef.current.mode === "auto" ? "Auto" : "Manual",
+        };
+      });
       player.initialize(
         video,
         manifestUrl,
@@ -573,6 +616,7 @@ export function useDashPlayback(
 
     return () => {
       cancelled = true;
+      unregisterStats();
       portalObserver?.disconnect();
       if (onFullscreenChange) {
         document.removeEventListener("fullscreenchange", onFullscreenChange);
