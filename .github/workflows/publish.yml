@@ -25,7 +25,7 @@ jobs:
           # ghcr.io/<owner>/owntube - the web app (unchanged name)
           - name: web
             image: ""
-            dockerfile: ${{ matrix.dockerfile }}
+            dockerfile: apps/web/Dockerfile
           # ghcr.io/<owner>/owntube-gateway - apps/gateway, replaces Invidious
           - name: gateway
             image: "-gateway"
