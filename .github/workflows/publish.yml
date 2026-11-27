@@ -22,11 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ghcr.io/<owner>/owntube — the web app (unchanged name)
+          # ghcr.io/<owner>/owntube - the web app (unchanged name)
           - name: web
             image: ""
             dockerfile: ${{ matrix.dockerfile }}
-          # ghcr.io/<owner>/owntube-gateway — apps/gateway, replaces Invidious
+          # ghcr.io/<owner>/owntube-gateway - apps/gateway, replaces Invidious
           - name: gateway
             image: "-gateway"
             dockerfile: apps/gateway/Dockerfile
